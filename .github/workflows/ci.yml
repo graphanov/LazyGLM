@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Show toolchain
+        run: |
+          node --version
+          npm --version
+
+      - name: Run test suite
+        run: npm test
+
+      - name: Smoke CLI entrypoint
+        run: node bin/lazyglm.js --version
+
+      - name: Verify package contents
+        run: npm pack --dry-run
