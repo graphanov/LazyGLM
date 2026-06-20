@@ -50,9 +50,9 @@ export class Context {
    *   - the most recent `keepRecent` messages
    * Fires `onCompact` so the hook engine can react. Returns true if compaction occurred.
    */
-  async maybeCompact({ onCompact } = {}) {
+  async maybeCompact({ onCompact, force = false } = {}) {
     const tokens = this.estimateTokens();
-    if (tokens <= this.budget) return false;
+    if (!force && tokens <= this.budget) return false;
     const keepRecent = 12;
     if (this.messages.length <= keepRecent + 2) return false;
 

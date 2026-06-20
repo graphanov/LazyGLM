@@ -38,15 +38,28 @@ node bin/lazyglm.js doctor
 ## Configure
 
 LazyGLM defaults to **Zhipu z.ai** serving **glm-5.2** (the frontier GLM model).
-You need an API key (get one with a z.ai coding plan):
+
+The easiest path: just run `lazyglm` — on first launch it asks for your z.ai API
+key and remembers it (chmod 600, persisted to `~/.lazyglm/config.json`), so you
+never have to export env vars again. After that, typing `lazyglm` drops you into
+an interactive agentic REPL.
 
 ```bash
-export LAZYGLM_API_KEY=***   # get one at z.ai
-lazyglm doctor               # verify (LAZYGLM_PROVIDER=zai is the default)
+lazyglm                      # first run onboards + launches the REPL
+lazyglm doctor               # verify provider/model (optional)
+```
+
+Prefer env vars? That works too:
+
+```bash
+export LAZYGLM_API_KEY=***   # get one at z.ai (coding plan)
+lazyglm doctor               # LAZYGLM_PROVIDER=zai is the default
 ```
 
 > The z.ai base URL is `https://api.z.ai/api/coding/paas/v4` — the `/coding/`
-> segment is required (`/api/paas/v4` returns 401).
+> segment is required (`/api/paas/v4` returns 401). The persisted config-file key
+> is threaded explicitly to the model call and never placed in `process.env`, so
+> the agent's `run_shell` cannot exfiltrate it.
 
 ### Backends
 
@@ -67,6 +80,37 @@ LAZYGLM_PROVIDER=ollama lazyglm doctor
 # or any OpenAI-compatible endpoint
 LAZYGLM_BASE_URL=https://your-endpoint/v1 LAZYGLM_API_KEY=*** lazyglm doctor
 ```
+
+## Interactive REPL
+
+`lazyglm` with no args launches a live agentic shell — like `claude` or `hermes`.
+It is **not** chat-only: the agent has full tool access (read/write/patch/grep/shell),
+the 8-plugin hook lifecycle, streaming, and reasoning-token visibility.
+
+```bash
+lazyglm                       # new session
+lazyglm --continue            # resume the most recent session
+lazyglm --yolo                # bypass all permission gates (auto everywhere)
+lazyglm --model glm-4.7-flash # start on a cheaper tier
+```
+
+Inside the REPL:
+
+```
+lazyglm> create hello.js that prints hi, then run it
+lazyglm> /model glm-4.7-flash      # switch tier mid-conversation
+lazyglm> /cost                      # cumulative tokens incl. reasoning
+lazyglm> /ultrawork "add a /health endpoint" --verify "npm test"
+lazyglm> /resume                    # list + resume a past session
+lazyglm> /help                      # all commands
+```
+
+Slash commands: `/help` `/exit` `/clear` `/model <name>` `/cost` `/compact`
+`/resume [n]` `/ultrawork "<task>"` `/yolo`. Inline `$skill` invocations (e.g.
+`$programming ...`) are also expanded. Sessions persist as JSONL under
+`~/.lazyglm/sessions/`.
+
+`lazyglm run "<task>"` remains the one-shot, non-interactive path (unchanged).
 
 ## Model routing
 
@@ -92,10 +136,10 @@ lazyglm run "verify the tests pass"               # -> verifier (glm-4.7)
 ## Use
 
 ```bash
-# initialize a project
+# initialize a project (the REPL also auto-inits silently on first interaction)
 cd your-project && lazyglm install
 
-# run the GLM agent on a task
+# run the GLM agent on a task (one-shot)
 lazyglm run "add a /health endpoint and a test for it"
 
 # plan first, then execute
@@ -115,6 +159,7 @@ lazyglm run "refactor the parser" --max-reasoning-tokens 20000
 
 | Feature | Description |
 | --- | --- |
+| 💬 **Interactive REPL** | `lazyglm` launches a self-sustained agentic shell (streaming, tools, hooks, sessions) |
 | 🤖 **GLM agent runtime** | Self-contained tool-use loop driving a GLM model (read/write/patch/grep/shell) |
 | 🎯 **Model routing** | GLM-5.2 for hard tasks, glm-4.7-flash for quick ones — benchmark-driven, not random |
 | 🌊 **Streaming** | Text + reasoning_content + tool-call deltas stream live — no silent hang during thinking |
@@ -123,7 +168,7 @@ lazyglm run "refactor the parser" --max-reasoning-tokens 20000
 | 🗜️ **Task-preserving compaction** | Original task is pinned; dropped context is digested (files/commands/errors), not placeholdered |
 | 🔀 **Hook lifecycle** | SessionStart, UserPromptSubmit, Pre/PostToolUse, Stop, PostCompact |
 | 🛡️ **Discipline plugins** | rules, comment-checker, executor-verify, start-work-continuation, telemetry (local-only) |
-| 🔁 **Ultrawork loop** | `--ultrawork` verified-completion loop (run → verify → continue) |
+| 🔁 **Ultrawork loop** | `--ultrawork` / `/ultrawork` verified-completion loop (run → verify → continue) |
 | 📋 **Skills** | `$init-deep`, `$ulw-plan`, `$start-work`, `$ulw-loop`, `$review-work`, `$remove-ai-slops`, `$programming` |
 | 🩺 **Doctor** | Provider + model + routing + plugin + skill health report |
 
@@ -131,12 +176,16 @@ lazyglm run "refactor the parser" --max-reasoning-tokens 20000
 
 ```
 bin/lazyglm.js            CLI entrypoint
-src/cli.js                command dispatcher
+src/cli.js                command dispatcher (run | chat/REPL | doctor | models | skills | install)
+src/config.js             global user config (~/.lazyglm/config.json, chmod 600; key never in process.env)
+src/onboard.js            first-run onboarding (provider + key)
+src/repl.js               interactive self-sustained REPL (streaming + tools + hooks + sessions)
+src/sessions.js           REPL session persistence (JSONL under ~/.lazyglm/sessions/)
 src/agent/
-  provider.js             OpenAI-compatible GLM provider (streaming + retry/backoff; Nous/z.ai/Ollama/custom)
-  router.js               role -> model routing + provider-aware model IDs
+  provider.js             OpenAI-compatible GLM provider (streaming + retry/backoff; z.ai/Nous/Ollama/custom)
+  router.js               role -> model routing + provider-aware model IDs + config-file layering
   tools.js                read_file, write_file, patch_file, list_dir, grep, run_shell, finish
-  runtime.js              tool-use loop: model -> tools -> hooks -> repeat until finish()
+  runtime.js              one-shot tool-use loop: model -> tools -> hooks -> repeat until finish()
   context.js              message bookkeeping + task-preserving compaction with work digest
 src/hooks/                hook engine + protocol schema
 src/plugins/              8 discipline + orchestration components
@@ -146,13 +195,13 @@ src/doctor.js             health report
 src/ulw.js                Ultrawork verified-completion loop
 skills/                   markdown skills (GLM-tuned)
 config/                   model-catalog.json + roles.json
-test/                     49 passing tests (node --test)
+test/                     59 passing tests (node --test)
 ```
 
 ## Test
 
 ```bash
-npm test    # 49 tests
+npm test    # 59 tests
 ```
 
 ## License

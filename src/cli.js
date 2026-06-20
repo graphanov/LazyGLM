@@ -19,6 +19,12 @@ function usage() {
   return `LazyGLM — the GLM-native agent harness.
 
 Usage:
+  lazyglm [chat] [options]             Launch the interactive REPL (default; self-sustained)
+    --continue                         Resume the most recent session
+    --yolo                             Bypass all permission gates (auto everywhere)
+    --model <name>                     GLM model (default: glm-5.2 via z.ai)
+    --provider <zai|nous|ollama>       Backend (default: zai; ollama=keyless local)
+  lazyglm run "<task>" [options]       Run the GLM agent on a task (one-shot, non-interactive)
   lazyglm install [--force]            Initialize .lazyglm/ + AGENTS.md in this project
   lazyglm uninstall                    Remove .lazyglm/ runtime state
   lazyglm doctor                       Health report (provider, model, plugins, skills)
@@ -186,7 +192,7 @@ export async function main(argv) {
   const cmd = argv[0];
   const rest = argv.slice(1);
 
-  if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") {
+  if (cmd === "help" || cmd === "--help" || cmd === "-h") {
     process.stdout.write(usage());
     return 0;
   }
@@ -194,6 +200,18 @@ export async function main(argv) {
     const pkg = await readJson(join(ROOT, "package.json"), {});
     console.log(`lazyglm ${pkg.version || "0.0.0"}`);
     return 0;
+  }
+
+  // Interactive REPL: `lazyglm`, `lazyglm chat`, or leading REPL flags
+  // (e.g. `lazyglm --yolo`, `lazyglm --continue --model glm-4.7`).
+  // `lazyglm run "..."` stays the one-shot non-interactive path.
+  if (!cmd || cmd === "chat" || (cmd.startsWith("--") && !["--version", "--help", "-v", "-h"].includes(cmd))) {
+    const { flags } = parseFlags(cmd === "chat" ? rest : argv);
+    const { launchREPL } = await import("./repl.js");
+    return launchREPL({
+      cwd: flags.cwd ? resolve(flags.cwd) : process.cwd(),
+      flags: { continue: !!flags.continue, yolo: !!flags.yolo, model: flags.model, provider: flags.provider },
+    });
   }
 
   switch (cmd) {

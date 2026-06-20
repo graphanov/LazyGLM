@@ -1,6 +1,6 @@
 {
   "name": "lazyglm",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "The GLM-native agent harness for complex codebases — project memory, planning, execution, and verified completion driven by GLM models.",
   "type": "module",
   "repository": {

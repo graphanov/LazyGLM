@@ -59,15 +59,16 @@ export async function resolveProviderConfig(options = {}) {
     requiresKey = !!process.env.LAZYGLM_API_KEY;
   }
 
-  const apiKey = process.env.LAZYGLM_API_KEY || (requiresKey ? "" : "ollama");
+  const apiKey = process.env.LAZYGLM_API_KEY || picked.apiKey || (requiresKey ? "" : "ollama");
   const timeout = Number(process.env.LAZYGLM_TIMEOUT || DEFAULT_TIMEOUT);
   const maxRetries = Number(process.env.LAZYGLM_MAX_RETRIES ?? DEFAULT_MAX_RETRIES);
 
   if (requiresKey && !apiKey) {
     throw new Error(
-      `GLM provider '${picked.provider}' requires LAZYGLM_API_KEY. Get a key from https://portal.nousresearch.com (Nous) or https://z.ai (Zhipu), then:\n` +
-      `  export LAZYGLM_API_KEY=sk-...\n` +
-      `Or use local Ollama instead: LAZYGLM_PROVIDER=ollama (run \`ollama serve\` first)`,
+      `GLM provider '${picked.provider}' requires an API key. Run \`lazyglm\` to onboard (persists to ~/.lazyglm/config.json), or:\n` +
+      `  export LAZYGLM_API_KEY=...\n` +
+      `Get a key from https://z.ai (Zhipu z.ai, default) or https://portal.nousresearch.com (Nous).\n` +
+      `Or use local Ollama: LAZYGLM_PROVIDER=ollama (run \`ollama serve\` first)`,
     );
   }
 
