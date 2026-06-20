@@ -1,0 +1,35 @@
+{
+  "name": "lazyglm",
+  "version": "0.1.0",
+  "description": "The GLM-native agent harness for complex codebases — project memory, planning, execution, and verified completion driven by GLM models.",
+  "type": "module",
+  "bin": {
+    "lazyglm": "bin/lazyglm.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "skills",
+    "config",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "smoke": "node bin/lazyglm.js doctor"
+  },
+  "keywords": [
+    "glm",
+    "zhipu",
+    "ai-agents",
+    "orchestration",
+    "agent-harness",
+    "ollama",
+    "coding-agent"
+  ],
+  "author": "LazyGLM Contributors",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  }
+}

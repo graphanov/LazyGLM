@@ -1,0 +1,28 @@
+{
+  "version": "2026-06-20.glm-4.7-flash-128k",
+  "current": {
+    "model": "glm-4.7-flash",
+    "provider": "ollama",
+    "model_context_window": 131072,
+    "model_reasoning_effort": "standard"
+  },
+  "roles": {
+    "default": { "model": "glm-4.7-flash", "model_context_window": 131072, "model_reasoning_effort": "standard" },
+    "worker": { "model": "glm-4.7-flash", "model_context_window": 131072, "model_reasoning_effort": "standard" },
+    "quick": { "model": "glm-4.7-flash", "model_context_window": 131072, "model_reasoning_effort": "low" },
+    "planner": { "model": "glm-4.7", "model_context_window": 131072, "model_reasoning_effort": "high" },
+    "verifier": { "model": "glm-4.7", "model_context_window": 131072, "model_reasoning_effort": "high" },
+    "ultrabrain": { "model": "glm-5.2", "model_context_window": 131072, "model_reasoning_effort": "high" }
+  },
+  "managedProfiles": [
+    { "version": "strong.glm-5.2", "match": { "model": "glm-5.2" } },
+    { "version": "balanced.glm-4.7", "match": { "model": "glm-4.7" } },
+    { "version": "fast.glm-4.7-flash", "match": { "model": "glm-4.7-flash" } }
+  ],
+  "routing": {
+    "quick": "small edits, listings, simple lookups -> glm-4.7-flash",
+    "default": "routine coding work -> glm-4.7-flash",
+    "ultrabrain": "hard reasoning, architecture, debugging -> glm-5.2",
+    "verifier": "completion verification, review -> glm-4.7"
+  }
+}

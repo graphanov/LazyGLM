@@ -1,0 +1,67 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { TOOL_HANDLERS } from "../src/agent/tools.js";
+
+let cwd;
+test.before(async () => { cwd = await mkdtemp(join(tmpdir(), "lazyglm-tools-")); });
+test.after(async () => { await rm(cwd, { recursive: true, force: true }); });
+
+test("write_file creates a file with content", async () => {
+  const res = await TOOL_HANDLERS.write_file({ path: "src/a.js", content: "export const x = 1;\n" }, { cwd });
+  assert.match(res, /wrote src\/a\.js/);
+  const txt = await readFile(join(cwd, "src", "a.js"), "utf8");
+  assert.equal(txt, "export const x = 1;\n");
+});
+
+test("read_file returns numbered lines", async () => {
+  const res = await TOOL_HANDLERS.read_file({ path: "src/a.js" }, { cwd });
+  assert.match(res, /1\|export const x = 1;/);
+});
+
+test("patch_file replaces a unique string", async () => {
+  const res = await TOOL_HANDLERS.patch_file({ path: "src/a.js", old_string: "x = 1", new_string: "x = 2" }, { cwd });
+  assert.match(res, /patched/);
+  const txt = await readFile(join(cwd, "src", "a.js"), "utf8");
+  assert.equal(txt, "export const x = 2;\n");
+});
+
+test("patch_file errors on non-unique old_string", async () => {
+  await TOOL_HANDLERS.write_file({ path: "dup.js", content: "a\na\n" }, { cwd });
+  const res = await TOOL_HANDLERS.patch_file({ path: "dup.js", old_string: "a", new_string: "b" }, { cwd });
+  assert.match(res, /not unique/i);
+});
+
+test("patch_file errors when old_string missing", async () => {
+  const res = await TOOL_HANDLERS.patch_file({ path: "src/a.js", old_string: "ZZZ", new_string: "YYY" }, { cwd });
+  assert.match(res, /not found/i);
+});
+
+test("list_dir lists entries, dirs first", async () => {
+  const res = await TOOL_HANDLERS.list_dir({ path: "." }, { cwd });
+  assert.match(res, /src\//);
+  assert.match(res, /dup\.js/);
+});
+
+test("grep finds a pattern", async () => {
+  await TOOL_HANDLERS.write_file({ path: "g.js", content: "function hello() { return 'hi'; }\n" }, { cwd });
+  const res = await TOOL_HANDLERS.grep({ pattern: "hello", path: "." }, { cwd });
+  assert.match(res, /g\.js:\d+:function hello/);
+});
+
+test("run_shell runs a command and captures output", async () => {
+  const res = await TOOL_HANDLERS.run_shell({ command: "echo hello-shell" }, { cwd });
+  assert.match(res, /hello-shell/);
+});
+
+test("read_file refuses path escapes", async () => {
+  await assert.rejects(() => TOOL_HANDLERS.read_file({ path: "../../etc/passwd" }, { cwd }));
+});
+
+test("finish returns a finish marker", async () => {
+  const res = await TOOL_HANDLERS.finish({ summary: "done" }, { cwd });
+  assert.equal(res.__finish, true);
+  assert.equal(res.summary, "done");
+});
