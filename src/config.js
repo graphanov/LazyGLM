@@ -80,6 +80,7 @@ export async function saveUserConfig(config) {
 export function isOnboarded(config) {
   if (!config || !config.onboarded) return false;
   const provider = normalizeProvider(config.provider || "zai");
+  if (provider === "custom") return !!process.env.LAZYGLM_BASE_URL;
   if (!isSupportedProvider(provider)) return false;
   if (provider === "ollama") return true;
   return !!config.api_key;

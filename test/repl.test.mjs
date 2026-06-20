@@ -55,26 +55,42 @@ test("isOnboarded: true for valid providers only", () => {
   assert.ok(!isOnboarded({ onboarded: true, provider: "Help", api_key: "k" }), "unknown providers must not count as onboarded");
 });
 
+test("isOnboarded allows custom only when a base URL is configured", () => {
+  const savedBase = process.env.LAZYGLM_BASE_URL;
+  try {
+    delete process.env.LAZYGLM_BASE_URL;
+    assert.ok(!isOnboarded({ onboarded: true, provider: "custom" }));
+    process.env.LAZYGLM_BASE_URL = "http://localhost:1234/v1";
+    assert.ok(isOnboarded({ onboarded: true, provider: "custom" }));
+  } finally {
+    restoreEnv("LAZYGLM_BASE_URL", savedBase);
+  }
+});
+
 // --- onboard.js ---
 
-test("needsOnboarding: true with no key+config; false with env key or ollama env", async () => {
+test("needsOnboarding: true with no key+config; false with env key or keyless env providers", async () => {
   await freshHome();
   const savedKey = process.env.LAZYGLM_API_KEY;
   const savedProvider = process.env.LAZYGLM_PROVIDER;
+  const savedBase = process.env.LAZYGLM_BASE_URL;
   try {
     delete process.env.LAZYGLM_API_KEY;
     delete process.env.LAZYGLM_PROVIDER;
+    delete process.env.LAZYGLM_BASE_URL;
     assert.ok(await needsOnboarding(), "fresh machine needs onboarding");
     process.env.LAZYGLM_API_KEY = "env-key";
     assert.ok(!(await needsOnboarding()), "env key satisfies onboarding");
     delete process.env.LAZYGLM_API_KEY;
     process.env.LAZYGLM_PROVIDER = " Ollama ";
     assert.ok(!(await needsOnboarding()), "ollama env is keyless and should be normalized");
+    delete process.env.LAZYGLM_PROVIDER;
+    process.env.LAZYGLM_BASE_URL = "http://localhost:1234/v1";
+    assert.ok(!(await needsOnboarding()), "custom base URL is configured outside onboarding");
   } finally {
-    if (savedKey === undefined) delete process.env.LAZYGLM_API_KEY;
-    else process.env.LAZYGLM_API_KEY = savedKey;
-    if (savedProvider === undefined) delete process.env.LAZYGLM_PROVIDER;
-    else process.env.LAZYGLM_PROVIDER = savedProvider;
+    restoreEnv("LAZYGLM_API_KEY", savedKey);
+    restoreEnv("LAZYGLM_PROVIDER", savedProvider);
+    restoreEnv("LAZYGLM_BASE_URL", savedBase);
   }
 });
 
