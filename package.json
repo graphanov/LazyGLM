@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "description": "The GLM-native agent harness for complex codebases — project memory, planning, execution, and verified completion driven by GLM models.",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/graphanov/LazyGLM.git"
+  },
   "bin": {
     "lazyglm": "bin/lazyglm.js"
   },
