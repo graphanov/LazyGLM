@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { pickModel, detectRole, resolveModelId } from "../src/agent/router.js";
+import { resolveProviderConfig } from "../src/agent/provider.js";
 
 test("pickModel resolves ultrabrain role to glm-5.2 via nous", async () => {
   const m = await pickModel("ultrabrain", { provider: "nous" });
@@ -61,4 +62,26 @@ test("detectRole honors explicit role override", () => {
 test("resolveModelId falls back to bare name for unknown providers", () => {
   const catalog = { models: { "glm-5.2": { aliases: { nous: "z-ai/glm-5.2" } } } };
   assert.equal(resolveModelId("glm-5.2", "custom", catalog), "glm-5.2");
+});
+
+test("resolveProviderConfig rejects an unknown explicit provider before fetch", async () => {
+  const savedProvider = process.env.LAZYGLM_PROVIDER;
+  const savedBase = process.env.LAZYGLM_BASE_URL;
+  const savedKey = process.env.LAZYGLM_API_KEY;
+  try {
+    delete process.env.LAZYGLM_PROVIDER;
+    delete process.env.LAZYGLM_BASE_URL;
+    delete process.env.LAZYGLM_API_KEY;
+    await assert.rejects(
+      () => resolveProviderConfig({ provider: "Help", role: "default" }),
+      /Unknown GLM provider 'help'/,
+    );
+  } finally {
+    if (savedProvider === undefined) delete process.env.LAZYGLM_PROVIDER;
+    else process.env.LAZYGLM_PROVIDER = savedProvider;
+    if (savedBase === undefined) delete process.env.LAZYGLM_BASE_URL;
+    else process.env.LAZYGLM_BASE_URL = savedBase;
+    if (savedKey === undefined) delete process.env.LAZYGLM_API_KEY;
+    else process.env.LAZYGLM_API_KEY = savedKey;
+  }
 });

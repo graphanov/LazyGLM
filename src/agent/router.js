@@ -3,7 +3,7 @@
 // tasks, glm-4.7-flash for quick ones" actually work — previously roles.json
 // was a dead file nothing read.
 import { readJson } from "../util.js";
-import { loadUserConfig } from "../config.js";
+import { loadUserConfig, normalizeProvider } from "../config.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -26,10 +26,10 @@ async function loadCatalog() {
  *   5. catalog.default_provider (zai)
  */
 export function resolveProvider(options = {}, catalog, userConfig = {}) {
-  if (options.provider) return options.provider;
-  if (process.env.LAZYGLM_PROVIDER) return process.env.LAZYGLM_PROVIDER;
+  if (options.provider) return normalizeProvider(options.provider);
+  if (process.env.LAZYGLM_PROVIDER) return normalizeProvider(process.env.LAZYGLM_PROVIDER);
   if (process.env.LAZYGLM_BASE_URL) return "custom";
-  if (userConfig?.provider) return userConfig.provider;
+  if (userConfig?.provider) return normalizeProvider(userConfig.provider);
   return catalog?.default_provider || "zai";
 }
 

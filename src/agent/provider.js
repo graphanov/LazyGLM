@@ -21,6 +21,7 @@
 //   - Reasoning-token capture from usage for per-turn cost visibility
 
 import { pickModel, getProviderConfig, resolveProvider } from "./router.js";
+import { SUPPORTED_PROVIDERS } from "../config.js";
 
 const DEFAULT_TIMEOUT = 600_000;
 const DEFAULT_MAX_RETRIES = 4;
@@ -53,15 +54,24 @@ export async function resolveProviderConfig(options = {}) {
   } else if (picked.provider === "zai") {
     baseURL = process.env.LAZYGLM_BASE_URL?.replace(/\/$/, "") || "https://api.z.ai/api/coding/paas/v4";
     requiresKey = true;
-  } else {
-    // custom
+  } else if (picked.provider === "custom") {
     baseURL = (process.env.LAZYGLM_BASE_URL || "").replace(/\/$/, "");
-    requiresKey = !!process.env.LAZYGLM_API_KEY;
+    requiresKey = true;
+  } else {
+    throw new Error(
+      `Unknown GLM provider '${picked.provider}'. Supported providers: ${SUPPORTED_PROVIDERS.join(", ")}. ` +
+      `Set LAZYGLM_PROVIDER to one of those, or set LAZYGLM_BASE_URL for a custom OpenAI-compatible endpoint. ` +
+      `If this came from onboarding, edit or remove ~/.lazyglm/config.json and run \`lazyglm\` again.`,
+    );
   }
 
   const apiKey = process.env.LAZYGLM_API_KEY || picked.apiKey || (requiresKey ? "" : "ollama");
   const timeout = Number(process.env.LAZYGLM_TIMEOUT || DEFAULT_TIMEOUT);
   const maxRetries = Number(process.env.LAZYGLM_MAX_RETRIES ?? DEFAULT_MAX_RETRIES);
+
+  if (!baseURL) {
+    throw new Error("Custom GLM provider requires LAZYGLM_BASE_URL to be set to an OpenAI-compatible endpoint.");
+  }
 
   if (requiresKey && !apiKey) {
     throw new Error(

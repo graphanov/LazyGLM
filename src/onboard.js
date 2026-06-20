@@ -4,7 +4,7 @@
 //
 // Input is drawn from a shared LineQueue (created by the REPL) so that piped /
 // burst stdin is not lost between sequential prompts (a known readline race).
-import { saveUserConfig, loadUserConfig, isOnboarded } from "./config.js";
+import { saveUserConfig, loadUserConfig, isOnboarded, normalizeProvider, isSupportedProvider, SUPPORTED_PROVIDERS } from "./config.js";
 import { nowIso } from "./util.js";
 
 /**
@@ -13,7 +13,7 @@ import { nowIso } from "./util.js";
  */
 export async function needsOnboarding() {
   if (process.env.LAZYGLM_API_KEY) return false;
-  if (process.env.LAZYGLM_PROVIDER === "ollama") return false;
+  if (normalizeProvider(process.env.LAZYGLM_PROVIDER) === "ollama") return false;
   const cfg = await loadUserConfig({ force: true });
   return !isOnboarded(cfg);
 }
@@ -39,8 +39,28 @@ export async function runOnboarding({ queue, output } = {}) {
   out.write("\n🚀 Welcome to LazyGLM — let's get you set up.\n");
   out.write("Defaults work for most people: z.ai + glm-5.2 (the frontier GLM model).\n\n");
 
-  const providerAns = await ask("Provider [zai] (zai|nous|ollama): ");
-  const provider = providerAns || "zai";
+  const providerHelp = () => {
+    out.write("\nSupported providers:\n");
+    out.write("  zai    z.ai coding endpoint (default; requires API key)\n");
+    out.write("  nous   Nous Research inference API (requires API key)\n");
+    out.write("  ollama local OpenAI-compatible Ollama endpoint (keyless)\n\n");
+  };
+
+  let provider;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const providerAns = await ask("Provider [zai] (zai|nous|ollama, or help): ");
+    const normalized = normalizeProvider(providerAns || "zai");
+    if (normalized === "help" || normalized === "?" || normalized === "h") {
+      providerHelp();
+      continue;
+    }
+    if (isSupportedProvider(normalized)) {
+      provider = normalized;
+      break;
+    }
+    out.write(`Unknown provider '${providerAns}'. Supported providers: ${SUPPORTED_PROVIDERS.join(", ")}. Type 'help' for details.\n`);
+  }
 
   let apiKey = "";
   if (provider !== "ollama") {

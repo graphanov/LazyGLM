@@ -22,6 +22,19 @@ export function configPath() {
 
 let _cache = undefined;
 
+export const SUPPORTED_PROVIDERS = ["zai", "nous", "ollama"];
+
+export function normalizeProvider(provider) {
+  const p = String(provider || "").trim().toLowerCase();
+  if (!p) return "";
+  if (p === "z.ai" || p === "zhipu" || p === "zhipuai") return "zai";
+  return p;
+}
+
+export function isSupportedProvider(provider) {
+  return SUPPORTED_PROVIDERS.includes(normalizeProvider(provider));
+}
+
 /**
  * Load the persisted user config. Cached after first read; pass {force:true}
  * to re-read from disk (e.g. after onboarding writes a new file in-process).
@@ -66,7 +79,9 @@ export async function saveUserConfig(config) {
  */
 export function isOnboarded(config) {
   if (!config || !config.onboarded) return false;
-  if (config.provider === "ollama") return true;
+  const provider = normalizeProvider(config.provider || "zai");
+  if (!isSupportedProvider(provider)) return false;
+  if (provider === "ollama") return true;
   return !!config.api_key;
 }
 

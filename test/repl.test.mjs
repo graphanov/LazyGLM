@@ -41,23 +41,45 @@ test("saveUserConfig writes JSON with chmod 600 and updates the cache", async ()
   assert.equal(cfg.api_key, "k");
 });
 
-test("isOnboarded: true for zai+key, false without key, true for ollama", () => {
+test("isOnboarded: true for valid providers only", () => {
   assert.ok(isOnboarded({ onboarded: true, provider: "zai", api_key: "k" }));
+  assert.ok(isOnboarded({ onboarded: true, provider: "Z.AI", api_key: "k" }));
   assert.ok(!isOnboarded({ onboarded: true, provider: "zai" }));
   assert.ok(!isOnboarded({ provider: "zai", api_key: "k" })); // not flagged onboarded
   assert.ok(isOnboarded({ onboarded: true, provider: "ollama" }));
+  assert.ok(!isOnboarded({ onboarded: true, provider: "Help", api_key: "k" }), "unknown providers must not count as onboarded");
 });
 
 // --- onboard.js ---
 
-test("needsOnboarding: true with no key+config; false with env key", async () => {
+test("needsOnboarding: true with no key+config; false with env key or ollama env", async () => {
+  await freshHome();
+  const savedKey = process.env.LAZYGLM_API_KEY;
+  const savedProvider = process.env.LAZYGLM_PROVIDER;
+  try {
+    delete process.env.LAZYGLM_API_KEY;
+    delete process.env.LAZYGLM_PROVIDER;
+    assert.ok(await needsOnboarding(), "fresh machine needs onboarding");
+    process.env.LAZYGLM_API_KEY = "env-key";
+    assert.ok(!(await needsOnboarding()), "env key satisfies onboarding");
+    delete process.env.LAZYGLM_API_KEY;
+    process.env.LAZYGLM_PROVIDER = " Ollama ";
+    assert.ok(!(await needsOnboarding()), "ollama env is keyless and should be normalized");
+  } finally {
+    if (savedKey === undefined) delete process.env.LAZYGLM_API_KEY;
+    else process.env.LAZYGLM_API_KEY = savedKey;
+    if (savedProvider === undefined) delete process.env.LAZYGLM_PROVIDER;
+    else process.env.LAZYGLM_PROVIDER = savedProvider;
+  }
+});
+
+test("needsOnboarding repairs an invalid persisted provider", async () => {
   await freshHome();
   const saved = process.env.LAZYGLM_API_KEY;
   try {
     delete process.env.LAZYGLM_API_KEY;
-    assert.ok(await needsOnboarding(), "fresh machine needs onboarding");
-    process.env.LAZYGLM_API_KEY = "env-key";
-    assert.ok(!(await needsOnboarding()), "env key satisfies onboarding");
+    await saveUserConfig({ onboarded: true, provider: "Help", api_key: "k", model: "glm-5.2" });
+    assert.ok(await needsOnboarding(), "invalid provider config should re-run onboarding instead of reaching fetch");
   } finally {
     if (saved === undefined) delete process.env.LAZYGLM_API_KEY;
     else process.env.LAZYGLM_API_KEY = saved;
@@ -88,6 +110,19 @@ test("runOnboarding with ollama needs no key", async () => {
   assert.equal(cfg.provider, "ollama");
   assert.ok(!cfg.api_key);
   assert.ok(isOnboarded(cfg));
+});
+
+test("runOnboarding rejects help/invalid provider answers and saves the next valid provider", async () => {
+  await freshHome();
+  const writes = [];
+  const lines = ["Help", "bogus", "z.ai", "my-key", "glm-5.2"];
+  let i = 0;
+  const queue = { next: () => Promise.resolve(lines[i++]) };
+  const cfg = await runOnboarding({ queue, output: { write: (s) => writes.push(s) } });
+  assert.equal(cfg.provider, "zai");
+  assert.equal(cfg.api_key, "my-key");
+  assert.match(writes.join(""), /Supported providers/);
+  assert.match(writes.join(""), /Unknown provider 'bogus'/);
 });
 
 test("runOnboarding throws when no key provided for zai", async () => {
