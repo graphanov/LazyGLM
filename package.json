@@ -1,7 +1,7 @@
 {
   "name": "lazyglm",
   "version": "0.1.2",
-  "description": "The GLM-native agent harness for complex codebases — project memory, planning, execution, and verified completion driven by GLM models.",
+  "description": "Dedicated coding-agent CLI for GLM models — REPL, tool use, model routing, sessions, and verified completion.",
   "type": "module",
   "repository": {
     "type": "git",

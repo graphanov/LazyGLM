@@ -40,7 +40,7 @@ export async function runOnboarding({ queue, output } = {}) {
   };
 
   out.write("\n🚀 Welcome to LazyGLM — let's get you set up.\n");
-  out.write("Defaults work for most people: z.ai + glm-5.2 (the frontier GLM model).\n\n");
+  out.write("Defaults work for most people: z.ai + glm-5.2 (the high-end GLM coding model).\n\n");
 
   const providerHelp = () => {
     out.write("\nSupported providers:\n");

@@ -1,12 +1,12 @@
 // GLM provider: speaks the OpenAI Chat Completions schema with tool calling.
 //
-// DEFAULT: the Zhipu z.ai coding endpoint (https://api.z.ai/api/coding/paas/v4)
-// serving glm-5.2 — the frontier GLM model. Requires LAZYGLM_API_KEY (get a key
+// DEFAULT: the z.ai coding endpoint (https://api.z.ai/api/coding/paas/v4)
+// serving glm-5.2 — the default high-end GLM coding model. Requires LAZYGLM_API_KEY (get a key
 // with a z.ai coding plan). The /coding/ segment in the base URL is REQUIRED
 // (/api/paas/v4 returns 401).
 //
 // To use a different backend:
-//   LAZYGLM_PROVIDER=zai              Zhipu z.ai (DEFAULT; api.z.ai/api/coding/paas/v4, key required)
+//   LAZYGLM_PROVIDER=zai              z.ai (DEFAULT; api.z.ai/api/coding/paas/v4, key required)
 //   LAZYGLM_PROVIDER=nous             Nous Research inference API (inference-api.nousresearch.com/v1)
 //   LAZYGLM_PROVIDER=ollama           local Ollama (keyless, http://localhost:11434/v1)
 //   LAZYGLM_BASE_URL=<url>            any custom OpenAI-compatible endpoint
@@ -79,7 +79,7 @@ export async function resolveProviderConfig(options = {}) {
     throw new Error(
       `GLM provider '${picked.provider}' requires an API key. Run \`lazyglm\` to onboard (persists to ~/.lazyglm/config.json), or:\n` +
       `  export LAZYGLM_API_KEY=...\n` +
-      `Get a key from https://z.ai (Zhipu z.ai, default) or https://portal.nousresearch.com (Nous).\n` +
+      `Get a key from https://z.ai (default) or https://portal.nousresearch.com (Nous).\n` +
       `Or use local Ollama: LAZYGLM_PROVIDER=ollama (run \`ollama serve\` first)`,
     );
   }

@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-test("model catalog targets GLM, not Codex models", async () => {
+test("model catalog is GLM-only", async () => {
   const catalog = await readJson(join(ROOT, "config", "model-catalog.json"));
   assert.ok(catalog.current.model.startsWith("glm"), `current model should be GLM, got ${catalog.current.model}`);
   for (const [name, entry] of Object.entries(catalog.models)) {
@@ -16,7 +16,7 @@ test("model catalog targets GLM, not Codex models", async () => {
   assert.ok(!/gpt-5|codex/i.test(blob), "catalog must not reference gpt-5/codex models");
 });
 
-test("model catalog defaults to the z.ai API + glm-5.2 (frontier)", async () => {
+test("model catalog defaults to the z.ai API + glm-5.2 (high-end)", async () => {
   const catalog = await readJson(join(ROOT, "config", "model-catalog.json"));
   assert.equal(catalog.default_provider, "zai");
   assert.equal(catalog.current.model, "glm-5.2");
