@@ -93,6 +93,21 @@ test("needsOnboarding repairs an invalid persisted provider", async () => {
   }
 });
 
+test("needsOnboarding honors a valid provider env override with a saved key", async () => {
+  await freshHome();
+  const savedKey = process.env.LAZYGLM_API_KEY;
+  const savedProvider = process.env.LAZYGLM_PROVIDER;
+  try {
+    delete process.env.LAZYGLM_API_KEY;
+    process.env.LAZYGLM_PROVIDER = " z.ai ";
+    await saveUserConfig({ onboarded: true, provider: "Help", api_key: "k", model: "glm-5.2" });
+    assert.ok(!(await needsOnboarding()), "valid env provider plus saved key should override a stale persisted provider");
+  } finally {
+    restoreEnv("LAZYGLM_API_KEY", savedKey);
+    restoreEnv("LAZYGLM_PROVIDER", savedProvider);
+  }
+});
+
 test("runOnboarding writes config from queue inputs (zai)", async () => {
   await freshHome();
   const lines = ["zai", "my-key", "glm-5.2"];
