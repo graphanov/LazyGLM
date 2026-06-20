@@ -14,52 +14,81 @@ Project memory, planning, execution, and verified completion — driven by GLM m
 LazyGLM is a clean-room reimagining of the [lazycodex](https://github.com/code-yeongyu/lazycodex)
 concept, retuned for **GLM models** instead of Codex models.
 
-lazycodex packages the OmO agent harness as a plugin for the OpenAI **Codex CLI**,
-routing to **gpt-5.x**. LazyGLM reproduces the same functionalities — a hook
-lifecycle, discipline plugins, a skills system, a model catalog, sub-agent
-roles, an installer, and a verified-completion loop — but drives **GLM** models
-( glm-5.2 / glm-4.7 / glm-4.7-flash ) via a self-contained agent runtime. No
-external coding-agent CLI required.
+lazycodex packages an agent harness as a plugin for the OpenAI Codex CLI, routing
+to GPT-5.x. LazyGLM reproduces the same functionalities — a hook lifecycle,
+discipline plugins, a skills system, model routing, sub-agent roles, an
+installer, and a verified-completion loop — but drives **GLM** models via a
+self-contained agent runtime. No external coding-agent CLI required.
 
 > Think "LazyVim for a GLM coding agent" — the harness is in the box.
 
-See [`docs/design.md`](docs/design.md) for the full clean-room mapping.
-
 ## Install
 
-LazyGLM runs against any OpenAI-compatible GLM endpoint. The default is a
-**local Ollama** instance (keyless, private):
+```bash
+npm install -g lazyglm
+```
+
+Or run from source:
 
 ```bash
-# 1. start Ollama and pull a GLM model
-ollama serve &
-ollama pull glm-4.7-flash
-
-# 2. install lazyglm globally (or use npx)
-npm install -g lazyglm     # once published
-# or run from source:
+git clone <your-repo> lazyglm && cd lazyglm
 node bin/lazyglm.js doctor
 ```
 
-To target a hosted GLM endpoint instead:
+## Configure
+
+LazyGLM defaults to the **Nous Research inference API** serving **GLM-5.2**
+(the frontier GLM model). You need an API key:
 
 ```bash
-export LAZYGLM_BASE_URL=https://api.z.ai/api/paas/v4
-export LAZYGLM_API_KEY=your-key
-export LAZYGLM_MODEL=glm-4.7
+export LAZYGLM_API_KEY=***     # get one at portal.nousresearch.com
+lazyglm doctor                             # verify
 ```
 
-Initialize a project:
+### Backends
+
+| Provider | Models | Key required | When to use |
+| --- | --- | --- | --- |
+| `nous` (default) | `z-ai/glm-5.2`, `glm-4.7`, `glm-4.7-flash`, … | yes | Frontier GLM-5.2 via API |
+| `zai` | `glm-5.2`, `glm-4.7-flash`, … | yes | Zhipu z.ai direct |
+| `ollama` | local GLM models | no (keyless) | Fully local, private, offline |
 
 ```bash
-cd your-project
-lazyglm install      # scaffolds .lazyglm/ + AGENTS.md
-lazyglm doctor       # health report
+# local Ollama (keyless) — for offline/private use
+ollama serve && ollama pull glm-4.7-flash
+LAZYGLM_PROVIDER=ollama lazyglm doctor
+
+# or any OpenAI-compatible endpoint
+LAZYGLM_BASE_URL=https://your-endpoint/v1 LAZYGLM_API_KEY=*** lazyglm doctor
+```
+
+## Model routing
+
+LazyGLM does not blindly spend the frontier model on every step. It routes by
+task role (configured in `config/model-catalog.json`):
+
+| Role | Model | Used for |
+| --- | --- | --- |
+| `ultrabrain` | glm-5.2 | Hard reasoning, architecture, complex debugging |
+| `default` | glm-5.2 | Routine coding work |
+| `planner` | glm-5.2 | Decision-complete planning |
+| `verifier` | glm-4.7 | Completion verification, review |
+| `quick` | glm-4.7-flash | Small edits, listings, sub-agents |
+
+Roles are auto-detected from the task, or forced with `--role`:
+
+```bash
+lazyglm run "build a todo app"                    # -> default (glm-5.2)
+lazyglm run "list the files in src" --role quick  # -> glm-4.7-flash
+lazyglm run "verify the tests pass"               # -> verifier (glm-4.7)
 ```
 
 ## Use
 
 ```bash
+# initialize a project
+cd your-project && lazyglm install
+
 # run the GLM agent on a task
 lazyglm run "add a /health endpoint and a test for it"
 
@@ -69,12 +98,8 @@ lazyglm run '$ulw-plan "refactor the auth module"'
 # verified-completion loop (keeps going until objectively done)
 lazyglm run "build a Minecraft clone in Three.js" \
   --ultrawork \
-  --completion-promise="index.html loads, WASD + mouse look works, blocks break and place, no console errors" \
-  --verify="node -e \"require('http').get('http://localhost:8080',r=>process.exit(r.statusCode===200?0:1))\""
-
-# list / read skills
-lazyglm skills
-lazyglm skill ulw-loop
+  --completion-promise="index.html loads, WASD + mouse look works, blocks break and place" \
+  --verify="node --check game.js"
 ```
 
 ## What you get
@@ -82,42 +107,39 @@ lazyglm skill ulw-loop
 | Feature | Description |
 | --- | --- |
 | 🤖 **GLM agent runtime** | Self-contained tool-use loop driving a GLM model (read/write/patch/grep/shell) |
-| 🔀 **Hook lifecycle** | SessionStart, UserPromptSubmit, Pre/PostToolUse, Stop, PostCompact — the same events the original speaks |
-| 🛡️ **Discipline plugins** | rules injection, comment-checker, executor-verify, start-work-continuation, telemetry (local-only) |
-| 🔁 **Ultrawork loop** | `$ulw-loop` / `--ultrawork` verified-completion loop (run → verify → continue) |
+| 🎯 **Model routing** | GLM-5.2 for hard tasks, glm-4.7-flash for quick ones — benchmark-driven, not random |
+| 🔀 **Hook lifecycle** | SessionStart, UserPromptSubmit, Pre/PostToolUse, Stop, PostCompact |
+| 🛡️ **Discipline plugins** | rules, comment-checker, executor-verify, start-work-continuation, telemetry (local-only) |
+| 🔁 **Ultrawork loop** | `--ultrawork` verified-completion loop (run → verify → continue) |
 | 📋 **Skills** | `$init-deep`, `$ulw-plan`, `$start-work`, `$ulw-loop`, `$review-work`, `$remove-ai-slops`, `$programming` |
-| 🎯 **Model routing** | GLM catalog with roles: default/worker/quick/planner/verifier/ultrabrain |
-| 🩺 **Doctor** | Provider + model + plugin + skill health report |
-
-## Why GLM models, not Codex models
-
-lazycodex pins `gpt-5.5`. LazyGLM's `config/model-catalog.json` pins GLM models
-with the same shape: `current`, `roles`, context window, reasoning effort. The
-default workhorse is `glm-4.7-flash` (fast, capable); `glm-5.2` is the
-ultrabrain role for hard reasoning. Run `lazyglm models` to see what your
-provider offers.
+| 🩺 **Doctor** | Provider + model + routing + plugin + skill health report |
 
 ## Architecture
 
 ```
 bin/lazyglm.js            CLI entrypoint
 src/cli.js                command dispatcher
-src/agent/                GLM provider, tools, runtime, context
+src/agent/
+  provider.js             OpenAI-compatible GLM provider (Nous/z.ai/Ollama/custom)
+  router.js               role -> model routing + provider-aware model IDs
+  tools.js                read_file, write_file, patch_file, list_dir, grep, run_shell, finish
+  runtime.js              tool-use loop: model -> tools -> hooks -> repeat until finish()
+  context.js              message bookkeeping + compaction
 src/hooks/                hook engine + protocol schema
-src/plugins/              discipline + orchestration components
+src/plugins/              8 discipline + orchestration components
 src/skills/               skill loader
 src/installer.js          `lazyglm install`
 src/doctor.js             health report
 src/ulw.js                Ultrawork verified-completion loop
 skills/                   markdown skills (GLM-tuned)
 config/                   model-catalog.json + roles.json
-test/                     node --test suites
+test/                     46 passing tests (node --test)
 ```
 
 ## Test
 
 ```bash
-npm test
+npm test    # 46 tests
 ```
 
 ## License

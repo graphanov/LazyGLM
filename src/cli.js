@@ -24,7 +24,9 @@ Usage:
   lazyglm doctor                       Health report (provider, model, plugins, skills)
   lazyglm models                       List available GLM models from the provider
   lazyglm run "<task>" [options]       Run the GLM agent on a task
-    --model <name>                     GLM model (default: glm-4.7-flash)
+    --model <name>                     GLM model (default: glm-5.2 via Nous API)
+    --provider <nous|ollama|zai>       Backend (default: nous; ollama=keyless local)
+    --role <role>                      Force a routing role (default|quick|planner|verifier|ultrabrain)
     --cwd <path>                       Working directory (default: .)
     --max-turns <n>                    Max agent turns (default 80)
     --ultrawork                        Verified-completion loop mode ($ulw-loop)
@@ -37,9 +39,10 @@ Usage:
   lazyglm help
 
 Environment:
-  LAZYGLM_BASE_URL   OpenAI-compatible endpoint (default http://localhost:11434/v1)
-  LAZYGLM_API_KEY    bearer token (Ollama ignores; others require)
-  LAZYGLM_MODEL      default model override
+  LAZYGLM_API_KEY    bearer token (REQUIRED for nous/zai; get it at portal.nousresearch.com)
+  LAZYGLM_PROVIDER   nous (default) | ollama (local, keyless) | zai
+  LAZYGLM_BASE_URL   override the endpoint for any OpenAI-compatible host
+  LAZYGLM_MODEL      override the catalog default model
 `;
 }
 
@@ -63,7 +66,8 @@ function parseFlags(argv) {
 function printEvent(ev) {
   switch (ev.type) {
     case "start":
-      console.log(`\n🚀 LazyGLM session ${ev.sessionId} | model: ${ev.model} | cwd: ${ev.cwd}`);
+      console.log(`\n🚀 LazyGLM session ${ev.sessionId} | model: ${ev.model} | provider: ${ev.provider || "?"} | role: ${ev.role || "default"}`);
+      console.log(`   cwd: ${ev.cwd}`);
       console.log(`   task: ${truncate(ev.task, 200)}\n`);
       break;
     case "assistant_text":
@@ -144,10 +148,10 @@ export async function main(argv) {
       return res.checks.some((c) => c.status === "fail") ? 1 : 0;
     }
     case "models": {
-      const cfg = resolveProviderConfig();
       try {
+        const cfg = await resolveProviderConfig({ role: "default" });
         const models = await listModels(cfg);
-        console.log(`Models at ${cfg.baseURL} (${models.length}):`);
+        console.log(`Models at ${cfg.baseURL} (${cfg.provider}, ${models.length}):`);
         for (const m of models) console.log(`  ${m}`);
       } catch (e) {
         console.error(`Cannot list models: ${e.message}`);
@@ -207,8 +211,8 @@ export async function main(argv) {
       const task = positional.join(" ").trim() || flags.task;
       if (!task) { console.error("usage: lazyglm run \"<task>\""); return 1; }
       const cwd = flags.cwd ? resolve(flags.cwd) : process.cwd();
-      const catalog = await readJson(join(ROOT, "config", "model-catalog.json"), {});
-      const model = flags.model || catalog.current?.model;
+      const model = flags.model;
+      const role = flags.role;
       const maxTurns = Number(flags["max-turns"] || 80);
       const ultrawork = !!flags.ultrawork || /\$ulw-loop\b/i.test(task);
 
@@ -216,14 +220,14 @@ export async function main(argv) {
         const completionPromise = flags["completion-promise"] || "the task is fully implemented, builds cleanly, and passes verification.";
         const verifyCommand = flags.verify;
         const maxIterations = Number(flags["max-iterations"] || 3);
-        const res = await runUltrawork({ task, cwd, model, completionPromise, verifyCommand, maxIterations, maxTurns, onEvent: printEvent });
+        const res = await runUltrawork({ task, cwd, model, role, completionPromise, verifyCommand, maxIterations, maxTurns, onEvent: printEvent });
         console.log(`\n--- Ultrawork result ---`);
         console.log(`verified: ${res.verified ? "YES ✅" : "NO ❌"} | iterations: ${res.iterations}`);
         if (res.verdict) console.log(`verdict: ${res.verdict.reason}`);
         return res.verified ? 0 : 2;
       }
 
-      const res = await runAgent({ task, cwd, model, plugins: loadPlugins(), maxTurns, onEvent: printEvent });
+      const res = await runAgent({ task, cwd, model, role, plugins: loadPlugins(), maxTurns, onEvent: printEvent });
       console.log(`\n--- Run result ---`);
       console.log(`finished: ${res.finished ? "YES ✅" : "NO (stopped)"} | turns: ${res.turns} | tokens in/out: ${res.tokensIn}/${res.tokensOut} | compactions: ${res.compactions}`);
       console.log(`transcript: ${res.transcriptPath}`);

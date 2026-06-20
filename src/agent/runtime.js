@@ -4,6 +4,7 @@
 import { join, dirname } from "node:path";
 import { appendFile } from "node:fs/promises";
 import { chat, resolveProviderConfig } from "./provider.js";
+import { detectRole } from "./router.js";
 import { TOOL_SPECS, TOOL_HANDLERS } from "./tools.js";
 import { Context } from "./context.js";
 import { HookEngine } from "../hooks/engine.js";
@@ -50,11 +51,14 @@ export async function runAgent(opts) {
     budget = 24_000,
     temperature,
     systemPromptExtra = "",
+    role,
     onEvent = () => {},
   } = opts;
 
-  const providerConfig = config || resolveProviderConfig({ model });
-  const resolvedModel = model || providerConfig.model;
+  // Route to the right model: auto-detect role from the task unless given.
+  const detectedRole = role || detectRole(task);
+  const providerConfig = config || await resolveProviderConfig({ model, role: detectedRole });
+  const resolvedModel = providerConfig.modelId || model;
   if (!resolvedModel) {
     throw new Error("No GLM model resolved. Set LAZYGLM_MODEL, pass --model, or configure config/model-catalog.json.");
   }
@@ -76,7 +80,7 @@ export async function runAgent(opts) {
     } catch {}
   };
 
-  onEvent({ type: "start", sessionId, model: resolvedModel, cwd, task });
+  onEvent({ type: "start", sessionId, model: resolvedModel, provider: providerConfig.provider, role: detectedRole, cwd, task });
 
   // 1. SessionStart
   const startRes = await engine.fire("SessionStart", {});

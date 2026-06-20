@@ -4,57 +4,81 @@ import { promisify } from "node:util";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { resolveProviderConfig, listModels } from "./agent/provider.js";
-import { loadPlugins, PLUGIN_BY_NAME } from "./plugins/index.js";
+import { loadPlugins } from "./plugins/index.js";
 import { loadSkills, listSkillNames } from "./skills/index.js";
-import { readJson, LAZYGLM_DIR } from "./util.js";
+import { readJson } from "./util.js";
+import { fileURLToPath } from "node:url";
+import { dirname } from "node:path";
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 const execP = promisify(exec);
 
 export async function doctor({ cwd } = {}) {
   const dir = cwd || process.cwd();
-  const cfg = resolveProviderConfig();
-  const lines = [];
   const checks = [];
   const ok = (name, detail) => { checks.push({ name, status: "ok", detail }); };
   const warn = (name, detail) => { checks.push({ name, status: "warn", detail }); };
   const fail = (name, detail) => { checks.push({ name, status: "fail", detail }); };
 
-  // provider reachable?
-  let models = [];
+  const catalog = await readJson(join(ROOT, "config", "model-catalog.json"), {});
+
+  // resolve provider config (now async + routing-aware)
+  let cfg;
+  let providerError = null;
   try {
-    models = await listModels(cfg);
-    ok("provider", `${cfg.baseURL} reachable, ${models.length} model(s) listed`);
+    cfg = await resolveProviderConfig({ role: "default" });
   } catch (e) {
-    fail("provider", `${cfg.baseURL} unreachable: ${e.message}. Start Ollama: \`ollama serve\``);
+    providerError = e.message;
+    cfg = { baseURL: "?", provider: "?", modelId: catalog.current?.model || "glm-5.2", apiKey: "" };
   }
 
-  // default model present?
-  const catalog = await readJson(join(import.meta.dirname, "..", "config", "model-catalog.json"), {});
-  const defaultModel = catalog.current?.model || "glm-4.7-flash";
-  if (models.length) {
-    const hasModel = models.some((m) => m === defaultModel || m.startsWith(defaultModel + ":") || m.replace(/:latest$/, "") === defaultModel);
-    if (hasModel) ok("model", `default '${defaultModel}' is available`);
-    else warn("model", `default '${defaultModel}' not found locally. Available: ${models.slice(0, 8).join(", ")}. Pull with: ollama pull ${defaultModel}`);
+  // provider config resolved?
+  if (providerError) {
+    fail("provider", providerError.split("\n")[0]);
   } else {
-    warn("model", `cannot verify '${defaultModel}' (provider unreachable). Try: ollama pull ${defaultModel}`);
+    ok("provider", `${cfg.provider} -> ${cfg.baseURL} | model: ${cfg.modelId} (role: ${cfg.role})`);
   }
 
-  // ollama daemon via CLI
-  try {
-    const { stdout } = await execP("ollama list 2>/dev/null", { timeout: 5000 });
-    const localModels = stdout.split("\n").filter(Boolean).map((l) => l.split(/\s+/)[0]);
-    ok("ollama", `daemon up, ${localModels.length} local model(s)${localModels.length ? ": " + localModels.slice(0, 6).join(", ") : ""}`);
-  } catch {
-    warn("ollama", "ollama CLI not responding (is `ollama serve` running?)");
+  // provider reachable + model available?
+  if (!providerError) {
+    let models = [];
+    try {
+      models = await listModels(cfg);
+      ok("reachable", `${cfg.baseURL} reachable, ${models.length} model(s) listed`);
+    } catch (e) {
+      // ollama not running is a warn (not fail) — it's an optional local path
+      if (cfg.provider === "ollama") {
+        warn("reachable", `${cfg.baseURL} unreachable. Start Ollama: \`ollama serve\``);
+      } else {
+        fail("reachable", `${cfg.baseURL} unreachable: ${e.message}`);
+      }
+    }
+    if (models.length) {
+      const hasModel = models.some((m) => m === cfg.modelId || m.startsWith(cfg.modelId + ":") || m.replace(/:latest$/, "") === cfg.modelId || m.endsWith("/" + cfg.modelId));
+      if (hasModel) ok("model", `configured model '${cfg.modelId}' is available at the provider`);
+      else {
+        const glmModels = models.filter((m) => /glm/i.test(m)).slice(0, 10);
+        warn("model", `configured model '${cfg.modelId}' not listed. GLM models available: ${glmModels.join(", ") || "(none)"}`);
+      }
+    }
+  }
+
+  // if using ollama, show local daemon status
+  if (cfg.provider === "ollama") {
+    try {
+      const { stdout } = await execP("ollama list 2>/dev/null", { timeout: 5000 });
+      const localModels = stdout.split("\n").filter(Boolean).map((l) => l.split(/\s+/)[0]);
+      ok("ollama", `daemon up, ${localModels.length} local model(s)${localModels.length ? ": " + localModels.slice(0, 6).join(", ") : ""}`);
+    } catch {
+      warn("ollama", "ollama CLI not responding (is `ollama serve` running?)");
+    }
   }
 
   // project install state
   const lazyDir = join(dir, ".lazyglm");
-  if (existsSync(lazyDir)) {
-    ok("install", `.lazyglm/ present in ${dir}`);
-  } else {
-    warn("install", `no .lazyglm/ in ${dir}. Run \`lazyglm install\` to initialize.`);
-  }
+  if (existsSync(lazyDir)) ok("install", `.lazyglm/ present in ${dir}`);
+  else warn("install", `no .lazyglm/ in ${dir}. Run \`lazyglm install\` to initialize.`);
   if (existsSync(join(dir, "AGENTS.md"))) ok("agents", "AGENTS.md present");
   else warn("agents", "no AGENTS.md (rules plugin will run with defaults)");
 
@@ -67,13 +91,26 @@ export async function doctor({ cwd } = {}) {
   const skills = listSkillNames();
   ok("skills", `${skills.length} loaded: ${skills.join(", ") || "(none)"}`);
 
-  // catalog
-  if (catalog.current) ok("catalog", `model-catalog v${catalog.version}, current=${catalog.current.model} (${catalog.current.model_context_window} ctx)`);
+  // catalog + routing
+  if (catalog.current) {
+    const roleCount = Object.keys(catalog.roles || {}).length;
+    const modelCount = Object.keys(catalog.models || {}).length;
+    ok("catalog", `v${catalog.version} | ${modelCount} models, ${roleCount} routing roles | default: ${catalog.current.model} via ${catalog.current.provider}`);
+  }
+
+  // routing sanity: verify roles resolve to models
+  if (catalog.roles) {
+    const unresolved = [];
+    for (const [role, entry] of Object.entries(catalog.roles)) {
+      if (!catalog.models?.[entry.model]) unresolved.push(`${role}->${entry.model}`);
+    }
+    if (unresolved.length) warn("routing", `roles pointing to unknown models: ${unresolved.join(", ")}`);
+    else ok("routing", `all ${Object.keys(catalog.roles).length} roles resolve to catalog models`);
+  }
 
   return {
     cwd: dir,
     provider: cfg,
-    defaultModel,
     checks,
     summary: `${checks.filter((c) => c.status === "ok").length}/${checks.length} ok, ${checks.filter((c) => c.status === "warn").length} warn, ${checks.filter((c) => c.status === "fail").length} fail`,
   };
