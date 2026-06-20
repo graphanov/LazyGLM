@@ -12,30 +12,29 @@ import { loadPlugins } from "./plugins/index.js";
 
 const execP = promisify(exec);
 
-const FILE_RE = /[\w./@-]+\.(js|mjs|cjs|ts|tsx|jsx|html|htm|css|scss|json|md|py|go|rs|java|c|cpp|h|hpp|rb|php|cs|swift|kt|glb|gltf|png|jpg|webp|svg|wasm|toml|yaml|yml|sh)/g;
-
 /**
- * Verify a finish claim: claimed files exist + optional verifyCommand passes.
+ * Verify a finish claim: files the agent actually wrote still exist + an
+ * optional verifyCommand passes.
  * @returns {{pass:boolean, reason:string, evidence:string}}
  */
-export async function verifyFinish({ summary, cwd, verifyCommand }) {
+export async function verifyFinish({ summary, cwd, verifyCommand, filesWritten }) {
   const evidence = [];
-  const summaryStr = typeof summary === "string" ? summary : "";
 
-  // 1. claimed files exist
-  const claimed = [...new Set([...summaryStr.matchAll(FILE_RE)].map((m) => m[0]))];
-  const missing = [];
-  for (const c of claimed.slice(0, 40)) {
+  // 1. files the agent wrote via tools must still exist (robust: tracked, not
+  //    regex-extracted from prose, which would false-match CDN specifiers).
+  const written = Array.isArray(filesWritten) ? filesWritten : [];
+  const missingWritten = [];
+  for (const rel of written) {
     try {
-      if (!existsSync(resolvePath(c, cwd))) missing.push(c);
+      if (!existsSync(resolvePath(rel, cwd))) missingWritten.push(rel);
     } catch {}
   }
-  if (missing.length) {
-    return { pass: false, reason: `finish summary references missing files: ${missing.slice(0, 10).join(", ")}`, evidence: "file-existence check" };
+  if (missingWritten.length) {
+    return { pass: false, reason: `files written during the run are now missing: ${missingWritten.join(", ")}`, evidence: "written-file check" };
   }
-  evidence.push(`${claimed.length} referenced file(s) all exist.`);
+  if (written.length) evidence.push(`${written.length} written file(s) all exist.`);
 
-  // 2. optional verify command (e.g. "npm test", "node -e ...")
+  // 2. optional verify command (e.g. "npm test", "node -e ...", static greps)
   if (verifyCommand) {
     try {
       const { stdout, stderr } = await execP(verifyCommand, { cwd, timeout: 120_000, maxBuffer: 4 * 1024 * 1024 });
@@ -48,8 +47,8 @@ export async function verifyFinish({ summary, cwd, verifyCommand }) {
     }
   }
 
-  // 3. no verify command: pass on file-existence only, but flag as unverified-by-command
-  return { pass: true, reason: "file-existence check passed (no verify command configured)", evidence: evidence.join("\n") };
+  // 3. no verify command and no written files: nothing to check, pass optimistically
+  return { pass: true, reason: written.length ? "written-file check passed (no verify command configured)" : "no files tracked and no verify command configured", evidence: evidence.join("\n") };
 }
 
 /**
@@ -90,7 +89,7 @@ export async function runUltrawork({
       continue;
     }
 
-    const verdict = await verifyFinish({ summary: res.finishSummary, cwd, verifyCommand });
+    const verdict = await verifyFinish({ summary: res.finishSummary, cwd, verifyCommand, filesWritten: res.filesWritten });
     onEvent({ type: "ultrawork_verify", iteration: i, pass: verdict.pass, reason: verdict.reason });
     if (verdict.pass) {
       return { verified: true, iterations: i, verdict, history, finishSummary: res.finishSummary };

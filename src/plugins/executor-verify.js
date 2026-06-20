@@ -1,31 +1,29 @@
-// executor-verify — Stop hook. When the agent calls finish, sanity-checks the
-// finish summary: file paths it references must actually exist on disk.
-// Surfaces missing files as feedback (a real signal, not a rubber stamp).
+// executor-verify — Stop hook. When the agent calls finish, sanity-checks that
+// the files it actually wrote via tools still exist on disk. Uses the
+// runtime-tracked files_written list (robust) rather than regex-guessing file
+// paths from the finish prose (which falsely matched CDN module specifiers
+// like "three@0.160.0/build/three.module.js").
 import { existsSync } from "node:fs";
 import { resolvePath } from "../util.js";
-
-const FILE_RE = /[\w./@-]+\.(js|mjs|cjs|ts|tsx|jsx|html|htm|css|scss|json|md|py|go|rs|java|c|cpp|h|hpp|rb|php|cs|swift|kt|glb|gltf|png|jpg|webp|svg|wasm|toml|yaml|yml|sh)/g;
 
 export default {
   name: "executor-verify",
   hooks: {
     async Stop(input, api) {
       if (!input.finished) return undefined;
-      const summary = typeof input.response === "string" ? input.response : "";
-      if (!summary) return undefined;
-
-      const candidates = [...new Set([...summary.matchAll(FILE_RE)].map((m) => m[0]))];
+      const written = Array.isArray(input.files_written) ? input.files_written : [];
+      if (!written.length) return undefined;
       const missing = [];
-      for (const c of candidates.slice(0, 40)) {
+      for (const rel of written) {
         try {
-          if (!existsSync(resolvePath(c, api.cwd))) missing.push(c);
+          if (!existsSync(resolvePath(rel, api.cwd))) missing.push(rel);
         } catch {
-          // path escapes root or otherwise unresolvable — skip
+          // path escapes root or unresolvable — skip
         }
       }
       if (missing.length) {
         return {
-          feedback: `executor-verify: the finish summary references file(s) not found on disk: ${missing.slice(0, 10).join(", ")}${missing.length > 10 ? ` (+${missing.length - 10} more)` : ""}. Create them, or correct the summary.`,
+          feedback: `executor-verify: files written during the run are now missing on disk: ${missing.join(", ")}.`,
         };
       }
       return undefined;

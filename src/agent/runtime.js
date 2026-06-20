@@ -68,6 +68,7 @@ export async function runAgent(opts) {
   engine.setMeta({ model: resolvedModel, transcriptPath, permissionMode: "auto" });
 
   const ctx = new Context({ model: resolvedModel, budget });
+  const filesWritten = new Set();
   const log = async (obj) => {
     onEvent(obj);
     try {
@@ -141,7 +142,7 @@ export async function runAgent(opts) {
     if (!resp.tool_calls || resp.tool_calls.length === 0) {
       if (lastNoToolNudge) {
         // Second consecutive text-only response -> treat as natural stop.
-        await engine.fire("Stop", { response: resp.content, finished: false });
+        await engine.fire("Stop", { response: resp.content, finished: false, files_written: [...filesWritten] });
         await log({ type: "stop", reason: "text-only-no-finish", turn });
         break;
       }
@@ -180,6 +181,9 @@ export async function runAgent(opts) {
         } catch (err) {
           result = `Error executing ${tc.name}: ${err?.message || err}`;
         }
+        if ((tc.name === "write_file" || tc.name === "patch_file") && typeof tc.arguments?.path === "string") {
+          filesWritten.add(tc.arguments.path);
+        }
         if (result && result.__finish) {
           finished = true;
           finishSummary = result.summary;
@@ -207,14 +211,14 @@ export async function runAgent(opts) {
     }
 
     if (finished) {
-      await engine.fire("Stop", { response: finishSummary, finished: true });
+      await engine.fire("Stop", { response: finishSummary, finished: true, files_written: [...filesWritten] });
       await log({ type: "finish", summary: truncate(finishSummary, 1500), turn });
       break;
     }
   }
 
   if (!finished) {
-    await engine.fire("Stop", { response: "(max turns reached)", finished: false });
+    await engine.fire("Stop", { response: "(max turns reached)", finished: false, files_written: [...filesWritten] });
     await log({ type: "stop", reason: "max_turns", turn: maxTurns });
   }
 
@@ -227,5 +231,6 @@ export async function runAgent(opts) {
     transcriptPath,
     finished,
     finishSummary,
+    filesWritten: [...filesWritten],
   };
 }
