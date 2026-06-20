@@ -1,6 +1,6 @@
 // Model router: maps a task role to a concrete (model, provider) pair using
 // config/model-catalog.json. This is what makes "leverage GLM-5.2 for hard
-// tasks, glm-4.7-flash for quick ones" actually work — previously roles.json
+// tasks, glm-4.7 for quick/routine ones" actually work — previously roles.json
 // was a dead file nothing read.
 import { readJson } from "../util.js";
 import { loadUserConfig, normalizeProvider } from "../config.js";

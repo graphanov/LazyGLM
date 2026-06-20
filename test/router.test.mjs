@@ -22,7 +22,7 @@ test("pickModel resolves ultrabrain role to glm-5.2 via nous", async () => {
 
 test("pickModel resolves quick role to a lower-tier model", async () => {
   const m = await pickModel("quick", { provider: "nous" });
-  assert.notEqual(m.model, "glm-5.2", "quick role should not use the frontier model");
+  assert.notEqual(m.model, "glm-5.2", "quick role should not use the high-end model");
   assert.equal(m.provider, "nous");
   // nous uses the z-ai/ prefix
   assert.ok(m.modelId.startsWith("z-ai/"), `nous modelId should be z-ai/-prefixed, got ${m.modelId}`);

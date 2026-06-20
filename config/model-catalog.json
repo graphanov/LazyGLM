@@ -4,54 +4,102 @@
   "current": {
     "model": "glm-5.2",
     "provider": "zai",
-    "model_context_window": 131072,
+    "model_context_window": 1000000,
     "model_reasoning_effort": "high"
   },
   "models": {
     "glm-5.2": {
-      "tier": "frontier",
-      "context_window": 131072,
-      "description": "Frontier GLM model. Use for hard reasoning, architecture, complex debugging.",
-      "aliases": { "nous": "z-ai/glm-5.2", "ollama": "glm-5.2", "zai": "glm-5.2" }
+      "tier": "high-end",
+      "context_window": 1000000,
+      "description": "High-end GLM coding model. Use for hard reasoning, architecture, complex debugging.",
+      "aliases": {
+        "nous": "z-ai/glm-5.2",
+        "ollama": "glm-5.2",
+        "zai": "glm-5.2"
+      }
     },
     "glm-5.1": {
-      "tier": "frontier",
-      "context_window": 131072,
-      "description": "Previous frontier GLM. Strong reasoning, slightly cheaper than 5.2.",
-      "aliases": { "nous": "z-ai/glm-5.1", "ollama": "glm-5.1", "zai": "glm-5.1" }
+      "tier": "high-end",
+      "context_window": 200000,
+      "description": "Previous high-end GLM. Strong reasoning, slightly cheaper than 5.2.",
+      "aliases": {
+        "nous": "z-ai/glm-5.1",
+        "ollama": "glm-5.1",
+        "zai": "glm-5.1"
+      }
+    },
+    "glm-5-turbo": {
+      "tier": "high-end-fast",
+      "context_window": 200000,
+      "description": "Fast high-end GLM coding model. Officially supported by the z.ai Coding Plan.",
+      "aliases": {
+        "nous": "z-ai/glm-5-turbo",
+        "ollama": "glm-5-turbo",
+        "zai": "glm-5-turbo"
+      }
     },
     "glm-5": {
       "tier": "strong",
-      "context_window": 131072,
+      "context_window": 200000,
       "description": "Strong general-purpose GLM.",
-      "aliases": { "nous": "z-ai/glm-5", "ollama": "glm-5", "zai": "glm-5" }
+      "aliases": {
+        "nous": "z-ai/glm-5",
+        "ollama": "glm-5",
+        "zai": "glm-5"
+      }
     },
     "glm-4.7": {
       "tier": "balanced",
-      "context_window": 131072,
+      "context_window": 200000,
       "description": "Balanced GLM for verification and medium-complexity work.",
-      "aliases": { "nous": "z-ai/glm-4.7", "ollama": "glm-4.7", "zai": "glm-4.7" }
+      "aliases": {
+        "nous": "z-ai/glm-4.7",
+        "ollama": "glm-4.7",
+        "zai": "glm-4.7"
+      }
     },
     "glm-4.7-flash": {
       "tier": "fast",
-      "context_window": 131072,
+      "context_window": 200000,
       "description": "Fast, efficient GLM for quick edits, listings, sub-agents. Lowest cost/latency.",
-      "aliases": { "nous": "z-ai/glm-4.7-flash", "ollama": "glm-4.7-flash", "zai": "glm-4.7-flash" }
+      "aliases": {
+        "nous": "z-ai/glm-4.7-flash",
+        "ollama": "glm-4.7-flash",
+        "zai": "glm-4.7-flash"
+      }
     }
   },
   "roles": {
-    "default":     { "model": "glm-5.2",       "reasoning_effort": "high" },
-    "worker":      { "model": "glm-5.2",       "reasoning_effort": "high" },
-    "ultrabrain":  { "model": "glm-5.2",       "reasoning_effort": "high" },
-    "planner":     { "model": "glm-5.2",       "reasoning_effort": "high" },
-    "verifier":    { "model": "glm-4.7",       "reasoning_effort": "high" },
-    "quick":       { "model": "glm-4.7-flash", "reasoning_effort": "low" }
+    "default": {
+      "model": "glm-5.2",
+      "reasoning_effort": "high"
+    },
+    "worker": {
+      "model": "glm-5.2",
+      "reasoning_effort": "high"
+    },
+    "ultrabrain": {
+      "model": "glm-5.2",
+      "reasoning_effort": "high"
+    },
+    "planner": {
+      "model": "glm-5.2",
+      "reasoning_effort": "high"
+    },
+    "verifier": {
+      "model": "glm-4.7",
+      "reasoning_effort": "high"
+    },
+    "quick": {
+      "model": "glm-4.7",
+      "reasoning_effort": "low"
+    }
   },
   "routing": {
     "ultrabrain": "hard reasoning, architecture, complex debugging -> glm-5.2",
     "default": "routine coding work -> glm-5.2",
     "verifier": "completion verification, review -> glm-4.7",
-    "quick": "small edits, listings, simple lookups, sub-agents -> glm-4.7-flash"
+    "quick": "small edits, listings, simple lookups, sub-agents -> glm-4.7"
   },
   "providers": {
     "nous": {
