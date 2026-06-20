@@ -2,8 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { pickModel, detectRole, resolveModelId } from "../src/agent/router.js";
 
-test("pickModel resolves ultrabrain role to glm-5.2 via nous by default", async () => {
-  const m = await pickModel("ultrabrain");
+test("pickModel resolves ultrabrain role to glm-5.2 via nous", async () => {
+  const m = await pickModel("ultrabrain", { provider: "nous" });
   assert.equal(m.model, "glm-5.2");
   assert.equal(m.provider, "nous");
   assert.equal(m.modelId, "z-ai/glm-5.2");
@@ -11,7 +11,7 @@ test("pickModel resolves ultrabrain role to glm-5.2 via nous by default", async 
 });
 
 test("pickModel resolves quick role to a lower-tier model", async () => {
-  const m = await pickModel("quick");
+  const m = await pickModel("quick", { provider: "nous" });
   assert.notEqual(m.model, "glm-5.2", "quick role should not use the frontier model");
   assert.equal(m.provider, "nous");
   // nous uses the z-ai/ prefix
@@ -26,7 +26,7 @@ test("pickModel with provider=ollama resolves to bare model IDs (no z-ai/ prefix
 });
 
 test("pickModel honors explicit --model override", async () => {
-  const m = await pickModel("default", { model: "glm-4.7" });
+  const m = await pickModel("default", { model: "glm-4.7", provider: "nous" });
   assert.equal(m.model, "glm-4.7");
   assert.equal(m.modelId, "z-ai/glm-4.7");
 });
