@@ -40,7 +40,7 @@ export async function resolveProviderConfig(options = {}) {
     baseURL = process.env.LAZYGLM_BASE_URL?.replace(/\/$/, "") || NOUS_BASE;
     requiresKey = true;
   } else if (picked.provider === "zai") {
-    baseURL = process.env.LAZYGLM_BASE_URL?.replace(/\/$/, "") || "https://api.z.ai/api/paas/v4";
+    baseURL = process.env.LAZYGLM_BASE_URL?.replace(/\/$/, "") || "https://api.z.ai/api/coding/paas/v4";
     requiresKey = true;
   } else {
     // custom

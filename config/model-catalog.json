@@ -60,7 +60,7 @@
       "env_key": "LAZYGLM_API_KEY"
     },
     "zai": {
-      "base_url": "https://api.z.ai/api/paas/v4",
+      "base_url": "https://api.z.ai/api/coding/paas/v4",
       "requires_key": true,
       "env_key": "LAZYGLM_API_KEY"
     },
