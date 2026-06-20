@@ -87,6 +87,8 @@ test("needsOnboarding: true with no key+config; false with env key or keyless en
     delete process.env.LAZYGLM_PROVIDER;
     process.env.LAZYGLM_BASE_URL = "http://localhost:1234/v1";
     assert.ok(!(await needsOnboarding()), "custom base URL is configured outside onboarding");
+    process.env.LAZYGLM_PROVIDER = "zai";
+    assert.ok(await needsOnboarding(), "key-requiring provider override still needs a key when a base URL is also set");
   } finally {
     restoreEnv("LAZYGLM_API_KEY", savedKey);
     restoreEnv("LAZYGLM_PROVIDER", savedProvider);

@@ -13,11 +13,11 @@ import { nowIso } from "./util.js";
  */
 export async function needsOnboarding() {
   if (process.env.LAZYGLM_API_KEY) return false;
-  if (process.env.LAZYGLM_BASE_URL) return false;
   const envProvider = normalizeProvider(process.env.LAZYGLM_PROVIDER);
   const cfg = await loadUserConfig({ force: true });
   if (envProvider === "ollama") return false;
   if (isSupportedProvider(envProvider)) return !cfg?.api_key;
+  if (process.env.LAZYGLM_BASE_URL) return false;
   return !isOnboarded(cfg);
 }
 
