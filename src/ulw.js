@@ -65,6 +65,7 @@ export async function runUltrawork({
   verifyCommand,
   maxIterations = 4,
   maxTurns = 80,
+  reasoningBudget = 0,
   onEvent = () => {},
 }) {
   const promise = completionPromise || "the task is fully implemented and builds cleanly.";
@@ -81,6 +82,7 @@ export async function runUltrawork({
       config,
       plugins: loadPlugins(),
       maxTurns,
+      reasoningBudget,
       systemPromptExtra: `ULTRAWORK iteration ${i}/${maxIterations}. Completion promise: "${promise}". Do not call finish until you have concrete evidence (passing build/test output, existing files).`,
       onEvent,
     });

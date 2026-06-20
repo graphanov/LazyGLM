@@ -29,6 +29,7 @@ Usage:
     --role <role>                      Force a routing role (default|quick|planner|verifier|ultrabrain)
     --cwd <path>                       Working directory (default: .)
     --max-turns <n>                    Max agent turns (default 80)
+    --max-reasoning-tokens <n>        Soft cap on cumulative reasoning tokens (0=unlimited)
     --ultrawork                        Verified-completion loop mode ($ulw-loop)
     --completion-promise "<text>"      What 'done' means (ultrawork)
     --verify "<command>"               Shell command that must exit 0 (ultrawork verify)
@@ -63,6 +64,25 @@ function parseFlags(argv) {
   return { flags, positional };
 }
 
+const GRAY = "\x1b[90m";
+const DIM = "\x1b[2m";
+const YELLOW = "\x1b[33m";
+const RESET = "\x1b[0m";
+
+// Streaming state: the agent emits assistant_delta / reasoning_delta fragments
+// that must be printed inline and closed with a newline before the next block.
+let streamOpen = false;
+let streamMode = null; // "text" | "reasoning"
+let streamedText = false; // suppresses the assistant_text echo when deltas already showed it
+
+function closeStream() {
+  if (streamOpen) {
+    process.stdout.write(RESET + "\n");
+    streamOpen = false;
+    streamMode = null;
+  }
+}
+
 function printEvent(ev) {
   switch (ev.type) {
     case "start":
@@ -70,10 +90,47 @@ function printEvent(ev) {
       console.log(`   cwd: ${ev.cwd}`);
       console.log(`   task: ${truncate(ev.task, 200)}\n`);
       break;
+    case "reasoning_delta":
+      // Reasoning streams first (GLM-5.2 thinks before answering). Show it dimmed
+      // so the terminal isn't silent during long thinking — that silence is what
+      // breaks trust in non-streaming agents.
+      if (!streamOpen) {
+        process.stdout.write(GRAY + "✶ ");
+        streamOpen = true;
+        streamMode = "reasoning";
+      } else if (streamMode !== "reasoning") {
+        process.stdout.write(RESET + "\n" + GRAY + "✶ ");
+        streamMode = "reasoning";
+      }
+      process.stdout.write(ev.text);
+      break;
+    case "assistant_delta":
+      if (streamOpen && streamMode === "reasoning") {
+        process.stdout.write(RESET + "\n");
+      }
+      if (!streamOpen || streamMode !== "text") {
+        process.stdout.write("💬 ");
+      }
+      streamOpen = true;
+      streamMode = "text";
+      streamedText = true;
+      process.stdout.write(ev.text);
+      break;
     case "assistant_text":
-      if (ev.content?.trim()) console.log(`💬 ${truncate(ev.content, 1200)}`);
+      // Close any open stream line first.
+      if (streamedText) {
+        closeStream();
+        streamedText = false;
+      } else {
+        closeStream();
+        if (ev.content?.trim()) console.log(`💬 ${truncate(ev.content, 1200)}`);
+      }
+      break;
+    case "tool_call_start":
+      closeStream();
       break;
     case "tool_call": {
+      closeStream();
       const arg = ev.input ? truncate(ev.input, 160) : "";
       console.log(`🔧 ${ev.name}(${arg}) [turn ${ev.turn}]`);
       break;
@@ -84,19 +141,40 @@ function printEvent(ev) {
     case "blocked":
       console.log(`⛔ blocked ${ev.tool}: ${ev.reasons.join("; ")}`);
       break;
+    case "retry":
+      closeStream();
+      console.log(`${YELLOW}   ⏳ retry ${ev.attempt}: ${ev.reason} (waiting ${ev.delay}ms)${RESET}`);
+      break;
+    case "reasoning_budget_exceeded":
+      closeStream();
+      console.log(`${YELLOW}   🧠 reasoning budget exceeded: ${ev.used}/${ev.budget} tokens — stopping${RESET}`);
+      break;
+    case "usage": {
+      // Surface reasoning-token spend — the GLM-native cost signal. Only print
+      // when reasoning tokens are non-zero to avoid noise on non-reasoning tiers.
+      const cum = ev.cumulative || {};
+      const turnReasoning = ev.usage?.completion_tokens_details?.reasoning_tokens || ev.usage?.reasoning_tokens || 0;
+      if (turnReasoning > 0 || cum.reasoning > 0) {
+        console.log(`${GRAY}   🧠 reasoning: +${turnReasoning} (cum ${cum.reasoning || 0}) | tokens in/out: ${cum.prompt || 0}/${cum.completion || 0}${RESET}`);
+      }
+      break;
+    }
     case "finish":
+      closeStream();
       console.log(`\n✅ FINISH: ${truncate(ev.summary, 1500)}\n`);
       break;
     case "compact":
       console.log(`   (context compacted — #${ev.compactionCount})`);
       break;
     case "ultrawork_iteration":
+      closeStream();
       console.log(`\n🔁 ULTRAWORK iteration ${ev.iteration}/${ev.max}`);
       break;
     case "ultrawork_verify":
       console.log(`   verify: ${ev.pass ? "PASS ✅" : "FAIL ❌"} — ${truncate(ev.reason, 300)}`);
       break;
     case "error":
+      closeStream();
       console.error(`❌ error: ${ev.message}`);
       break;
     default:
@@ -214,22 +292,23 @@ export async function main(argv) {
       const model = flags.model;
       const role = flags.role;
       const maxTurns = Number(flags["max-turns"] || 80);
+      const reasoningBudget = Number(flags["max-reasoning-tokens"] || 0);
       const ultrawork = !!flags.ultrawork || /\$ulw-loop\b/i.test(task);
 
       if (ultrawork) {
         const completionPromise = flags["completion-promise"] || "the task is fully implemented, builds cleanly, and passes verification.";
         const verifyCommand = flags.verify;
         const maxIterations = Number(flags["max-iterations"] || 3);
-        const res = await runUltrawork({ task, cwd, model, role, completionPromise, verifyCommand, maxIterations, maxTurns, onEvent: printEvent });
+        const res = await runUltrawork({ task, cwd, model, role, completionPromise, verifyCommand, maxIterations, maxTurns, reasoningBudget, onEvent: printEvent });
         console.log(`\n--- Ultrawork result ---`);
         console.log(`verified: ${res.verified ? "YES ✅" : "NO ❌"} | iterations: ${res.iterations}`);
         if (res.verdict) console.log(`verdict: ${res.verdict.reason}`);
         return res.verified ? 0 : 2;
       }
 
-      const res = await runAgent({ task, cwd, model, role, plugins: loadPlugins(), maxTurns, onEvent: printEvent });
+      const res = await runAgent({ task, cwd, model, role, plugins: loadPlugins(), maxTurns, reasoningBudget, onEvent: printEvent });
       console.log(`\n--- Run result ---`);
-      console.log(`finished: ${res.finished ? "YES ✅" : "NO (stopped)"} | turns: ${res.turns} | tokens in/out: ${res.tokensIn}/${res.tokensOut} | compactions: ${res.compactions}`);
+      console.log(`finished: ${res.finished ? "YES ✅" : "NO (stopped)"} | turns: ${res.turns} | tokens in/out: ${res.promptTokens || res.tokensIn}/${res.completionTokens || res.tokensOut}${res.reasoningTokens ? ` | 🧠 reasoning: ${res.reasoningTokens}` : ""} | compactions: ${res.compactions}`);
       console.log(`transcript: ${res.transcriptPath}`);
       return res.finished ? 0 : 2;
     }

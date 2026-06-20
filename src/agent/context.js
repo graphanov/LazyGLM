@@ -1,6 +1,14 @@
 // Message context + compaction for the agent loop. Keeps a running estimate
 // of token usage and compacts the middle of the transcript when over budget.
-import { nowIso } from "../util.js";
+//
+// Compaction design (0.1.0 hardening):
+//   - The original task message is PINNED — never dropped — so the agent never
+//     loses sight of what it was asked to do.
+//   - The dropped middle is replaced by a deterministic digest (files written,
+//     commands run, errors hit, agent notes), not a generic placeholder. This
+//     is the operational memory that stops the agent from re-doing work or
+//     thrashing after a compaction.
+import { nowIso, truncate } from "../util.js";
 
 const CHARS_PER_TOKEN = 4; // rough estimate
 
@@ -35,32 +43,42 @@ export class Context {
   }
 
   /**
-   * Compact if over budget. Keeps: system message, first user message,
-   * and the most recent `keepRecent` messages. The middle is replaced by a
-   * compacted summary marker. Fires `onCompact` so the hook engine can react.
-   * Returns true if compaction occurred.
+   * Compact if over budget. Preserves:
+   *   - the system prompt
+   *   - the original task message (PINNED — never dropped)
+   *   - a deterministic digest of the dropped middle (files/commands/errors/notes)
+   *   - the most recent `keepRecent` messages
+   * Fires `onCompact` so the hook engine can react. Returns true if compaction occurred.
    */
   async maybeCompact({ onCompact } = {}) {
     const tokens = this.estimateTokens();
     if (tokens <= this.budget) return false;
-    const keepRecent = 10;
+    const keepRecent = 12;
     if (this.messages.length <= keepRecent + 2) return false;
 
     const system = this.messages[0]?.role === "system" ? this.messages[0] : null;
     const rest = system ? this.messages.slice(1) : this.messages;
-    const head = rest.slice(0, 1); // first user task
-    const tail = rest.slice(-keepRecent);
-    const dropped = rest.length - head.length - tail.length;
+
+    // Pin the original task (first message after system — the user's task,
+    // possibly bundled with UserPromptSubmit hook injects).
+    const taskMsg = rest[0];
+
+    const tailStart = Math.max(1, rest.length - keepRecent);
+    const tail = rest.slice(tailStart);
+    const dropped = rest.slice(1, tailStart); // everything between task and recent tail
+
+    const digest = buildDigest(dropped);
 
     const summary = {
       role: "system",
       content:
-        `[Compacted transcript — ${dropped} earlier messages summarized at ${nowIso()} to fit the GLM context window.]\n` +
-        `The conversation above this point involved ongoing work toward the user's task. ` +
-        `Continue from the most recent messages. Do not re-ask what was already discussed.`,
+        `[Compacted transcript — ${dropped.length} earlier messages digested at ${nowIso()} to fit the GLM context window.]\n\n` +
+        `${digest}\n\n` +
+        `The user's original task is restated in the message immediately above this one. ` +
+        `Continue from the most recent messages. Do not re-ask what was already discussed or re-do work listed in the digest above.`,
     };
 
-    this.messages = [system, ...head, summary, ...tail].filter(Boolean);
+    this.messages = [system, taskMsg, summary, ...tail].filter(Boolean);
     this.compactionCount += 1;
     if (onCompact) await onCompact({ compactionCount: this.compactionCount, droppedTokens: tokens });
     return true;
@@ -71,4 +89,53 @@ export class Context {
     this.totalTokensIn += usage.prompt_tokens || 0;
     this.totalTokensOut += usage.completion_tokens || 0;
   }
+}
+
+function safeParse(s) {
+  if (!s) return {};
+  if (typeof s !== "string") return s;
+  try { return JSON.parse(s); } catch { return {}; }
+}
+
+/**
+ * Build a deterministic digest of a slice of dropped messages so the agent
+ * retains operational memory (what it already did) after compaction — without
+ * spending an extra LLM call on summarization.
+ */
+function buildDigest(dropped) {
+  const filesWritten = new Set();
+  const filesPatched = new Set();
+  const commands = [];
+  const errors = [];
+  let notes = "";
+
+  for (const m of dropped) {
+    if (m.role === "assistant") {
+      if (Array.isArray(m.tool_calls)) {
+        for (const tc of m.tool_calls) {
+          const fn = tc.function || {};
+          const args = safeParse(fn.arguments);
+          if (fn.name === "write_file" && args.path) filesWritten.add(args.path);
+          else if (fn.name === "patch_file" && args.path) filesPatched.add(args.path);
+          else if (fn.name === "run_shell" && args.command) commands.push(truncate(args.command, 80));
+        }
+      }
+      if (typeof m.content === "string" && m.content.trim() && notes.length < 800) {
+        notes += " " + m.content.trim();
+      }
+    }
+    if (m.role === "tool" && typeof m.content === "string") {
+      if (/\b(error|failed|exit code [1-9]|not found|cannot|blocked)\b/i.test(m.content)) {
+        errors.push(truncate(m.content.replace(/\s+/g, " ").trim(), 140));
+      }
+    }
+  }
+
+  const parts = [];
+  if (filesWritten.size) parts.push(`Files created: ${[...filesWritten].join(", ")}`);
+  if (filesPatched.size) parts.push(`Files modified: ${[...filesPatched].join(", ")}`);
+  if (commands.length) parts.push(`Commands run: ${commands.slice(-8).join(" | ")}`);
+  if (errors.length) parts.push(`Errors encountered: ${errors.slice(-6).join(" | ")}`);
+  if (notes.trim()) parts.push(`Agent notes: ${truncate(notes.trim(), 600)}`);
+  return parts.length ? parts.join("\n") : "(no notable actions recorded in the compacted region)";
 }

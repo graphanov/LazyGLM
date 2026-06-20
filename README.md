@@ -31,7 +31,7 @@ npm install -g lazyglm
 Or run from source:
 
 ```bash
-git clone <your-repo> lazyglm && cd lazyglm
+git clone https://github.com/graphanov/LazyGLM.git lazyglm && cd lazyglm
 node bin/lazyglm.js doctor
 ```
 
@@ -100,6 +100,9 @@ lazyglm run "build a Minecraft clone in Three.js" \
   --ultrawork \
   --completion-promise="index.html loads, WASD + mouse look works, blocks break and place" \
   --verify="node --check game.js"
+
+# cap reasoning-token spend on your coding plan quota (GLM-native cost control)
+lazyglm run "refactor the parser" --max-reasoning-tokens 20000
 ```
 
 ## What you get
@@ -108,6 +111,10 @@ lazyglm run "build a Minecraft clone in Three.js" \
 | --- | --- |
 | 🤖 **GLM agent runtime** | Self-contained tool-use loop driving a GLM model (read/write/patch/grep/shell) |
 | 🎯 **Model routing** | GLM-5.2 for hard tasks, glm-4.7-flash for quick ones — benchmark-driven, not random |
+| 🌊 **Streaming** | Text + reasoning_content + tool-call deltas stream live — no silent hang during thinking |
+| 🧠 **Reasoning budget** | `--max-reasoning-tokens` caps cumulative reasoning spend; per-turn reasoning tokens surfaced |
+| 🔁 **Retry & backoff** | Exponential backoff (with jitter, respects Retry-After) on 429/5xx/network errors |
+| 🗜️ **Task-preserving compaction** | Original task is pinned; dropped context is digested (files/commands/errors), not placeholdered |
 | 🔀 **Hook lifecycle** | SessionStart, UserPromptSubmit, Pre/PostToolUse, Stop, PostCompact |
 | 🛡️ **Discipline plugins** | rules, comment-checker, executor-verify, start-work-continuation, telemetry (local-only) |
 | 🔁 **Ultrawork loop** | `--ultrawork` verified-completion loop (run → verify → continue) |
@@ -120,11 +127,11 @@ lazyglm run "build a Minecraft clone in Three.js" \
 bin/lazyglm.js            CLI entrypoint
 src/cli.js                command dispatcher
 src/agent/
-  provider.js             OpenAI-compatible GLM provider (Nous/z.ai/Ollama/custom)
+  provider.js             OpenAI-compatible GLM provider (streaming + retry/backoff; Nous/z.ai/Ollama/custom)
   router.js               role -> model routing + provider-aware model IDs
   tools.js                read_file, write_file, patch_file, list_dir, grep, run_shell, finish
   runtime.js              tool-use loop: model -> tools -> hooks -> repeat until finish()
-  context.js              message bookkeeping + compaction
+  context.js              message bookkeeping + task-preserving compaction with work digest
 src/hooks/                hook engine + protocol schema
 src/plugins/              8 discipline + orchestration components
 src/skills/               skill loader
@@ -133,13 +140,13 @@ src/doctor.js             health report
 src/ulw.js                Ultrawork verified-completion loop
 skills/                   markdown skills (GLM-tuned)
 config/                   model-catalog.json + roles.json
-test/                     46 passing tests (node --test)
+test/                     49 passing tests (node --test)
 ```
 
 ## Test
 
 ```bash
-npm test    # 46 tests
+npm test    # 49 tests
 ```
 
 ## License

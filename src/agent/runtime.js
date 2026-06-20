@@ -52,6 +52,7 @@ export async function runAgent(opts) {
     temperature,
     systemPromptExtra = "",
     role,
+    reasoningBudget = 0, // 0 = unlimited; soft cap on cumulative reasoning tokens
     onEvent = () => {},
   } = opts;
 
@@ -73,6 +74,9 @@ export async function runAgent(opts) {
 
   const ctx = new Context({ model: resolvedModel, budget });
   const filesWritten = new Set();
+  let totalReasoningTokens = 0;
+  let totalPromptTokens = 0;
+  let totalCompletionTokens = 0;
   const log = async (obj) => {
     onEvent(obj);
     try {
@@ -117,13 +121,38 @@ export async function runAgent(opts) {
         tools: TOOL_SPECS,
         temperature,
         config: providerConfig,
+        onDelta: (d) => {
+          if (d.type === "text") {
+            onEvent({ type: "assistant_delta", text: d.text, turn });
+          } else if (d.type === "reasoning") {
+            onEvent({ type: "reasoning_delta", text: d.text, turn });
+          } else if (d.type === "tool_call_start") {
+            onEvent({ type: "tool_call_start", name: d.name, id: d.id, turn });
+          }
+        },
+        onRetry: (r) => {
+          onEvent({ type: "retry", attempt: r.attempt, reason: r.reason, delay: r.delay, turn });
+        },
       });
     } catch (err) {
       await log({ type: "error", message: err.message, turn });
       throw err;
     }
     ctx.recordUsage(resp.usage);
-    await log({ type: "usage", usage: resp.usage, turn });
+    const u = resp.usage || {};
+    const reasoningTokens = u.completion_tokens_details?.reasoning_tokens || u.reasoning_tokens || 0;
+    totalReasoningTokens += reasoningTokens;
+    totalPromptTokens += u.prompt_tokens || 0;
+    totalCompletionTokens += u.completion_tokens || 0;
+    await log({ type: "usage", usage: resp.usage, turn, cumulative: { prompt: totalPromptTokens, completion: totalCompletionTokens, reasoning: totalReasoningTokens } });
+
+    // Soft reasoning budget: warn, then stop if exceeded.
+    if (reasoningBudget > 0 && totalReasoningTokens > reasoningBudget) {
+      onEvent({ type: "reasoning_budget_exceeded", budget: reasoningBudget, used: totalReasoningTokens, turn });
+      await log({ type: "stop", reason: "reasoning_budget", turn, used: totalReasoningTokens, budget: reasoningBudget });
+      await engine.fire("Stop", { response: "(reasoning budget exceeded)", finished: false, files_written: [...filesWritten] });
+      break;
+    }
 
     const assistantMsg = {
       role: "assistant",
@@ -231,6 +260,9 @@ export async function runAgent(opts) {
     turns: engine.turnId,
     tokensIn: ctx.totalTokensIn,
     tokensOut: ctx.totalTokensOut,
+    reasoningTokens: totalReasoningTokens,
+    promptTokens: totalPromptTokens,
+    completionTokens: totalCompletionTokens,
     compactions: ctx.compactionCount,
     transcriptPath,
     finished,
