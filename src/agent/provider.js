@@ -1,14 +1,16 @@
 // GLM provider: speaks the OpenAI Chat Completions schema with tool calling.
 //
-// DEFAULT: the Nous Research inference API (https://inference-api.nousresearch.com/v1)
-// serving z-ai/glm-5.2 — the frontier GLM model. Requires LAZYGLM_API_KEY.
+// DEFAULT: the Zhipu z.ai coding endpoint (https://api.z.ai/api/coding/paas/v4)
+// serving glm-5.2 — the frontier GLM model. Requires LAZYGLM_API_KEY (get a key
+// with a z.ai coding plan). The /coding/ segment in the base URL is REQUIRED
+// (/api/paas/v4 returns 401).
 //
 // To use a different backend:
+//   LAZYGLM_PROVIDER=zai              Zhipu z.ai (DEFAULT; api.z.ai/api/coding/paas/v4, key required)
+//   LAZYGLM_PROVIDER=nous             Nous Research inference API (inference-api.nousresearch.com/v1)
 //   LAZYGLM_PROVIDER=ollama           local Ollama (keyless, http://localhost:11434/v1)
-//   LAZYGLM_PROVIDER=zai              Zhipu z.ai (api.z.ai/api/coding/paas/v4, key required)
-//   LAZYGLM_PROVIDER=nous             explicit Nous (default)
 //   LAZYGLM_BASE_URL=<url>            any custom OpenAI-compatible endpoint
-//   LAZYGLM_API_KEY=<key>             bearer token (required for nous/zai/custom; ignored by ollama)
+//   LAZYGLM_API_KEY=<key>             bearer token (required for zai/nous/custom; ignored by ollama)
 //   LAZYGLM_MODEL=<name>              override the catalog default model
 //   LAZYGLM_TIMEOUT=<ms>              request timeout (default 600000)
 //   LAZYGLM_MAX_RETRIES=<n>           max retries on transient errors (default 4)

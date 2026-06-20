@@ -27,7 +27,7 @@ export function resolveProvider(options = {}, catalog) {
   if (options.provider) return options.provider;
   if (process.env.LAZYGLM_PROVIDER) return process.env.LAZYGLM_PROVIDER;
   if (process.env.LAZYGLM_BASE_URL) return "custom";
-  return catalog?.default_provider || "nous";
+  return catalog?.default_provider || "zai";
 }
 
 /**

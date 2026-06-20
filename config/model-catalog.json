@@ -1,9 +1,9 @@
 {
   "version": "2026-06-20.glm-5.2-api-first",
-  "default_provider": "nous",
+  "default_provider": "zai",
   "current": {
     "model": "glm-5.2",
-    "provider": "nous",
+    "provider": "zai",
     "model_context_window": 131072,
     "model_reasoning_effort": "high"
   },

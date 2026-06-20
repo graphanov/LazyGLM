@@ -51,8 +51,8 @@ export async function install({ cwd, force = false } = {}) {
     await writeJson(configPath, {
       installedAt: new Date().toISOString(),
       version: await readVersion(),
-      provider: { base_url: "http://localhost:11434/v1" },
-      model: "glm-4.7-flash",
+      provider: { base_url: "https://api.z.ai/api/coding/paas/v4" },
+      model: "glm-5.2",
     });
     created.push(".lazyglm/config.json");
   }

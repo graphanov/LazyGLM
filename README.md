@@ -37,25 +37,31 @@ node bin/lazyglm.js doctor
 
 ## Configure
 
-LazyGLM defaults to the **Nous Research inference API** serving **GLM-5.2**
-(the frontier GLM model). You need an API key:
+LazyGLM defaults to **Zhipu z.ai** serving **glm-5.2** (the frontier GLM model).
+You need an API key (get one with a z.ai coding plan):
 
 ```bash
-export LAZYGLM_API_KEY=***     # get one at portal.nousresearch.com
-lazyglm doctor                             # verify
+export LAZYGLM_API_KEY=***   # get one at z.ai
+lazyglm doctor               # verify (LAZYGLM_PROVIDER=zai is the default)
 ```
+
+> The z.ai base URL is `https://api.z.ai/api/coding/paas/v4` — the `/coding/`
+> segment is required (`/api/paas/v4` returns 401).
 
 ### Backends
 
 | Provider | Models | Key required | When to use |
 | --- | --- | --- | --- |
-| `nous` (default) | `z-ai/glm-5.2`, `glm-4.7`, `glm-4.7-flash`, … | yes | Frontier GLM-5.2 via API |
-| `zai` | `glm-5.2`, `glm-4.7-flash`, … | yes | Zhipu z.ai direct |
+| `zai` (default) | `glm-5.2`, `glm-5.1`, `glm-4.7`, … | yes | Frontier GLM-5.2 via z.ai (default) |
+| `nous` | `z-ai/glm-5.2`, `z-ai/glm-4.7`, … | yes | GLM via the Nous Research inference API |
 | `ollama` | local GLM models | no (keyless) | Fully local, private, offline |
 
 ```bash
+# Nous Research inference API (alternative)
+LAZYGLM_PROVIDER=nous LAZYGLM_API_KEY=*** lazyglm doctor
+
 # local Ollama (keyless) — for offline/private use
-ollama serve && ollama pull glm-4.7-flash
+ollama serve && ollama pull glm-4.7
 LAZYGLM_PROVIDER=ollama lazyglm doctor
 
 # or any OpenAI-compatible endpoint

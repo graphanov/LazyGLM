@@ -24,12 +24,12 @@ Usage:
   lazyglm doctor                       Health report (provider, model, plugins, skills)
   lazyglm models                       List available GLM models from the provider
   lazyglm run "<task>" [options]       Run the GLM agent on a task
-    --model <name>                     GLM model (default: glm-5.2 via Nous API)
-    --provider <nous|ollama|zai>       Backend (default: nous; ollama=keyless local)
+    --model <name>                     GLM model (default: glm-5.2 via z.ai)
+    --provider <zai|nous|ollama>       Backend (default: zai; ollama=keyless local)
     --role <role>                      Force a routing role (default|quick|planner|verifier|ultrabrain)
     --cwd <path>                       Working directory (default: .)
     --max-turns <n>                    Max agent turns (default 80)
-    --max-reasoning-tokens <n>        Soft cap on cumulative reasoning tokens (0=unlimited)
+    --max-reasoning-tokens <n>         Soft cap on cumulative reasoning tokens (0=unlimited)
     --ultrawork                        Verified-completion loop mode ($ulw-loop)
     --completion-promise "<text>"      What 'done' means (ultrawork)
     --verify "<command>"               Shell command that must exit 0 (ultrawork verify)
@@ -40,8 +40,8 @@ Usage:
   lazyglm help
 
 Environment:
-  LAZYGLM_API_KEY    bearer token (REQUIRED for nous/zai; get it at portal.nousresearch.com)
-  LAZYGLM_PROVIDER   nous (default) | ollama (local, keyless) | zai
+  LAZYGLM_API_KEY    bearer token (REQUIRED for zai/nous; get it at z.ai)
+  LAZYGLM_PROVIDER   zai (default) | nous | ollama (local, keyless)
   LAZYGLM_BASE_URL   override the endpoint for any OpenAI-compatible host
   LAZYGLM_MODEL      override the catalog default model
 `;
@@ -217,7 +217,7 @@ export async function main(argv) {
       const { flags } = parseFlags(rest);
       const res = await doctor({ cwd: flags.cwd ? resolve(flags.cwd) : process.cwd() });
       console.log(`LazyGLM doctor — ${res.cwd}`);
-      console.log(`Provider: ${res.provider.baseURL} | default model: ${res.defaultModel}\n`);
+      console.log(`Provider: ${res.provider.baseURL} | default model: ${res.provider.modelId}\n`);
       for (const c of res.checks) {
         const icon = c.status === "ok" ? "✓" : c.status === "warn" ? "!" : "✗";
         console.log(`  [${icon}] ${c.name}: ${c.detail}`);

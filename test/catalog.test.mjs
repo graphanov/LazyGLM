@@ -16,11 +16,14 @@ test("model catalog targets GLM, not Codex models", async () => {
   assert.ok(!/gpt-5|codex/i.test(blob), "catalog must not reference gpt-5/codex models");
 });
 
-test("model catalog defaults to the Nous API + glm-5.2 (frontier)", async () => {
+test("model catalog defaults to the z.ai API + glm-5.2 (frontier)", async () => {
   const catalog = await readJson(join(ROOT, "config", "model-catalog.json"));
-  assert.equal(catalog.default_provider, "nous");
+  assert.equal(catalog.default_provider, "zai");
   assert.equal(catalog.current.model, "glm-5.2");
-  assert.equal(catalog.current.provider, "nous");
+  assert.equal(catalog.current.provider, "zai");
+  assert.equal(catalog.providers.zai.base_url, "https://api.z.ai/api/coding/paas/v4");
+  assert.ok(catalog.providers.zai.requires_key, "zai provider must require a key");
+  // nous remains available as an alternative backend
   assert.equal(catalog.providers.nous.base_url, "https://inference-api.nousresearch.com/v1");
   assert.ok(catalog.providers.nous.requires_key, "nous provider must require a key");
 });
