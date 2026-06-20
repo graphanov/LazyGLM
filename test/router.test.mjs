@@ -1,7 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { pickModel, detectRole, resolveModelId } from "../src/agent/router.js";
 import { resolveProviderConfig } from "../src/agent/provider.js";
+import { resetConfigCache } from "../src/config.js";
+
+function restoreEnv(name, value) {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
 
 test("pickModel resolves ultrabrain role to glm-5.2 via nous", async () => {
   const m = await pickModel("ultrabrain", { provider: "nous" });
@@ -77,11 +86,34 @@ test("resolveProviderConfig rejects an unknown explicit provider before fetch", 
       /Unknown GLM provider 'help'/,
     );
   } finally {
-    if (savedProvider === undefined) delete process.env.LAZYGLM_PROVIDER;
-    else process.env.LAZYGLM_PROVIDER = savedProvider;
-    if (savedBase === undefined) delete process.env.LAZYGLM_BASE_URL;
-    else process.env.LAZYGLM_BASE_URL = savedBase;
-    if (savedKey === undefined) delete process.env.LAZYGLM_API_KEY;
-    else process.env.LAZYGLM_API_KEY = savedKey;
+    restoreEnv("LAZYGLM_PROVIDER", savedProvider);
+    restoreEnv("LAZYGLM_BASE_URL", savedBase);
+    restoreEnv("LAZYGLM_API_KEY", savedKey);
+  }
+});
+
+test("resolveProviderConfig accepts a keyless custom base URL", async () => {
+  const savedProvider = process.env.LAZYGLM_PROVIDER;
+  const savedBase = process.env.LAZYGLM_BASE_URL;
+  const savedKey = process.env.LAZYGLM_API_KEY;
+  const savedHome = process.env.LAZYGLM_HOME;
+  const home = await mkdtemp(join(tmpdir(), "lazyglm-router-"));
+  try {
+    process.env.LAZYGLM_HOME = home;
+    resetConfigCache();
+    delete process.env.LAZYGLM_PROVIDER;
+    delete process.env.LAZYGLM_API_KEY;
+    process.env.LAZYGLM_BASE_URL = "http://localhost:1234/v1/";
+    const cfg = await resolveProviderConfig({ role: "default" });
+    assert.equal(cfg.provider, "custom");
+    assert.equal(cfg.baseURL, "http://localhost:1234/v1");
+    assert.equal(cfg.apiKey, "ollama");
+  } finally {
+    restoreEnv("LAZYGLM_PROVIDER", savedProvider);
+    restoreEnv("LAZYGLM_BASE_URL", savedBase);
+    restoreEnv("LAZYGLM_API_KEY", savedKey);
+    restoreEnv("LAZYGLM_HOME", savedHome);
+    resetConfigCache();
+    await rm(home, { recursive: true, force: true });
   }
 });

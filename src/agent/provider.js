@@ -56,7 +56,9 @@ export async function resolveProviderConfig(options = {}) {
     requiresKey = true;
   } else if (picked.provider === "custom") {
     baseURL = (process.env.LAZYGLM_BASE_URL || "").replace(/\/$/, "");
-    requiresKey = true;
+    // Custom OpenAI-compatible endpoints may be local/keyless (LM Studio, llama.cpp),
+    // but still use LAZYGLM_API_KEY when the endpoint needs one.
+    requiresKey = !!process.env.LAZYGLM_API_KEY;
   } else {
     throw new Error(
       `Unknown GLM provider '${picked.provider}'. Supported providers: ${SUPPORTED_PROVIDERS.join(", ")}. ` +
