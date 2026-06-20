@@ -1,0 +1,65 @@
+name: Publish npm package
+
+# Trusted publishing via GitHub Actions OIDC — no stored npm token.
+# Mirrors graphanov/open-scaffold's publish flow (--provenance, id-token: write).
+#
+# ONE-TIME SETUP (Daniel, on npmjs.com as graphanov):
+#   Profile → Add Package → "Configure Trusted Publishing" →
+#     GitHub repository: graphanov/LazyGLM
+#     Workflow filename:  publish-npm.yml
+#     Environment:        (leave blank, or "publish")
+# Then trigger: gh workflow run publish-npm.yml -f expected-version=0.1.0 -f npm-tag=latest
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected-version:
+        description: "Version in package.json that should be published"
+        required: true
+        type: string
+      npm-tag:
+        description: "npm dist-tag to publish"
+        required: true
+        default: latest
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Ensure npm supports trusted publishing
+        run: npm install -g npm@11.14.1
+
+      - name: Run tests
+        run: npm test
+
+      - name: Validate requested version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          if [[ "$version" != "${{ inputs.expected-version }}" ]]; then
+            echo "package.json version $version does not match expected version ${{ inputs.expected-version }}" >&2
+            exit 1
+          fi
+          if npm view "lazyglm@$version" version >/dev/null 2>&1; then
+            echo "lazyglm@$version is already published" >&2
+            exit 1
+          fi
+
+      - name: Publish to npm with trusted publishing
+        run: npm publish --tag "${{ inputs.npm-tag }}" --provenance
