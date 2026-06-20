@@ -18,6 +18,11 @@ async function freshHome() {
   resetConfigCache();
   return h;
 }
+function restoreEnv(name, value) {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
+
 test.after(async () => {
   await Promise.all(homes.map((h) => rm(h, { recursive: true, force: true })));
 });
@@ -75,14 +80,16 @@ test("needsOnboarding: true with no key+config; false with env key or ollama env
 
 test("needsOnboarding repairs an invalid persisted provider", async () => {
   await freshHome();
-  const saved = process.env.LAZYGLM_API_KEY;
+  const savedKey = process.env.LAZYGLM_API_KEY;
+  const savedProvider = process.env.LAZYGLM_PROVIDER;
   try {
     delete process.env.LAZYGLM_API_KEY;
+    delete process.env.LAZYGLM_PROVIDER;
     await saveUserConfig({ onboarded: true, provider: "Help", api_key: "k", model: "glm-5.2" });
     assert.ok(await needsOnboarding(), "invalid provider config should re-run onboarding instead of reaching fetch");
   } finally {
-    if (saved === undefined) delete process.env.LAZYGLM_API_KEY;
-    else process.env.LAZYGLM_API_KEY = saved;
+    restoreEnv("LAZYGLM_API_KEY", savedKey);
+    restoreEnv("LAZYGLM_PROVIDER", savedProvider);
   }
 });
 
