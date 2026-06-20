@@ -204,6 +204,13 @@ test/                     59 passing tests (node --test)
 npm test    # 59 tests
 ```
 
+## Maintainer workflows
+
+- Pull request review process: [`docs/PR_REVIEW.md`](docs/PR_REVIEW.md)
+- npm trusted publishing: [`docs/PUBLISHING.md`](docs/PUBLISHING.md)
+
+Development notes, scratch plans, transcripts, and run logs stay local/untracked; this repo intentionally does not use committed active/done planning folders.
+
 ## License
 
 MIT

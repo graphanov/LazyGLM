@@ -1,14 +1,17 @@
 name: Publish npm package
 
 # Trusted publishing via GitHub Actions OIDC — no stored npm token.
-# Mirrors graphanov/open-scaffold's publish flow (--provenance, id-token: write).
 #
-# ONE-TIME SETUP (Daniel, on npmjs.com as graphanov):
-#   Profile → Add Package → "Configure Trusted Publishing" →
-#     GitHub repository: graphanov/LazyGLM
-#     Workflow filename:  publish-npm.yml
-#     Environment:        (leave blank, or "publish")
-# Then trigger: gh workflow run publish-npm.yml -f expected-version=0.1.0 -f npm-tag=latest
+# One-time npm-side setup, after the package already exists:
+#   npmjs.com → package lazyglm → Access → Trusted Publishing → GitHub Actions
+#     Owner / organization: graphanov
+#     Repository:           LazyGLM
+#     Workflow filename:    publish-npm.yml
+#     Environment:          leave blank
+#     Action:               npm publish
+#
+# Then trigger:
+#   gh workflow run publish-npm.yml -f expected-version=<version> -f npm-tag=latest
 
 on:
   workflow_dispatch:
@@ -27,6 +30,10 @@ permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: publish-npm-${{ inputs.expected-version }}
+  cancel-in-progress: false
+
 jobs:
   publish:
     name: Publish package
@@ -44,22 +51,64 @@ jobs:
       - name: Ensure npm supports trusted publishing
         run: npm install -g npm@11.14.1
 
-      - name: Run tests
+      - name: Show toolchain
+        run: |
+          node --version
+          npm --version
+
+      - name: Validate workflow inputs
+        shell: bash
+        env:
+          EXPECTED_VERSION: ${{ inputs.expected-version }}
+          NPM_TAG: ${{ inputs.npm-tag }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Trusted publishing must run from main; got $GITHUB_REF" >&2
+            exit 1
+          fi
+          if [[ ! "$EXPECTED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid expected-version input: $EXPECTED_VERSION" >&2
+            exit 1
+          fi
+          if [[ ! "$NPM_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
+            echo "Invalid npm-tag input: $NPM_TAG" >&2
+            exit 1
+          fi
+
+      - name: Run test suite
         run: npm test
+
+      - name: Smoke CLI entrypoint
+        run: node bin/lazyglm.js --version
+
+      - name: Verify package contents
+        run: npm pack --dry-run
 
       - name: Validate requested version
         shell: bash
+        env:
+          EXPECTED_VERSION: ${{ inputs.expected-version }}
         run: |
           set -euo pipefail
           version="$(node -p "require('./package.json').version")"
-          if [[ "$version" != "${{ inputs.expected-version }}" ]]; then
-            echo "package.json version $version does not match expected version ${{ inputs.expected-version }}" >&2
+          if [[ "$version" != "$EXPECTED_VERSION" ]]; then
+            echo "package.json version $version does not match expected version $EXPECTED_VERSION" >&2
             exit 1
           fi
-          if npm view "lazyglm@$version" version >/dev/null 2>&1; then
+          view_log="$(mktemp)"
+          if npm view "lazyglm@$version" version >"$view_log" 2>&1; then
             echo "lazyglm@$version is already published" >&2
+            cat "$view_log" >&2
+            exit 1
+          fi
+          if ! grep -Eq '(^npm error code E404|No match found|could not be found)' "$view_log"; then
+            echo "Could not prove lazyglm@$version is unpublished; refusing to publish." >&2
+            cat "$view_log" >&2
             exit 1
           fi
 
       - name: Publish to npm with trusted publishing
-        run: npm publish --tag "${{ inputs.npm-tag }}" --provenance
+        env:
+          NPM_TAG: ${{ inputs.npm-tag }}
+        run: npm publish --tag "$NPM_TAG" --provenance
