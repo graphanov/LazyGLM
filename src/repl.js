@@ -17,6 +17,7 @@ import { createSession, appendEvent, listSessions, loadSessionEvents, lastSessio
 import { install } from "./installer.js";
 import { runUltrawork } from "./ulw.js";
 import { readJson, gitInfo, truncate, nowIso } from "./util.js";
+import { renderBanner } from "./banner.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join as pjoin } from "node:path";
 
@@ -286,10 +287,19 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
   // 8. Skills
   await loadSkills();
 
-  // 9. Banner
-  console.log(`\n🚀 ${CYAN}LazyGLM${RESET} REPL | model: ${currentModel} | provider: ${providerConfig.provider} | cwd: ${dir}`);
-  if (yolo) console.log(`   ${YELLOW}⚡ yolo mode${RESET} — all permission gates bypassed`);
-  console.log(`   ${DIM}/help for commands · Ctrl+C or /exit to quit${RESET}\n`);
+  // 9. Banner (TTY-aware: ASCII wordmark + info panel in a terminal; a single
+  // clean machine-readable line under pipes / CI so logs are never corrupted).
+  process.stdout.write(
+    renderBanner({
+      model: currentModel,
+      provider: providerConfig.provider,
+      cwd: dir,
+      git: gi,
+      session,
+      yolo,
+      isTTY: process.stdout.isTTY ?? false,
+    }),
+  );
 
   // --- slash commands (closure over mutable REPL state) ---
   const handleSlash = async (input) => {
