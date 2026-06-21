@@ -2,6 +2,8 @@
 
 # LazyGLM
 
+![tests](https://img.shields.io/github/actions/workflow/status/graphanov/LazyGLM/ci.yml?branch=main&label=tests)
+
 **A dedicated coding-agent CLI for GLM models.**
 Interactive terminal workflow for Z.ai/Zhipu's GLM family: REPL, tool use, sessions, model routing, and verified completion loops.
 
@@ -265,13 +267,13 @@ src/doctor.js             health report
 src/ulw.js                Ultrawork verified-completion loop
 skills/                   markdown skills (GLM-tuned)
 config/                   model-catalog.json + roles.json
-test/                     65 passing tests (node --test)
+test/                     node --test suite
 ```
 
 ## Test
 
 ```bash
-npm test    # 65 tests
+npm test    # runs the full suite
 ```
 
 ## Maintainer workflows
