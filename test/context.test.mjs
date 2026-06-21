@@ -107,3 +107,24 @@ test("estimateTokens counts reasoning_content: a message with reasoning scores h
     "reasoning_content must raise the token estimate",
   );
 });
+
+test("estimateTokens ignores reasoning_content when preserveThinking is false (stripping providers)", () => {
+  // Regression for Codex review finding on head f255126: ollama/nous/custom
+  // (and LAZYGLM_PRESERVE_THINKING=off) strip reasoning_content from the wire
+  // payload, so counting it against the budget would force premature compaction.
+  const stripping = new Context({ preserveThinking: false });
+  stripping.push({ role: "assistant", content: "done", reasoning_content: "A".repeat(400) });
+  const baseline = new Context({ preserveThinking: false });
+  baseline.push({ role: "assistant", content: "done" });
+  assert.equal(
+    stripping.estimateTokens(),
+    baseline.estimateTokens(),
+    "reasoning_content must not count toward the budget when the provider strips it",
+  );
+  // And a flipping check: toggling preserveThinking back on makes it count.
+  stripping.preserveThinking = true;
+  assert.ok(
+    stripping.estimateTokens() > baseline.estimateTokens(),
+    "reasoning_content must count again once preserveThinking is enabled",
+  );
+});

@@ -43,9 +43,14 @@ export function assistantMessageFrom(resp) {
 }
 
 export class Context {
-  constructor({ model = "", budget = 24_000 } = {}) {
+  constructor({ model = "", budget = 24_000, preserveThinking = true } = {}) {
     this.model = model;
     this.budget = budget; // soft token budget for the rolling window
+    // Whether reasoning_content counts toward the budget. It only occupies the
+    // wire payload for providers that keep it (zai / LAZYGLM_PRESERVE_THINKING=on);
+    // stripping providers never send it, so counting it would force premature
+    // compaction. Set from shouldPreserveThinking(provider) by the runtime/REPL.
+    this.preserveThinking = preserveThinking;
     this.messages = [];
     this.compactionCount = 0;
     this.totalTokensIn = 0;
@@ -67,9 +72,10 @@ export class Context {
     let chars = 0;
     for (const m of this.messages) {
       chars += (m.content?.length || 0);
-      // Preserved thinking counts toward the budget: replaying it raises prompt
-      // tokens, so compaction must account for it or it silently under-estimates.
-      if (m.reasoning_content) chars += m.reasoning_content.length;
+      // Preserved thinking counts toward the budget only when it's actually on
+      // the wire (this.preserveThinking). Stripping providers never send
+      // reasoning_content, so counting it would force premature compaction.
+      if (this.preserveThinking && m.reasoning_content) chars += m.reasoning_content.length;
       if (m.tool_calls) chars += JSON.stringify(m.tool_calls).length;
     }
     return Math.ceil(chars / CHARS_PER_TOKEN);

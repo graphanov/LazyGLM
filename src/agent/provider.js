@@ -208,7 +208,7 @@ export function supportsPreservedThinking(provider) {
  *   on             → always keep (force keep on unsupported providers / shims)
  *   off            → always strip (force strip on zai-compatible endpoints)
  */
-function shouldPreserveThinking(provider) {
+export function shouldPreserveThinking(provider) {
   const override = (process.env.LAZYGLM_PRESERVE_THINKING || "auto").trim().toLowerCase();
   if (override === "on") return true;
   if (override === "off") return false;

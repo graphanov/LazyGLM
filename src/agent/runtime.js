@@ -3,7 +3,7 @@
 // every action. This is the clean-room replacement for the Codex CLI runner.
 import { join, dirname } from "node:path";
 import { appendFile } from "node:fs/promises";
-import { chat, resolveProviderConfig } from "./provider.js";
+import { chat, resolveProviderConfig, shouldPreserveThinking } from "./provider.js";
 import { detectRole } from "./router.js";
 import { TOOL_SPECS, TOOL_HANDLERS } from "./tools.js";
 import { Context, assistantMessageFrom } from "./context.js";
@@ -72,7 +72,7 @@ export async function runAgent(opts) {
   await ensureDir(dirname(transcriptPath));
   engine.setMeta({ model: resolvedModel, transcriptPath, permissionMode: "auto" });
 
-  const ctx = new Context({ model: resolvedModel, budget });
+  const ctx = new Context({ model: resolvedModel, budget, preserveThinking: shouldPreserveThinking(providerConfig.provider) });
   const filesWritten = new Set();
   let totalReasoningTokens = 0;
   let totalPromptTokens = 0;

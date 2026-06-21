@@ -6,7 +6,7 @@
 import * as readline from "node:readline";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { chat, resolveProviderConfig } from "./agent/provider.js";
+import { chat, resolveProviderConfig, shouldPreserveThinking } from "./agent/provider.js";
 import { TOOL_SPECS, TOOL_HANDLERS } from "./agent/tools.js";
 import { Context, assistantMessageFrom } from "./agent/context.js";
 import { HookEngine } from "./hooks/engine.js";
@@ -254,7 +254,7 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
 
   // 5. Context + system prompt
   const gi = gitInfo(dir);
-  const ctx = new Context({ model: currentModel, budget: 24_000 });
+  const ctx = new Context({ model: currentModel, budget: 24_000, preserveThinking: shouldPreserveThinking(providerConfig.provider) });
   const startRes = await engine.fire("SessionStart", {});
   const system = buildSystemPrompt({ cwd: dir, git: gi, model: currentModel, injects: startRes.injects });
   ctx.setSystem(system);
@@ -332,6 +332,10 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
           providerConfig = nc;
           currentModel = nc.modelId;
           ctx.model = currentModel;
+          // A /model switch can change the provider (e.g. zai → ollama), which
+          // flips whether reasoning_content is on the wire. Keep the budget
+          // estimator in sync so compaction decisions match the new payload.
+          ctx.preserveThinking = shouldPreserveThinking(nc.provider);
           engine.setMeta({ model: currentModel });
           console.log(`${GREEN}   ✓ model: ${currentModel}${RESET}`);
         } catch (e) {
