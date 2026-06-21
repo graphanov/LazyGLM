@@ -8,7 +8,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { chat, resolveProviderConfig } from "./agent/provider.js";
 import { TOOL_SPECS, TOOL_HANDLERS } from "./agent/tools.js";
-import { Context } from "./agent/context.js";
+import { Context, assistantMessageFrom } from "./agent/context.js";
 import { HookEngine } from "./hooks/engine.js";
 import { loadPlugins } from "./plugins/index.js";
 import { loadSkills, getSkill, detectSkillInvocation } from "./skills/index.js";
@@ -125,12 +125,15 @@ function extractFlag(s, flag) {
 }
 
 /** Rebuild a Context's messages from a session's event records. */
-function replayIntoContext(events, ctx) {
+export function replayIntoContext(events, ctx) {
   for (const ev of events) {
     if (ev.type === "user") {
       ctx.push({ role: "user", content: ev.content });
     } else if (ev.type === "assistant") {
       const m = { role: "assistant", content: ev.content || "" };
+      // Restore GLM preserved thinking so resumed sessions replay prior
+      // reasoning_content across turns (the provider gates the wire payload).
+      if (ev.reasoning_content) m.reasoning_content = ev.reasoning_content;
       if (ev.tool_calls && ev.tool_calls.length) {
         m.tool_calls = ev.tool_calls.map((tc) => ({
           id: tc.id,
@@ -468,16 +471,15 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
 
       closeStream();
 
-      const assistantMsg = { role: "assistant", content: resp.content || "" };
-      if (resp.tool_calls?.length) {
-        assistantMsg.tool_calls = resp.tool_calls.map((tc) => ({
-          id: tc.id,
-          type: "function",
-          function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
-        }));
-      }
+      const assistantMsg = assistantMessageFrom(resp);
       ctx.push(assistantMsg);
-      await appendEvent(session, { type: "assistant", content: resp.content || "", tool_calls: resp.tool_calls });
+      await appendEvent(session, {
+        type: "assistant",
+        content: resp.content || "",
+        tool_calls: resp.tool_calls,
+        // Persist GLM preserved thinking so --continue / /resume replay it.
+        reasoning_content: resp.reasoning || null,
+      });
 
       // text-only (no tool call) → end the turn, return control to the user
       if (!resp.tool_calls || resp.tool_calls.length === 0) {

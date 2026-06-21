@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Context } from "../src/agent/context.js";
+import { Context, assistantMessageFrom } from "../src/agent/context.js";
 
 test("compaction preserves the original task message", async () => {
   const ctx = new Context({ budget: 1 }); // tiny budget → forces compaction
@@ -56,4 +56,54 @@ test("compaction does not trigger when under budget", async () => {
   const compacted = await ctx.maybeCompact();
   assert.equal(compacted, false);
   assert.equal(ctx.compactionCount, 0);
+});
+
+// --- assistantMessageFrom (preserved-thinking replay) ---
+
+test("assistantMessageFrom preserves reasoning_content verbatim and serializes tool_calls to wire form", () => {
+  const resp = {
+    content: "I'll create the file.",
+    reasoning: "First consider A, then act on B.",
+    tool_calls: [
+      { id: "call_1", type: "function", name: "write_file", arguments: { path: "a.js", content: "x" } },
+    ],
+  };
+  const msg = assistantMessageFrom(resp);
+  assert.equal(msg.role, "assistant");
+  assert.equal(msg.content, "I'll create the file.");
+  assert.equal(msg.reasoning_content, "First consider A, then act on B.", "reasoning_content attached verbatim");
+  assert.ok(Array.isArray(msg.tool_calls));
+  assert.equal(msg.tool_calls[0].id, "call_1");
+  assert.equal(msg.tool_calls[0].type, "function");
+  assert.equal(msg.tool_calls[0].function.name, "write_file");
+  assert.equal(
+    typeof msg.tool_calls[0].function.arguments,
+    "string",
+    "wire form must serialize arguments to a string",
+  );
+  assert.deepEqual(JSON.parse(msg.tool_calls[0].function.arguments), { path: "a.js", content: "x" });
+});
+
+test("assistantMessageFrom omits reasoning_content/tool_calls keys when absent", () => {
+  const msg = assistantMessageFrom({ content: "hi" });
+  assert.equal(msg.content, "hi");
+  assert.equal("reasoning_content" in msg, false, "no reasoning key when absent");
+  assert.equal("tool_calls" in msg, false, "no tool_calls key when absent");
+  // empty/null reasoning should not attach
+  const empty = assistantMessageFrom({ content: "x", reasoning: null, tool_calls: [] });
+  assert.equal("reasoning_content" in empty, false);
+  assert.equal("tool_calls" in empty, false, "empty tool_calls array should not attach");
+});
+
+// --- estimateTokens counts reasoning_content ---
+
+test("estimateTokens counts reasoning_content: a message with reasoning scores higher than without", () => {
+  const without = new Context();
+  without.push({ role: "assistant", content: "done" });
+  const withReasoning = new Context();
+  withReasoning.push({ role: "assistant", content: "done", reasoning_content: "A".repeat(400) });
+  assert.ok(
+    withReasoning.estimateTokens() > without.estimateTokens(),
+    "reasoning_content must raise the token estimate",
+  );
 });

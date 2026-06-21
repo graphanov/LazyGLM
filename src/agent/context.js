@@ -12,6 +12,36 @@ import { nowIso, truncate } from "../util.js";
 
 const CHARS_PER_TOKEN = 4; // rough estimate
 
+/**
+ * Build a wire-format assistant message from a provider chat() response,
+ * preserving GLM `reasoning_content` (preserved thinking) verbatim.
+ *
+ * Both the one-shot runtime (runtime.js, also covering /ultrawork) and the
+ * REPL (repl.js) build their next-turn assistant message through this helper,
+ * so preserved thinking is replayed across turns in both call paths.
+ *
+ * The provider response carries tool_calls in the internal form
+ * `{id, type, name, arguments(object)}`; the wire form z.ai/OpenAI expect is
+ * `{id, type:"function", function:{name, arguments:string}}`.
+ *
+ * @param {object} resp  - { content, reasoning, tool_calls, ... }
+ * @returns {{role:"assistant", content:string, reasoning_content?:string, tool_calls?:Array}}
+ */
+export function assistantMessageFrom(resp) {
+  const msg = { role: "assistant", content: resp?.content || "" };
+  if (resp?.reasoning) {
+    msg.reasoning_content = resp.reasoning;
+  }
+  if (resp?.tool_calls?.length) {
+    msg.tool_calls = resp.tool_calls.map((tc) => ({
+      id: tc.id,
+      type: "function",
+      function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+    }));
+  }
+  return msg;
+}
+
 export class Context {
   constructor({ model = "", budget = 24_000 } = {}) {
     this.model = model;
@@ -37,6 +67,9 @@ export class Context {
     let chars = 0;
     for (const m of this.messages) {
       chars += (m.content?.length || 0);
+      // Preserved thinking counts toward the budget: replaying it raises prompt
+      // tokens, so compaction must account for it or it silently under-estimates.
+      if (m.reasoning_content) chars += m.reasoning_content.length;
       if (m.tool_calls) chars += JSON.stringify(m.tool_calls).length;
     }
     return Math.ceil(chars / CHARS_PER_TOKEN);

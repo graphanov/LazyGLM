@@ -6,7 +6,7 @@ import { appendFile } from "node:fs/promises";
 import { chat, resolveProviderConfig } from "./provider.js";
 import { detectRole } from "./router.js";
 import { TOOL_SPECS, TOOL_HANDLERS } from "./tools.js";
-import { Context } from "./context.js";
+import { Context, assistantMessageFrom } from "./context.js";
 import { HookEngine } from "../hooks/engine.js";
 import { gitInfo, truncate, ensureDir, nowIso } from "../util.js";
 
@@ -154,18 +154,7 @@ export async function runAgent(opts) {
       break;
     }
 
-    const assistantMsg = {
-      role: "assistant",
-      content: resp.content || "",
-    };
-    if (resp.tool_calls?.length) {
-      assistantMsg.tool_calls = resp.tool_calls.map((tc) => ({
-        id: tc.id,
-        type: "function",
-        function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
-      }));
-    }
-    ctx.push(assistantMsg);
+    ctx.push(assistantMessageFrom(resp));
     if (resp.content) await log({ type: "assistant_text", content: truncate(resp.content, 1500), turn });
     for (const tc of resp.tool_calls || []) {
       await log({ type: "tool_call", name: tc.name, input: truncate(JSON.stringify(tc.arguments), 800), turn });

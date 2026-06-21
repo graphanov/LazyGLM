@@ -9,6 +9,9 @@ import { join } from "node:path";
 import { loadUserConfig, saveUserConfig, isOnboarded, resetConfigCache } from "../src/config.js";
 import { needsOnboarding, runOnboarding } from "../src/onboard.js";
 import { createSession, appendEvent, listSessions, loadSessionEvents } from "../src/sessions.js";
+import { replayIntoContext } from "../src/repl.js";
+import { Context, assistantMessageFrom } from "../src/agent/context.js";
+import { chat } from "../src/agent/provider.js";
 
 const homes = [];
 async function freshHome() {
@@ -203,4 +206,93 @@ test("listSessions returns sessions most-recent first", async () => {
 test("loadSessionEvents returns null for an unknown id", async () => {
   await freshHome();
   assert.equal(await loadSessionEvents("does-not-exist"), null);
+});
+
+// --- GLM preserved-thinking replay (reasoning_content across turns/sessions) ---
+
+test("replayIntoContext restores reasoning_content from a persisted assistant event", () => {
+  const events = [
+    { type: "user", content: "do the work" },
+    { type: "assistant", content: "done", reasoning_content: "I weighed options then acted.", tool_calls: null },
+  ];
+  const ctx = new Context();
+  replayIntoContext(events, ctx);
+  const assistant = ctx.messages.find((m) => m.role === "assistant");
+  assert.equal(assistant.reasoning_content, "I weighed options then acted.", "reasoning must be restored on replay");
+});
+
+test("assistant append→load round-trip preserves reasoning_content (isolated LAZYGLM_HOME)", async () => {
+  await freshHome();
+  const s = await createSession({ model: "glm-5.2", provider: "zai" });
+  await appendEvent(s, { type: "user", content: "hi" });
+  await appendEvent(s, {
+    type: "assistant",
+    content: "hello",
+    tool_calls: null,
+    reasoning_content: "thinking about the reply",
+  });
+  const events = await loadSessionEvents(s.id);
+  const assistant = events.find((e) => e.type === "assistant");
+  assert.ok(assistant, "assistant event should round-trip");
+  assert.equal(assistant.reasoning_content, "thinking about the reply");
+});
+
+test("two-turn replay: prior reasoning_content is kept for zai, stripped for ollama", async () => {
+  delete process.env.LAZYGLM_PRESERVE_THINKING;
+  const original = globalThis.fetch;
+  let capturedBody = null;
+  globalThis.fetch = async (_url, init) => {
+    capturedBody = JSON.parse(init.body);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ choices: [{ message: { content: "ok" } }] }),
+      text: async () => "{}",
+      headers: { get: () => null },
+    };
+  };
+  // Turn 1 produced a response with reasoning + a finish tool_call. Build the
+  // prior assistant message the same way runtime.js / repl.js now do.
+  const resp = {
+    content: "All done.",
+    reasoning: "Plan: do it, then finish.",
+    tool_calls: [{ id: "call_1", type: "function", name: "finish", arguments: { summary: "ok" } }],
+  };
+  const makeConfig = (provider) => ({
+    baseURL: `http://stub-${provider}/v1`,
+    apiKey: "stub-key",
+    modelId: "glm-5.2",
+    model: "glm-5.2",
+    provider,
+    role: "default",
+    timeout: 5000,
+    maxRetries: 0,
+  });
+  try {
+    for (const provider of ["zai", "ollama"]) {
+      const ctx = new Context();
+      ctx.push(assistantMessageFrom(resp)); // turn-1 assistant message (with reasoning_content)
+      // Turn 2: send the history; the provider gates the wire payload.
+      await chat({ messages: ctx.messages, config: makeConfig(provider) });
+      const assistant = capturedBody.messages.find((m) => m.role === "assistant");
+      if (provider === "zai") {
+        assert.equal(
+          assistant.reasoning_content,
+          "Plan: do it, then finish.",
+          "zai turn-2 must carry prior reasoning_content",
+        );
+      } else {
+        assert.equal(
+          assistant.reasoning_content,
+          undefined,
+          "ollama turn-2 must strip prior reasoning_content",
+        );
+      }
+      // The live Context keeps reasoning_content regardless of provider.
+      const ctxAssistant = ctx.messages.find((m) => m.role === "assistant");
+      assert.equal(ctxAssistant.reasoning_content, "Plan: do it, then finish.", "context must retain reasoning");
+    }
+  } finally {
+    globalThis.fetch = original;
+  }
 });
