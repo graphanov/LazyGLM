@@ -190,6 +190,47 @@ function sleep(ms) {
 }
 
 /**
+ * Whether a provider honors GLM preserved thinking (`reasoning_content` on an
+ * assistant message echoed back across turns). z.ai's Coding Plan endpoint has
+ * preserved thinking enabled by default and returns `reasoning_content` every
+ * turn expecting it back verbatim. Other OpenAI-compatible backends (Nous,
+ * Ollama, custom shims) may reject the unknown field, so we strip by default.
+ *
+ * Override with LAZYGLM_PRESERVE_THINKING=auto|on|off (see shouldPreserveThinking).
+ */
+export function supportsPreservedThinking(provider) {
+  return provider === "zai";
+}
+
+/**
+ * Resolve the preserved-thinking policy from env override or provider default.
+ *   auto (default) → supportsPreservedThinking(provider)
+ *   on             → always keep (force keep on unsupported providers / shims)
+ *   off            → always strip (force strip on zai-compatible endpoints)
+ */
+export function shouldPreserveThinking(provider) {
+  const override = (process.env.LAZYGLM_PRESERVE_THINKING || "auto").trim().toLowerCase();
+  if (override === "on") return true;
+  if (override === "off") return false;
+  return supportsPreservedThinking(provider);
+}
+
+/**
+ * Return a copy of `messages` with `reasoning_content` removed when the
+ * provider should not receive it. The original array (the live Context) is
+ * never mutated — reasoning is stored in context + session regardless of
+ * provider, and only stripped from the outgoing wire payload.
+ */
+function messagesForProvider(messages, preserveThinking) {
+  if (preserveThinking) return messages;
+  return messages.map((m) => {
+    if (!m.reasoning_content) return m;
+    const { reasoning_content, ...rest } = m;
+    return rest;
+  });
+}
+
+/**
  * Send a chat completion request to the GLM provider.
  *
  * When `onDelta` is provided, the request is streamed (stream: true) and
@@ -217,9 +258,14 @@ export async function chat({ model, messages, tools, temperature, config, onDelt
   const cfg = config || await resolveProviderConfig();
   const url = `${cfg.baseURL}/chat/completions`;
   const wantStream = typeof onDelta === "function";
+  // GLM preserved thinking: z.ai expects reasoning_content echoed back; other
+  // backends may reject it. Strip it from the outgoing payload unless this
+  // provider honors it (or LAZYGLM_PRESERVE_THINKING forces keep). The live
+  // Context keeps reasoning_content regardless — only the wire payload changes.
+  const sendMessages = messagesForProvider(messages, shouldPreserveThinking(cfg.provider));
   const body = {
     model: model || cfg.modelId,
-    messages,
+    messages: sendMessages,
     temperature: temperature ?? 0.6,
     stream: wantStream,
   };

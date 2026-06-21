@@ -6,9 +6,9 @@
 import * as readline from "node:readline";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { chat, resolveProviderConfig } from "./agent/provider.js";
+import { chat, resolveProviderConfig, shouldPreserveThinking } from "./agent/provider.js";
 import { TOOL_SPECS, TOOL_HANDLERS } from "./agent/tools.js";
-import { Context } from "./agent/context.js";
+import { Context, assistantMessageFrom } from "./agent/context.js";
 import { HookEngine } from "./hooks/engine.js";
 import { loadPlugins } from "./plugins/index.js";
 import { loadSkills, getSkill, detectSkillInvocation } from "./skills/index.js";
@@ -125,12 +125,15 @@ function extractFlag(s, flag) {
 }
 
 /** Rebuild a Context's messages from a session's event records. */
-function replayIntoContext(events, ctx) {
+export function replayIntoContext(events, ctx) {
   for (const ev of events) {
     if (ev.type === "user") {
       ctx.push({ role: "user", content: ev.content });
     } else if (ev.type === "assistant") {
       const m = { role: "assistant", content: ev.content || "" };
+      // Restore GLM preserved thinking so resumed sessions replay prior
+      // reasoning_content across turns (the provider gates the wire payload).
+      if (ev.reasoning_content) m.reasoning_content = ev.reasoning_content;
       if (ev.tool_calls && ev.tool_calls.length) {
         m.tool_calls = ev.tool_calls.map((tc) => ({
           id: tc.id,
@@ -251,7 +254,7 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
 
   // 5. Context + system prompt
   const gi = gitInfo(dir);
-  const ctx = new Context({ model: currentModel, budget: 24_000 });
+  const ctx = new Context({ model: currentModel, budget: 24_000, preserveThinking: shouldPreserveThinking(providerConfig.provider) });
   const startRes = await engine.fire("SessionStart", {});
   const system = buildSystemPrompt({ cwd: dir, git: gi, model: currentModel, injects: startRes.injects });
   ctx.setSystem(system);
@@ -329,6 +332,10 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
           providerConfig = nc;
           currentModel = nc.modelId;
           ctx.model = currentModel;
+          // A /model switch can change the provider (e.g. zai → ollama), which
+          // flips whether reasoning_content is on the wire. Keep the budget
+          // estimator in sync so compaction decisions match the new payload.
+          ctx.preserveThinking = shouldPreserveThinking(nc.provider);
           engine.setMeta({ model: currentModel });
           console.log(`${GREEN}   ✓ model: ${currentModel}${RESET}`);
         } catch (e) {
@@ -468,16 +475,15 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
 
       closeStream();
 
-      const assistantMsg = { role: "assistant", content: resp.content || "" };
-      if (resp.tool_calls?.length) {
-        assistantMsg.tool_calls = resp.tool_calls.map((tc) => ({
-          id: tc.id,
-          type: "function",
-          function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
-        }));
-      }
+      const assistantMsg = assistantMessageFrom(resp);
       ctx.push(assistantMsg);
-      await appendEvent(session, { type: "assistant", content: resp.content || "", tool_calls: resp.tool_calls });
+      await appendEvent(session, {
+        type: "assistant",
+        content: resp.content || "",
+        tool_calls: resp.tool_calls,
+        // Persist GLM preserved thinking so --continue / /resume replay it.
+        reasoning_content: resp.reasoning || null,
+      });
 
       // text-only (no tool call) → end the turn, return control to the user
       if (!resp.tool_calls || resp.tool_calls.length === 0) {

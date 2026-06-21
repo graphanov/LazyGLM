@@ -168,10 +168,12 @@ The useful GLM-specific points are concrete:
 - **GLM-5.2 is built for long coding runs.** Z.ai documents it as a 1M-context,
   128K-output model trained for long-horizon coding-agent work. LazyGLM wraps it
   in a repo-aware terminal loop instead of leaving it as a raw chat API.
-- **Thinking is part of the model surface.** GLM can stream `reasoning_content`,
-  and z.ai documents preserved/interleaved thinking for coding-agent workflows.
-  LazyGLM already streams reasoning separately and shows reasoning-token spend;
-  preserved-thinking replay is the next GLM-specific runtime improvement.
+- **Thinking is part of the model surface — and it replays across turns.** GLM
+  streams `reasoning_content`, and z.ai's Coding Plan endpoint has preserved
+  thinking enabled by default, expecting prior reasoning echoed back verbatim.
+  LazyGLM feeds that reasoning into the next turn (and persists it across
+  sessions) instead of dropping it, while still streaming reasoning live and
+  surfacing per-turn reasoning-token spend.
 - **Model choice matters on the Coding Plan.** Z.ai recommends GLM-4.7 for daily
   development and GLM-5.2 / GLM-5-Turbo for harder engineering tasks. LazyGLM
   keeps `--model` and role routing visible instead of hiding that cost/quality
@@ -234,6 +236,7 @@ lazyglm run "refactor the parser" --max-reasoning-tokens 20000
 | 🎯 **Model routing** | GLM-5.2 for hard tasks, glm-4.7 for routine/quick turns — role-based by task type |
 | 🌊 **Streaming** | Text + reasoning_content + tool-call deltas stream live — no silent hang during thinking |
 | 🧠 **Reasoning budget** | `--max-reasoning-tokens` caps cumulative reasoning spend; per-turn reasoning tokens surfaced |
+| 💭 **Preserved thinking** | GLM `reasoning_content` replays into the next turn and across sessions (not dropped) — multi-turn runs keep their thinking continuity |
 | 🔁 **Retry & backoff** | Exponential backoff (with jitter, respects Retry-After) on 429/5xx/network errors |
 | 🗜️ **Task-preserving compaction** | Original task is pinned; dropped context is digested (files/commands/errors), not placeholdered |
 | 🔀 **Hook lifecycle** | SessionStart, UserPromptSubmit, Pre/PostToolUse, Stop, PostCompact |
