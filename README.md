@@ -268,13 +268,13 @@ src/doctor.js             health report
 src/ulw.js                Ultrawork verified-completion loop
 skills/                   markdown skills (GLM-tuned)
 config/                   model-catalog.json + roles.json
-test/                     65 passing tests (node --test)
+test/                     92 passing tests (node --test)
 ```
 
 ## Test
 
 ```bash
-npm test    # 65 tests
+npm test    # 92 tests
 ```
 
 ## Maintainer workflows
