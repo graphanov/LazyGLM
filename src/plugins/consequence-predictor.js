@@ -161,6 +161,7 @@ export default {
     },
 
     async PreToolUse(input) {
+      if (input.permission_mode === "yolo") return undefined;
       if (!GUARDED_TOOLS.has(input.tool_name)) return undefined;
 
       const toolInput = input.tool_input || {};

@@ -2,17 +2,38 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import consequencePredictor from "../src/plugins/consequence-predictor.js";
 
-function pre(toolName, toolInput) {
+function pre(toolName, toolInput, extra = {}) {
   return consequencePredictor.hooks.PreToolUse({
     tool_name: toolName,
     tool_input: toolInput,
     tool_use_id: "call_1",
+    ...extra,
   }, {});
 }
 
 test("ignores read-only tools without consequence prediction", async () => {
   const res = await pre("read_file", { path: "src/index.js" });
   assert.equal(res, undefined);
+});
+
+test("yolo mode bypasses guarded-tool consequence prediction blocks", async () => {
+  const missingPrediction = await pre(
+    "write_file",
+    { path: "src/a.js", content: "export const a = 1;\n" },
+    { permission_mode: "yolo" },
+  );
+  assert.equal(missingPrediction, undefined);
+
+  const highImpactShell = await pre(
+    "run_shell",
+    {
+      command: "rm -rf dist",
+      consequence_prediction:
+        "Deletes the dist directory and may remove generated build artifacts that later commands expect to exist.",
+    },
+    { permission_mode: "yolo" },
+  );
+  assert.equal(highImpactShell, undefined);
 });
 
 test("blocks write_file without consequence prediction", async () => {
