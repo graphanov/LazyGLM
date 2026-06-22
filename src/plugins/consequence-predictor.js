@@ -21,7 +21,7 @@ const HIGH_IMPACT_SHELL_PATTERNS = [
   /\bgit\s+push\b/i,
   /\bgh\s+release\b/i,
   /\bnpm\s+publish\b/i,
-  /\b(?:curl|wget)\b[^|\n]*\|\s*(?:sh|bash)\b/i,
+  /\b(?:curl|wget)\b[^|\n]*\|\s*(?:(?:sudo|env|command)\b(?:\s+(?:-[^\s]+|[A-Za-z_][A-Za-z0-9_]*=[^\s]+))*\s+)*(?:\/(?:usr\/)?bin\/)?(?:sh|bash|zsh)\b/i,
   /\bchmod\s+-R\b/i,
   /\bchown\s+-R\b/i,
 ];
@@ -53,7 +53,7 @@ function hasRecursiveForceRm(command = "") {
   return false;
 }
 
-const MITIGATION_WORDS = /\b(mitigat|rollback|recover|backup|dry[- ]?run|scoped|limited|verify|test|confirm|non[- ]?destructive|no irreversible)\b/i;
+const MITIGATION_WORDS = /\b(mitigat\w*|rollback|recover\w*|backup|dry[- ]?run|scop(?:e|ed|ing)|limit(?:ed|ing)?|verif(?:y|ies|ied|ying|ication)|test(?:ed|ing|s)?|confirm(?:ed|ing|s)?|non[- ]?destructive|no irreversible)\b/i;
 
 function normalizePrediction(value) {
   if (value === undefined || value === null) return "";
