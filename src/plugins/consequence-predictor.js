@@ -41,9 +41,6 @@ const GENERIC_FILLER_WORDS = new Set([
 ]);
 const MIN_CONTENT_TOKENS = 3;
 
-const HIGH_IMPACT_SHELL_PATTERNS = [
-  /\bgh\s+release\b/i,
-];
 const REMOTE_INSTALLER_PIPE = /\b(?:curl|wget)\b[^|\n]*\|\s*(?<target>[^;&|\n]+)/gi;
 const PIPELINE_SHELLS = new Set(["sh", "bash", "zsh"]);
 const NO_OPTIONS_WITH_VALUE = new Set();
@@ -60,12 +57,18 @@ const SUDO_OPTIONS_WITH_VALUE = new Set([
   "-U", "--other-user",
   "-u", "--user",
 ]);
+// sudo -s/--shell and -i/--login launch a shell that runs the piped installer
+// (verified: printf 'echo x\n' | sudo -s executes the stdin). When a remote
+// installer is piped through sudo in one of these shell modes, the pipeline
+// executes a shell even though no shell binary follows sudo.
+const SUDO_SHELL_MODE_FLAGS = new Set(["--shell", "--login"]);
 const ENV_OPTIONS_WITH_VALUE = new Set(["-C", "--chdir", "-S", "-u", "--unset"]);
 
 const RM_INVOCATION = /\brm\b(?<args>[^;&|\n]*)/gi;
 const RECURSIVE_METADATA_INVOCATION = /\b(?:chmod|chown)\b(?<args>[^;&|\n]*)/gi;
 const GIT_INVOCATION = /\bgit\b(?<args>[^;&|\n]*)/gi;
 const NPM_INVOCATION = /\bnpm\b(?<args>[^;&|\n]*)/gi;
+const GH_INVOCATION = /\bgh\b(?<args>[^;&|\n]*)/gi;
 const GIT_GLOBAL_OPTIONS_WITH_VALUE = new Set([
   "-C",
   "-c",
@@ -89,6 +92,12 @@ const GIT_GLOBAL_OPTION_FLAGS = new Set([
   "--noglob-pathspecs",
   "--paginate",
 ]);
+// gh reports two inherited flags (`gh release create --help`, INHERITED FLAGS):
+// -R/--repo (takes a value) and --help (a flag). A command such as
+// `gh -R owner/repo release create` must still be detected as high-impact, so
+// the scanner walks past these before checking for the `release` subcommand.
+const GH_GLOBAL_OPTIONS_WITH_VALUE = new Set(["-R", "--repo"]);
+const GH_GLOBAL_OPTION_FLAGS = new Set(["--help", "-h"]);
 const NPM_GLOBAL_OPTIONS_WITH_VALUE = new Set([
   "-C",
   "--cache",
@@ -278,12 +287,42 @@ function skipWrapperOptions(tokens, start, optionsWithValue) {
   return i;
 }
 
+// Walks sudo's option tokens (starting after the `sudo` token) and reports
+// whether sudo is launching a shell that would execute the piped installer.
+// Returns true on -s/--shell or -i/--login; stops (returns false) once a
+// non-option token is reached, because that token is the actual command and
+// the main loop checks it against PIPELINE_SHELLS. Value-consuming options
+// (-u user, -C n, etc.) are skipped so their argument is not mistaken for a
+// shell-mode flag.
+function sudoLaunchesShell(tokens, start) {
+  for (let i = start; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token === "--") return false;
+    if (isAssignment(token)) continue;
+    if (!token.startsWith("-")) return false;
+
+    const option = optionName(token);
+    if (SUDO_OPTIONS_WITH_VALUE.has(option)) {
+      if (!token.includes("=")) i += 1;
+      continue;
+    }
+    if (SUDO_SHELL_MODE_FLAGS.has(option)) return true;
+    if (token.startsWith("--")) continue;
+    // Short flag cluster: a lowercase -s or -i anywhere in the cluster means
+    // sudo is starting a shell. Uppercase -S (read password from stdin) and
+    // other flags are unrelated and must not match.
+    if (/[si]/.test(token.slice(1))) return true;
+  }
+  return false;
+}
+
 function pipelineTargetInvokesShell(tokens) {
   let i = 0;
   while (i < tokens.length) {
     const name = commandName(tokens[i]);
     if (PIPELINE_SHELLS.has(name)) return true;
     if (name === "sudo") {
+      if (sudoLaunchesShell(tokens, i + 1)) return true;
       i = skipWrapperOptions(tokens, i + 1, SUDO_OPTIONS_WITH_VALUE);
       continue;
     }
@@ -362,6 +401,29 @@ function hasGitPushInvocation(command = "") {
   return false;
 }
 
+function hasGhReleaseInvocation(command = "") {
+  const commandText = String(command);
+  for (const match of commandText.matchAll(GH_INVOCATION)) {
+    const tokens = shellWords(match.groups?.args || "");
+
+    for (let i = 0; i < tokens.length; i += 1) {
+      const token = tokens[i];
+      if (token === "release") return true;
+      if (token === "--" || !token.startsWith("-")) break;
+
+      const option = optionName(token);
+      if (GH_GLOBAL_OPTIONS_WITH_VALUE.has(option)) {
+        if (!token.includes("=")) i += 1;
+        continue;
+      }
+      if (token.startsWith("-R") && token.length > 2) continue;
+      if (GH_GLOBAL_OPTION_FLAGS.has(option)) continue;
+      break;
+    }
+  }
+  return false;
+}
+
 const MITIGATION_WORDS = /\b(mitigat\w*|rollback|recover\w*|backup|dry[- ]?run|scop(?:e|ed|ing)|limit(?:ed|ing)?|verif(?:y|ies|ied|ying|ication)|test(?:ed|ing|s)?|confirm(?:ed|ing|s)?|non[- ]?destructive|no irreversible)\b/i;
 const NEGATED_MITIGATION_WORDS = /\b(?:no|not|never|without|lack(?:s|ing)?|missing|cannot|can't|won't|doesn['’]t|don't|isn['’]t|aren['’]t)\b(?:[\s,.;:-]+\w+){0,3}?[\s,.;:-]+(?:mitigat\w*|rollback|recover\w*|backup|dry[- ]?run|scop(?:e|ed|ing)|limit(?:ed|ing)?|verif(?:y|ies|ied|ying|ication)|test(?:ed|ing|s)?|confirm(?:ed|ing|s)?|non[- ]?destructive)\b/gi;
 
@@ -404,8 +466,8 @@ function isHighImpactShell(command = "") {
     hasRecursiveMetadataChange(commandText) ||
     hasGitPushInvocation(commandText) ||
     hasNpmPublishInvocation(commandText) ||
-    hasRemoteInstallerPipeline(commandText) ||
-    HIGH_IMPACT_SHELL_PATTERNS.some((re) => re.test(commandText))
+    hasGhReleaseInvocation(commandText) ||
+    hasRemoteInstallerPipeline(commandText)
   );
 }
 
