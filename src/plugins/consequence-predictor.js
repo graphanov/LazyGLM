@@ -274,7 +274,36 @@ function isAssignment(token) {
   return /^[A-Za-z_][A-Za-z0-9_]*=/.test(token);
 }
 
+// Short options that consume a value (e.g. sudo -u, git -C) as single chars,
+// derived from the long-form set so both spellings agree.
+function shortValueOptionChars(optionsWithValue) {
+  const chars = new Set();
+  for (const opt of optionsWithValue) {
+    if (opt.length === 2 && opt[0] === "-") chars.add(opt[1]);
+  }
+  return chars;
+}
+
+// Walks a short-flag cluster (e.g. "-Hu", "-uroot") left-to-right the way
+// getopt does. Flags before the first value-taking option are collected; that
+// option consumes the rest of the cluster as its attached value, or — when it is
+// the last flag — the following token (valueConsumesNext). Without this,
+// "sudo -Hu root bash" stops at "root" and never reaches "bash".
+function splitShortCluster(token, valueChars) {
+  const body = token.slice(1);
+  const flags = [];
+  for (let i = 0; i < body.length; i += 1) {
+    const ch = body[i];
+    if (valueChars.has(ch)) {
+      return { flags, valueConsumesNext: body.slice(i + 1).length === 0 };
+    }
+    flags.push(ch);
+  }
+  return { flags, valueConsumesNext: false };
+}
+
 function skipWrapperOptions(tokens, start, optionsWithValue) {
+  const valueChars = shortValueOptionChars(optionsWithValue);
   let i = start;
   while (i < tokens.length) {
     const token = tokens[i];
@@ -285,9 +314,16 @@ function skipWrapperOptions(tokens, start, optionsWithValue) {
     }
     if (!token.startsWith("-")) return i;
 
-    const option = optionName(token);
+    if (token.startsWith("--")) {
+      const option = optionName(token);
+      i += 1;
+      if (optionsWithValue.has(option) && !token.includes("=")) i += 1;
+      continue;
+    }
+
+    const { valueConsumesNext } = splitShortCluster(token, valueChars);
     i += 1;
-    if (optionsWithValue.has(option) && !token.includes("=")) i += 1;
+    if (valueConsumesNext) i += 1;
   }
   return i;
 }
@@ -300,23 +336,26 @@ function skipWrapperOptions(tokens, start, optionsWithValue) {
 // (-u user, -C n, etc.) are skipped so their argument is not mistaken for a
 // shell-mode flag.
 function sudoLaunchesShell(tokens, start) {
+  const valueChars = shortValueOptionChars(SUDO_OPTIONS_WITH_VALUE);
   for (let i = start; i < tokens.length; i += 1) {
     const token = tokens[i];
     if (token === "--") return false;
     if (isAssignment(token)) continue;
     if (!token.startsWith("-")) return false;
 
-    const option = optionName(token);
-    if (SUDO_OPTIONS_WITH_VALUE.has(option)) {
-      if (!token.includes("=")) i += 1;
+    if (token.startsWith("--")) {
+      const option = optionName(token);
+      if (SUDO_SHELL_MODE_FLAGS.has(option)) return true;
+      if (SUDO_OPTIONS_WITH_VALUE.has(option) && !token.includes("=")) i += 1;
       continue;
     }
-    if (SUDO_SHELL_MODE_FLAGS.has(option)) return true;
-    if (token.startsWith("--")) continue;
-    // Short flag cluster: a lowercase -s or -i anywhere in the cluster means
-    // sudo is starting a shell. Uppercase -S (read password from stdin) and
-    // other flags are unrelated and must not match.
-    if (/[si]/.test(token.slice(1))) return true;
+
+    // Short-flag cluster in getopt order: a -s/-i flag before any value-taking
+    // option starts a shell. A value-taking option as the last flag consumes the
+    // next token, so "sudo -Hu root bash" skips root instead of returning false.
+    const cluster = splitShortCluster(token, valueChars);
+    if (cluster.flags.includes("s") || cluster.flags.includes("i")) return true;
+    if (cluster.valueConsumesNext) i += 1;
   }
   return false;
 }
@@ -434,8 +473,21 @@ function hasGhReleaseInvocation(command = "") {
   return false;
 }
 
-const MITIGATION_WORDS = /\b(mitigat\w*|rollback|recover\w*|backup|dry[- ]?run|scop(?:e|ed|ing)|limit(?:ed|ing)?|verif(?:y|ies|ied|ying|ication)|test(?:ed|ing|s)?|confirm(?:ed|ing|s)?|non[- ]?destructive|no irreversible)\b/i;
-const NEGATED_MITIGATION_WORDS = /\b(?:no|not|never|without|lack(?:s|ing)?|missing|cannot|can't|won't|doesn['’]t|don't|isn['’]t|aren['’]t)\b(?:[\s,.;:-]+\w+){0,3}?[\s,.;:-]+(?:mitigat\w*|rollback|recover\w*|backup|dry[- ]?run|scop(?:e|ed|ing)|limit(?:ed|ing)?|verif(?:y|ies|ied|ying|ication)|test(?:ed|ing|s)?|confirm(?:ed|ing|s)?|non[- ]?destructive)\b/gi;
+// Shared alternation so the positive and negated matchers always agree on what
+// counts as a mitigation signal.
+const MITIGATION_WORD_ALTS =
+  "mitigat\\w*|rollback|recover\\w*|backup|dry[- ]?run|scop(?:e|ed|ing)|limit(?:ed|ing)?|verif(?:y|ies|ied|ying|ication)|test(?:ed|ing|s)?|confirm(?:ed|ing|s)?|non[- ]?destructive|no irreversible";
+const MITIGATION_WORDS = new RegExp("\\b(?:" + MITIGATION_WORD_ALTS + ")\\b", "i");
+// A negation word can chain across conjunctions ("cannot test or verify"), so
+// the matcher consumes each linked mitigation word rather than only the first —
+// otherwise "verify" survives the replacement and re-satisfies MITIGATION_WORDS,
+// letting an explicitly unmitigated rm -rf / publish / push bypass the gate.
+const NEGATED_MITIGATION_WORDS = new RegExp(
+  "\\b(?:no|not|never|without|lack(?:s|ing)?|missing|cannot|can't|won't|doesn['’]t|don't|isn['’]t|aren['’]t)\\b" +
+    "(?:[\\s,.;:-]+\\w+){0,3}?[\\s,.;:-]+(?:" + MITIGATION_WORD_ALTS + ")\\b" +
+    "(?:[\\s,.;:-]*(?:or|and|nor)[\\s,.;:-]+(?:" + MITIGATION_WORD_ALTS + ")\\b)*",
+  "gi",
+);
 
 function normalizePrediction(value) {
   if (value === undefined || value === null) return "";
