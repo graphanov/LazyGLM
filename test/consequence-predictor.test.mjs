@@ -224,3 +224,25 @@ test("passes high-impact shell commands with a positive mitigation after a negat
   });
   assert.equal(res, undefined);
 });
+
+test("blocks padded reassurance phrases past the minimum length", async () => {
+  const res = await pre("patch_file", {
+    path: "src/a.js",
+    old_string: "a",
+    new_string: "b",
+    consequence_prediction:
+      "This is safe and has no risk, everything is okay here.",
+  });
+  assert.equal(res.decision, "block");
+  assert.match(res.reason, /too generic/i);
+});
+
+test("blocks predictions padded by repeating a filler word", async () => {
+  const res = await pre("write_file", {
+    path: "src/a.js",
+    content: "export const a = 1;\n",
+    consequence_prediction: "safe safe safe safe safe safe safe safe safe safe",
+  });
+  assert.equal(res.decision, "block");
+  assert.match(res.reason, /too generic/i);
+});

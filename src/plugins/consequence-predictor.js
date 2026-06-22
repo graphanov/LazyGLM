@@ -17,6 +17,30 @@ const GENERIC_PREDICTIONS = new Set([
   "this is safe",
 ]);
 
+// Reassurance / glue vocabulary that carries no consequence signal. A real
+// prediction names a concrete affected surface, failure mode, or verification,
+// so it leaves several distinct content tokens once these are stripped. A
+// prediction that is only filler padded past MIN_PREDICTION_CHARS (or one word
+// repeated) leaves too few and is treated as generic. Counting DISTINCT
+// non-filler tokens also defeats length padding by repetition.
+const GENERIC_FILLER_WORDS = new Set([
+  "a", "an", "the", "this", "that", "these", "those", "it", "its",
+  "i", "we", "you", "they", "he", "she",
+  "is", "are", "was", "were", "be", "been", "being", "am",
+  "will", "would", "can", "could", "should", "shall", "may", "might", "must",
+  "and", "or", "but", "to", "of", "in", "on", "at", "for", "with", "by",
+  "as", "from", "into",
+  "has", "have", "had", "do", "does", "did", "done",
+  "here", "there", "now", "then", "so", "too", "very", "really", "quite",
+  "just", "please",
+  "everything", "nothing", "something", "anything", "all", "any", "some",
+  "no", "not", "yes", "yeah",
+  "ok", "okay", "fine", "good", "great", "nice", "sure", "alright",
+  "safe", "safely", "safety", "risk", "risky", "risks", "problem", "worry",
+  "looks", "look", "seems", "seem",
+]);
+const MIN_CONTENT_TOKENS = 3;
+
 const HIGH_IMPACT_SHELL_PATTERNS = [
   /\bgh\s+release\b/i,
   /\b(?:curl|wget)\b[^|\n]*\|\s*(?:(?:sudo|env|command)\b(?:\s+(?:-[^\s]+|[A-Za-z_][A-Za-z0-9_]*=[^\s]+))*\s+)*(?:\/(?:usr\/)?bin\/)?(?:sh|bash|zsh)\b/i,
@@ -211,9 +235,22 @@ function normalizePrediction(value) {
   }
 }
 
+function distinctContentTokens(prediction) {
+  const tokens = prediction.toLowerCase().match(/[a-z0-9][a-z0-9._/-]*/g) || [];
+  const seen = new Set();
+  for (const token of tokens) {
+    if (!GENERIC_FILLER_WORDS.has(token)) seen.add(token);
+  }
+  return seen.size;
+}
+
 function isGenericPrediction(prediction) {
   const normalized = prediction.toLowerCase().replace(/[.!?]+$/g, "").trim();
-  return prediction.length < MIN_PREDICTION_CHARS || GENERIC_PREDICTIONS.has(normalized);
+  return (
+    prediction.length < MIN_PREDICTION_CHARS ||
+    GENERIC_PREDICTIONS.has(normalized) ||
+    distinctContentTokens(normalized) < MIN_CONTENT_TOKENS
+  );
 }
 
 function hasPositiveMitigationSignal(prediction) {
