@@ -19,13 +19,13 @@ const GENERIC_PREDICTIONS = new Set([
 
 const HIGH_IMPACT_SHELL_PATTERNS = [
   /\bgh\s+release\b/i,
-  /\bnpm\s+publish\b/i,
   /\b(?:curl|wget)\b[^|\n]*\|\s*(?:(?:sudo|env|command)\b(?:\s+(?:-[^\s]+|[A-Za-z_][A-Za-z0-9_]*=[^\s]+))*\s+)*(?:\/(?:usr\/)?bin\/)?(?:sh|bash|zsh)\b/i,
 ];
 
 const RM_INVOCATION = /\brm\b(?<args>[^;&|\n]*)/gi;
 const RECURSIVE_METADATA_INVOCATION = /\b(?:chmod|chown)\b(?<args>[^;&|\n]*)/gi;
 const GIT_INVOCATION = /\bgit\b(?<args>[^;&|\n]*)/gi;
+const NPM_INVOCATION = /\bnpm\b(?<args>[^;&|\n]*)/gi;
 const GIT_GLOBAL_OPTIONS_WITH_VALUE = new Set([
   "-C",
   "-c",
@@ -48,6 +48,57 @@ const GIT_GLOBAL_OPTION_FLAGS = new Set([
   "--no-replace-objects",
   "--noglob-pathspecs",
   "--paginate",
+]);
+const NPM_GLOBAL_OPTIONS_WITH_VALUE = new Set([
+  "-C",
+  "--cache",
+  "--cert",
+  "--cidr",
+  "--diff",
+  "--globalconfig",
+  "--heading",
+  "--https-proxy",
+  "--key",
+  "--local-address",
+  "--loglevel",
+  "--logs-dir",
+  "--logs-max",
+  "--node-options",
+  "--otp",
+  "--pack-destination",
+  "--prefix",
+  "--proxy",
+  "--registry",
+  "--script-shell",
+  "--tag",
+  "--user-agent",
+  "--userconfig",
+  "--workspace",
+  "-w",
+]);
+const NPM_GLOBAL_OPTION_FLAGS = new Set([
+  "--audit",
+  "--dry-run",
+  "--force",
+  "--foreground-scripts",
+  "--global",
+  "--ignore-scripts",
+  "--include-workspace-root",
+  "--json",
+  "--legacy-peer-deps",
+  "--offline",
+  "--package-lock-only",
+  "--prefer-offline",
+  "--prefer-online",
+  "--silent",
+  "--verbose",
+  "--workspaces",
+  "--yes",
+  "-d",
+  "-f",
+  "-g",
+  "-s",
+  "-y",
 ]);
 
 function hasRecursiveForceRm(command = "") {
@@ -96,6 +147,34 @@ function gitGlobalOptionName(token) {
   return equalsAt === -1 ? token : token.slice(0, equalsAt);
 }
 
+function npmGlobalOptionName(token) {
+  const equalsAt = token.indexOf("=");
+  return equalsAt === -1 ? token : token.slice(0, equalsAt);
+}
+
+function hasNpmPublishInvocation(command = "") {
+  const commandText = String(command);
+  for (const match of commandText.matchAll(NPM_INVOCATION)) {
+    const tokens = (match.groups?.args || "").trim().split(/\s+/).filter(Boolean);
+
+    for (let i = 0; i < tokens.length; i += 1) {
+      const token = tokens[i];
+      if (token === "publish") return true;
+      if (token === "--" || !token.startsWith("-")) break;
+
+      const option = npmGlobalOptionName(token);
+      if (NPM_GLOBAL_OPTIONS_WITH_VALUE.has(option)) {
+        if (!token.includes("=")) i += 1;
+        continue;
+      }
+      if ((token.startsWith("-w") || token.startsWith("-C")) && token.length > 2) continue;
+      if (NPM_GLOBAL_OPTION_FLAGS.has(option)) continue;
+      break;
+    }
+  }
+  return false;
+}
+
 function hasGitPushInvocation(command = "") {
   const commandText = String(command);
   for (const match of commandText.matchAll(GIT_INVOCATION)) {
@@ -142,6 +221,7 @@ function isHighImpactShell(command = "") {
     hasRecursiveForceRm(commandText) ||
     hasRecursiveMetadataChange(commandText) ||
     hasGitPushInvocation(commandText) ||
+    hasNpmPublishInvocation(commandText) ||
     HIGH_IMPACT_SHELL_PATTERNS.some((re) => re.test(commandText))
   );
 }

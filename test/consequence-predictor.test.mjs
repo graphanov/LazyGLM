@@ -150,6 +150,35 @@ test("blocks git push with global options before push without mitigation", async
   }
 });
 
+test("blocks npm publish with global options before publish without mitigation", async () => {
+  const commands = [
+    "npm publish",
+    "npm --workspace packages/foo publish",
+    "npm --registry https://registry.npmjs.org publish",
+    "npm --workspace=packages/foo --tag next publish",
+    "npm -w packages/foo publish",
+  ];
+
+  for (const command of commands) {
+    const res = await pre("run_shell", {
+      command,
+      consequence_prediction:
+        "Publishes the package to the configured registry and may expose an unintended build if the package contents or version are wrong.",
+    });
+    assert.equal(res.decision, "block", command);
+    assert.match(res.reason, /High-impact shell commands/i, command);
+  }
+});
+
+test("passes npm run publish script as non-publish subcommand", async () => {
+  const res = await pre("run_shell", {
+    command: "npm run publish",
+    consequence_prediction:
+      "Runs the local package script named publish; failures are limited to script execution and do not directly invoke npm registry publishing.",
+  });
+  assert.equal(res, undefined);
+});
+
 test("passes non-push git commands with global options", async () => {
   const res = await pre("run_shell", {
     command: "git -C . status --short",
