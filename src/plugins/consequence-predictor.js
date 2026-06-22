@@ -112,12 +112,14 @@ const NPM_GLOBAL_OPTIONS_WITH_VALUE = new Set([
   "--globalconfig",
   "--heading",
   "--https-proxy",
+  "--include",
   "--key",
   "--local-address",
   "--loglevel",
   "--logs-dir",
   "--logs-max",
   "--node-options",
+  "--omit",
   "--otp",
   "--pack-destination",
   "--prefix",
@@ -421,7 +423,12 @@ function hasNpmPublishInvocation(command = "") {
       }
       if ((token.startsWith("-w") || token.startsWith("-C")) && token.length > 2) continue;
       if (NPM_GLOBAL_OPTION_FLAGS.has(option) || NPM_PUBLISH_OPTION_FLAGS.has(option)) continue;
-      break;
+      // npm exposes many config flags (e.g. --omit, --include, --no-audit) that
+      // can precede the subcommand; the value-taking ones live in the sets
+      // above. Any other option here is still a config/global flag, so keep
+      // scanning rather than stopping — a real `npm <opts> publish` must stay
+      // gated, and an unrecognized flag must not let it slip past.
+      continue;
     }
   }
   return false;
@@ -478,14 +485,27 @@ function hasGhReleaseInvocation(command = "") {
 const MITIGATION_WORD_ALTS =
   "mitigat\\w*|rollback|recover\\w*|backup|dry[- ]?run|scop(?:e|ed|ing)|limit(?:ed|ing)?|verif(?:y|ies|ied|ying|ication)|test(?:ed|ing|s)?|confirm(?:ed|ing|s)?|non[- ]?destructive|no irreversible";
 const MITIGATION_WORDS = new RegExp("\\b(?:" + MITIGATION_WORD_ALTS + ")\\b", "i");
-// A negation word can chain across conjunctions ("cannot test or verify"), so
-// the matcher consumes each linked mitigation word rather than only the first —
-// otherwise "verify" survives the replacement and re-satisfies MITIGATION_WORDS,
-// letting an explicitly unmitigated rm -rf / publish / push bypass the gate.
+// Negators. Words that negate a mitigation AFTER the keyword ("rollback is
+// unavailable", "verification is impossible") are included alongside the
+// pre-keyword negators ("no verification").
+const NEGATION_WORDS =
+  "no|not|never|without|lack(?:s|ing)?|missing|unavailable|impossible|absent|cannot|can't|won't|doesn['’]t|don't|isn['’]t|aren['’]t";
+// A mitigation cluster is one mitigation word, optionally extended across
+// or/and/nor so "test or verify" is consumed as one unit.
+const MITIGATION_CLUSTER =
+  "(?:" + MITIGATION_WORD_ALTS + ")\\b(?:[\\s,.;:-]*(?:or|and|nor)[\\s,.;:-]+(?:" + MITIGATION_WORD_ALTS + ")\\b)*";
+// A mitigation is negated when a negator lands within a few words on EITHER
+// side of the cluster. Both arms strip the mitigation word(s) before
+// MITIGATION_WORDS is re-tested, so an explicitly unmitigated high-impact
+// command stays blocked. Without the after-keyword arm, "verification is not
+// possible" / "rollback is unavailable" would leave the keyword intact, satisfy
+// MITIGATION_WORDS, and bypass the gate.
 const NEGATED_MITIGATION_WORDS = new RegExp(
-  "\\b(?:no|not|never|without|lack(?:s|ing)?|missing|cannot|can't|won't|doesn['’]t|don't|isn['’]t|aren['’]t)\\b" +
-    "(?:[\\s,.;:-]+\\w+){0,3}?[\\s,.;:-]+(?:" + MITIGATION_WORD_ALTS + ")\\b" +
-    "(?:[\\s,.;:-]*(?:or|and|nor)[\\s,.;:-]+(?:" + MITIGATION_WORD_ALTS + ")\\b)*",
+  "\\b(?:" +
+    "(?:" + NEGATION_WORDS + ")\\b(?:[\\s,.;:-]+\\w+){0,3}?[\\s,.;:-]+" + MITIGATION_CLUSTER +
+    "|" +
+    MITIGATION_CLUSTER + "(?:[\\s,.;:-]+\\w+){0,3}?[\\s,.;:-]+(?:" + NEGATION_WORDS + ")\\b" +
+  ")",
   "gi",
 );
 

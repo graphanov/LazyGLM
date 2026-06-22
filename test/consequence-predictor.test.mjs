@@ -399,3 +399,56 @@ test("passes high-impact shell commands with chained positive mitigation wording
   });
   assert.equal(res, undefined);
 });
+
+test("blocks npm publish with config flags before publish without mitigation", async () => {
+  // npm config flags (--omit, --include, --no-audit, ...) can precede the
+  // subcommand and previously hit a break before `publish` was reached, letting
+  // a real registry publish bypass the high-impact gate.
+  const commands = [
+    "npm --omit dev publish",
+    "npm --include=optional publish",
+    "npm --include optional publish",
+    "npm --no-audit publish",
+  ];
+
+  for (const command of commands) {
+    const res = await pre("run_shell", {
+      command,
+      consequence_prediction:
+        "Publishes the package to the configured registry and may expose an unintended build if the package contents or version are wrong.",
+    });
+    assert.equal(res.decision, "block", command);
+    assert.match(res.reason, /High-impact shell commands/i, command);
+  }
+});
+
+test("passes non-publish npm commands with config flags before the subcommand", async () => {
+  // The config-flag scan must not over-detect: a non-publish subcommand after
+  // config flags stays a normal command and is allowed through.
+  const res = await pre("run_shell", {
+    command: "npm --omit dev install",
+    consequence_prediction:
+      "Installs dependencies while skipping dev packages; failures are limited to the local node_modules tree and do not touch the registry.",
+  });
+  assert.equal(res, undefined);
+});
+
+test("blocks high-impact shell commands when mitigation wording is negated after the keyword", async () => {
+  // Negation that follows the mitigation word ("verification is not possible",
+  // "rollback is unavailable", "backup is impossible") must not satisfy the
+  // positive-mitigation check; the keyword is stripped before re-testing.
+  const predictions = [
+    "Deletes generated artifacts; verification is not possible before continuing.",
+    "Deletes generated artifacts; rollback is unavailable so failures may persist.",
+    "Deletes generated artifacts; the backup is impossible to perform here.",
+  ];
+
+  for (const consequence_prediction of predictions) {
+    const res = await pre("run_shell", {
+      command: "rm -rf dist",
+      consequence_prediction,
+    });
+    assert.equal(res.decision, "block", consequence_prediction);
+    assert.match(res.reason, /High-impact shell commands/i, consequence_prediction);
+  }
+});
