@@ -22,7 +22,7 @@ export default {
         const checked = (plan.match(/-\s+\[x\]/gi) || []).length;
         if (unchecked > 0) {
           return {
-            feedback: `start-work-continuation: active plan '${active.planPath}' has ${checked}/${checked + unchecked} items done (${unchecked} remaining). Resume with: lazyglm run --plan ${active.planPath}`,
+            feedback: `start-work-continuation: active plan '${active.planPath}' has ${checked}/${checked + unchecked} items done (${unchecked} remaining). Resume in the interactive lazyglm REPL: start lazyglm, then enter $start-work.`,
           };
         }
       } catch {
