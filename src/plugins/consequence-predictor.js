@@ -125,6 +125,15 @@ const NPM_GLOBAL_OPTION_FLAGS = new Set([
   "-y",
 ]);
 
+// npm accepts publish-specific options before the `publish` subcommand (verified
+// via `npm --access public publish --dry-run` / `npm --provenance publish
+// --dry-run`), so the scanner must keep walking past these to reach `publish`,
+// otherwise a real registry publish with these flags bypasses the high-impact
+// gate. These are publish-subcommand options, kept separate from the global
+// npm option sets above for clarity.
+const NPM_PUBLISH_OPTIONS_WITH_VALUE = new Set(["--access", "--provenance-file"]);
+const NPM_PUBLISH_OPTION_FLAGS = new Set(["--provenance"]);
+
 function hasRecursiveForceRm(command = "") {
   const commandText = String(command);
   for (const match of commandText.matchAll(RM_INVOCATION)) {
@@ -191,8 +200,12 @@ function hasNpmPublishInvocation(command = "") {
         if (!token.includes("=")) i += 1;
         continue;
       }
+      if (NPM_PUBLISH_OPTIONS_WITH_VALUE.has(option)) {
+        if (!token.includes("=")) i += 1;
+        continue;
+      }
       if ((token.startsWith("-w") || token.startsWith("-C")) && token.length > 2) continue;
-      if (NPM_GLOBAL_OPTION_FLAGS.has(option)) continue;
+      if (NPM_GLOBAL_OPTION_FLAGS.has(option) || NPM_PUBLISH_OPTION_FLAGS.has(option)) continue;
       break;
     }
   }

@@ -179,6 +179,26 @@ test("passes npm run publish script as non-publish subcommand", async () => {
   assert.equal(res, undefined);
 });
 
+test("blocks npm publish with publish-scoped options before publish without mitigation", async () => {
+  const commands = [
+    "npm --access public publish",
+    "npm --access=public publish",
+    "npm --provenance publish",
+    "npm --provenance-file ./prov.json publish",
+    "npm --access public --provenance publish",
+  ];
+
+  for (const command of commands) {
+    const res = await pre("run_shell", {
+      command,
+      consequence_prediction:
+        "Publishes the package to the configured registry and may expose an unintended build if the package contents or version are wrong.",
+    });
+    assert.equal(res.decision, "block", command);
+    assert.match(res.reason, /High-impact shell commands/i, command);
+  }
+});
+
 test("passes non-push git commands with global options", async () => {
   const res = await pre("run_shell", {
     command: "git -C . status --short",
