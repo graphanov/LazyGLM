@@ -205,3 +205,22 @@ test("passes high-impact shell commands with verification wording", async () => 
   });
   assert.equal(res, undefined);
 });
+
+test("blocks high-impact shell commands when mitigation wording is negated", async () => {
+  const res = await pre("run_shell", {
+    command: "rm -rf dist",
+    consequence_prediction:
+      "Deletes generated artifacts; no verification is available and no rollback plan exists, so failures may leave the workspace broken.",
+  });
+  assert.equal(res.decision, "block");
+  assert.match(res.reason, /High-impact shell commands/i);
+});
+
+test("passes high-impact shell commands with a positive mitigation after a negated one", async () => {
+  const res = await pre("run_shell", {
+    command: "rm -rf dist",
+    consequence_prediction:
+      "Deletes generated artifacts; no rollback is needed because npm test will verify the rebuild before continuing.",
+  });
+  assert.equal(res, undefined);
+});

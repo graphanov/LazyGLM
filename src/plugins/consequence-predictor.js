@@ -199,6 +199,7 @@ function hasGitPushInvocation(command = "") {
 }
 
 const MITIGATION_WORDS = /\b(mitigat\w*|rollback|recover\w*|backup|dry[- ]?run|scop(?:e|ed|ing)|limit(?:ed|ing)?|verif(?:y|ies|ied|ying|ication)|test(?:ed|ing|s)?|confirm(?:ed|ing|s)?|non[- ]?destructive|no irreversible)\b/i;
+const NEGATED_MITIGATION_WORDS = /\b(?:no|not|never|without|lack(?:s|ing)?|missing|cannot|can't|won't|doesn['’]t|don't|isn['’]t|aren['’]t)\b(?:[\s,.;:-]+\w+){0,3}?[\s,.;:-]+(?:mitigat\w*|rollback|recover\w*|backup|dry[- ]?run|scop(?:e|ed|ing)|limit(?:ed|ing)?|verif(?:y|ies|ied|ying|ication)|test(?:ed|ing|s)?|confirm(?:ed|ing|s)?|non[- ]?destructive)\b/gi;
 
 function normalizePrediction(value) {
   if (value === undefined || value === null) return "";
@@ -213,6 +214,10 @@ function normalizePrediction(value) {
 function isGenericPrediction(prediction) {
   const normalized = prediction.toLowerCase().replace(/[.!?]+$/g, "").trim();
   return prediction.length < MIN_PREDICTION_CHARS || GENERIC_PREDICTIONS.has(normalized);
+}
+
+function hasPositiveMitigationSignal(prediction) {
+  return MITIGATION_WORDS.test(prediction.replace(NEGATED_MITIGATION_WORDS, ""));
 }
 
 function isHighImpactShell(command = "") {
@@ -260,7 +265,7 @@ export default {
       if (
         input.tool_name === "run_shell" &&
         isHighImpactShell(toolInput.command) &&
-        !MITIGATION_WORDS.test(prediction)
+        !hasPositiveMitigationSignal(prediction)
       ) {
         return {
           decision: "block",
