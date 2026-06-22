@@ -103,6 +103,17 @@ const GIT_GLOBAL_OPTION_FLAGS = new Set([
 // the scanner walks past these before checking for the `release` subcommand.
 const GH_GLOBAL_OPTIONS_WITH_VALUE = new Set(["-R", "--repo"]);
 const GH_GLOBAL_OPTION_FLAGS = new Set(["--help", "-h"]);
+// Only the mutating `gh release` subcommands are high-impact (they create or
+// retract a release/artifact). Read-only inspections — `view`, `list`,
+// `download` — must pass through so they are not blocked unless the prediction
+// itself lacks mitigation. The mutating set is documented at the gh manual
+// (https://cli.github.com/manual/gh_release).
+const GH_RELEASE_MUTATING_SUBCOMMANDS = new Set([
+  "create",
+  "upload",
+  "delete",
+  "edit",
+]);
 const NPM_GLOBAL_OPTIONS_WITH_VALUE = new Set([
   "-C",
   "--cache",
@@ -127,6 +138,7 @@ const NPM_GLOBAL_OPTIONS_WITH_VALUE = new Set([
   "--registry",
   "--script-shell",
   "--tag",
+  "--tag-version-prefix",
   "--user-agent",
   "--userconfig",
   "--workspace",
@@ -464,7 +476,12 @@ function hasGhReleaseInvocation(command = "") {
 
     for (let i = 0; i < tokens.length; i += 1) {
       const token = tokens[i];
-      if (token === "release") return true;
+      if (token === "release") {
+        // Only the mutating subcommands (create/upload/delete/edit) are
+        // high-impact; read-only `gh release view|list|download` must pass.
+        const subcommand = tokens[i + 1];
+        return GH_RELEASE_MUTATING_SUBCOMMANDS.has(subcommand);
+      }
       if (token === "--" || !token.startsWith("-")) break;
 
       const option = optionName(token);

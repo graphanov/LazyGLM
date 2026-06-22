@@ -189,6 +189,10 @@ test("blocks npm publish with global options before publish without mitigation",
     "npm --registry https://registry.npmjs.org publish",
     "npm --workspace=packages/foo --tag next publish",
     "npm -w packages/foo publish",
+    // --tag-version-prefix takes a value not enumerated in the value-option
+    // set; without consuming it, the value masked `publish` and bypassed the
+    // high-impact gate.
+    "npm --tag-version-prefix v publish",
   ];
 
   for (const command of commands) {
@@ -307,6 +311,8 @@ test("blocks gh release with global options before release without mitigation", 
     "gh --repo=owner/repo release create v1.2.3",
     "gh -Rowner/repo release create v1.2.3",
     "gh --help release create v1.2.3",
+    "gh release delete v1.2.3",
+    "gh release upload v1.2.3 ./asset.zip",
   ];
 
   for (const command of commands) {
@@ -327,6 +333,26 @@ test("passes non-release gh commands with global options", async () => {
       "Checks out the pull request branch into the working tree; failures are limited to the local checkout and do not mutate the remote repository.",
   });
   assert.equal(res, undefined);
+});
+
+test("passes read-only gh release inspections as non-mutating", async () => {
+  // Only mutating release subcommands (create/upload/delete/edit) are
+  // high-impact; view/list/download are read-only and must not be blocked.
+  const commands = [
+    "gh release view v1.2.3",
+    "gh release list",
+    "gh release download v1.2.3",
+    "gh -R owner/repo release view v1.2.3",
+  ];
+
+  for (const command of commands) {
+    const res = await pre("run_shell", {
+      command,
+      consequence_prediction:
+        "Inspects GitHub Release metadata without mutating the repository or any published artifact.",
+    });
+    assert.equal(res, undefined, command);
+  }
 });
 
 test("blocks remote installer pipelines through sudo shell modes without mitigation", async () => {
