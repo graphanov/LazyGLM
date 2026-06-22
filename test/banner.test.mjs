@@ -9,6 +9,8 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SRC = join(ROOT, "src", "banner.js");
 
 const base = { model: "glm-5.2", provider: "zai", cwd: "/tmp/demo" };
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+const stripAnsi = (s) => s.replace(ANSI_RE, "");
 
 test("wordmark: the ASCII LAZYGLM art lines render under TTY", () => {
   const out = renderBanner({ ...base, isTTY: true });
@@ -17,12 +19,26 @@ test("wordmark: the ASCII LAZYGLM art lines render under TTY", () => {
   }
 });
 
-test("wordmark: art lines are a fixed, ~28-col block", () => {
+test("wordmark: art lines are a fixed, professional-width block", () => {
   assert.ok(WORDMARK.length >= 4, "wordmark should be several rows tall");
   const widths = WORDMARK.map((r) => r.length);
   const w = widths[0];
   for (const x of widths) assert.equal(x, w, "every wordmark row must be the same width (fixed-width)");
-  assert.ok(w >= 24 && w <= 32, `wordmark width ~28 cols (got ${w})`);
+  assert.ok(w >= 50 && w <= 72, `wordmark should be a larger CLI wordmark (got ${w})`);
+});
+
+test("TTY layout: wordmark, tagline, and panel align to one visible width", () => {
+  const out = renderBanner({
+    ...base,
+    git: { isRepo: true, branch: "main", root: "/tmp/demo" },
+    session: { id: "sess-abc123" },
+    isTTY: true,
+  });
+  const lines = out.split("\n").map(stripAnsi).filter((line) => line.length > 0);
+  const widths = lines.map((line) => line.length);
+  const uniqueWidths = new Set(widths);
+  assert.equal(uniqueWidths.size, 1, `all visible banner lines should align; got widths ${widths.join(",")}`);
+  assert.equal(widths[0], WORDMARK[0].length, "panel and tagline should align with the wordmark width");
 });
 
 test("info tokens: panel contains the exact model, provider, and cwd passed in", () => {
