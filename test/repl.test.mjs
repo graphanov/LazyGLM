@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { loadUserConfig, saveUserConfig, isOnboarded, resetConfigCache } from "../src/config.js";
 import { needsOnboarding, runOnboarding } from "../src/onboard.js";
 import { createSession, appendEvent, listSessions, loadSessionEvents } from "../src/sessions.js";
-import { replayIntoContext } from "../src/repl.js";
+import { replayIntoContext, formatReasoning, formatText, formatToolCall, formatToolResult, turnDivider } from "../src/repl.js";
 import { Context, assistantMessageFrom } from "../src/agent/context.js";
 import { chat } from "../src/agent/provider.js";
 
@@ -25,6 +25,47 @@ function restoreEnv(name, value) {
   if (value === undefined) delete process.env[name];
   else process.env[name] = value;
 }
+
+const GRAY = "\x1b[90m";
+const DIM = "\x1b[2m";
+const CYAN = "\x1b[36m";
+const GREEN = "\x1b[32m";
+
+function assertNoAnsi(output) {
+  assert.doesNotMatch(output, /\x1b\[/);
+}
+
+test("REPL turn-format helpers expose distinct ANSI markers without stdout side effects", () => {
+  const reasoning = formatReasoning("thinking");
+  assert.ok(reasoning.includes("✶"));
+  assert.ok(reasoning.includes(GRAY));
+
+  const text = formatText("hello");
+  assert.equal(text, "💬 hello");
+
+  const call = formatToolCall("read_file", { path: "src/repl.js" });
+  assert.ok(call.includes("read_file"));
+  assert.ok(call.includes(CYAN));
+  assert.ok(call.includes(DIM));
+  assert.ok(call.includes("src/repl.js"));
+
+  const result = formatToolResult("ok");
+  assert.ok(result.includes("↳"));
+  assert.ok(result.includes(GREEN));
+  assert.ok(!result.includes(GRAY), "tool results must not reuse reasoning gray");
+
+  const divider = turnDivider();
+  assert.ok(divider.includes("─"));
+  assert.ok(divider.includes(DIM));
+  assert.doesNotMatch(divider, /✶|💬|🔧/);
+});
+
+test("REPL turn-format helpers can render without ANSI for non-TTY output", () => {
+  assertNoAnsi(formatReasoning("thinking", { isTTY: false }));
+  assertNoAnsi(formatToolCall("read_file", { path: "src/repl.js" }, { isTTY: false }));
+  assertNoAnsi(formatToolResult("ok", { isTTY: false }));
+  assertNoAnsi(turnDivider({ isTTY: false }));
+});
 
 test.after(async () => {
   await Promise.all(homes.map((h) => rm(h, { recursive: true, force: true })));
