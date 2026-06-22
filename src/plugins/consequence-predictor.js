@@ -22,11 +22,10 @@ const HIGH_IMPACT_SHELL_PATTERNS = [
   /\bgh\s+release\b/i,
   /\bnpm\s+publish\b/i,
   /\b(?:curl|wget)\b[^|\n]*\|\s*(?:(?:sudo|env|command)\b(?:\s+(?:-[^\s]+|[A-Za-z_][A-Za-z0-9_]*=[^\s]+))*\s+)*(?:\/(?:usr\/)?bin\/)?(?:sh|bash|zsh)\b/i,
-  /\bchmod\s+-R\b/i,
-  /\bchown\s+-R\b/i,
 ];
 
 const RM_INVOCATION = /\brm\b(?<args>[^;&|\n]*)/gi;
+const RECURSIVE_METADATA_INVOCATION = /\b(?:chmod|chown)\b(?<args>[^;&|\n]*)/gi;
 
 function hasRecursiveForceRm(command = "") {
   const commandText = String(command);
@@ -53,6 +52,22 @@ function hasRecursiveForceRm(command = "") {
   return false;
 }
 
+function hasRecursiveMetadataChange(command = "") {
+  const commandText = String(command);
+  for (const match of commandText.matchAll(RECURSIVE_METADATA_INVOCATION)) {
+    const tokens = (match.groups?.args || "").trim().split(/\s+/).filter(Boolean);
+
+    for (const token of tokens) {
+      if (token === "--") break;
+      if (!token.startsWith("-")) continue;
+      if (token === "--recursive") return true;
+      if (token.startsWith("--")) continue;
+      if (/R/.test(token.slice(1))) return true;
+    }
+  }
+  return false;
+}
+
 const MITIGATION_WORDS = /\b(mitigat\w*|rollback|recover\w*|backup|dry[- ]?run|scop(?:e|ed|ing)|limit(?:ed|ing)?|verif(?:y|ies|ied|ying|ication)|test(?:ed|ing|s)?|confirm(?:ed|ing|s)?|non[- ]?destructive|no irreversible)\b/i;
 
 function normalizePrediction(value) {
@@ -72,7 +87,11 @@ function isGenericPrediction(prediction) {
 
 function isHighImpactShell(command = "") {
   const commandText = String(command);
-  return hasRecursiveForceRm(commandText) || HIGH_IMPACT_SHELL_PATTERNS.some((re) => re.test(commandText));
+  return (
+    hasRecursiveForceRm(commandText) ||
+    hasRecursiveMetadataChange(commandText) ||
+    HIGH_IMPACT_SHELL_PATTERNS.some((re) => re.test(commandText))
+  );
 }
 
 function missingPredictionReason(toolName) {
