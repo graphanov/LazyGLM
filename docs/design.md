@@ -71,7 +71,7 @@ LazyGLM itself, not smoke tests around another agent.
 
 ```text
 bin/lazyglm.js            CLI entrypoint
-src/cli.js                command dispatcher (run | chat/REPL | doctor | models | skills | install)
+src/cli.js                command dispatcher (run | chat/REPL | install | uninstall | doctor | models | skills | skill | hook)
 src/config.js             global user config (~/.lazyglm/config.json, chmod 600; key never in process.env)
 src/onboard.js            first-run onboarding (provider + key)
 src/repl.js               interactive REPL (streaming + tools + hooks + sessions)
