@@ -132,7 +132,7 @@ LAZYGLM_BASE_URL=https://your-endpoint/v1 LAZYGLM_API_KEY=*** lazyglm doctor
 
 `lazyglm` with no args launches a live agentic shell — like `claude` or `hermes`.
 It is **not** chat-only: the agent has full tool access (read/write/patch/grep/shell),
-the 8-plugin hook lifecycle, streaming, and reasoning-token visibility.
+the 9-plugin hook lifecycle, streaming, and reasoning-token visibility.
 
 ```bash
 lazyglm                       # new session
@@ -178,6 +178,9 @@ The useful GLM-specific points are concrete:
   development and GLM-5.2 / GLM-5-Turbo for harder engineering tasks. LazyGLM
   keeps `--model` and role routing visible instead of hiding that cost/quality
   tradeoff.
+- **Risky actions must forecast their consequence.** Before write/patch/shell
+  tools run, a PreToolUse hook requires a `consequence_prediction` and blocks
+  generic predictions or high-impact shell commands without mitigation.
 
 Docs referenced: [GLM-5.2](https://docs.z.ai/guides/llm/glm-5.2),
 [Thinking Mode](https://docs.z.ai/guides/capabilities/thinking-mode),
