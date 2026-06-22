@@ -25,23 +25,19 @@ const YELLOW = "\x1b[33m";
 // --- cyan -> gray 256-color gradient for the wordmark (one step per row) ---
 const GRADIENT = ["\x1b[38;5;51m", "\x1b[38;5;45m", "\x1b[38;5;39m", "\x1b[38;5;102m", "\x1b[38;5;245m"];
 
-// --- ASCII `LAZYGLM` wordmark. Hand-authored, fixed 27-col width, 5 rows tall.
-// Each letter is a 3-col glyph; letters in a row are separated by one space.
-// Public-safe: hashes only, no names / paths. Exported so tests stay in sync
-// with the art without coupling to magic strings. ---
-const GLYPHS = {
-  L: ["#  ", "#  ", "#  ", "#  ", "###"],
-  A: [" # ", "# #", "###", "# #", "# #"],
-  Z: ["###", "  #", " # ", "#  ", "###"],
-  Y: ["# #", "# #", " # ", " # ", " # "],
-  G: [" # ", "#  ", "## ", "# #", " # "],
-  M: ["# #", "###", "# #", "# #", "# #"],
-};
-export const WORDMARK = [0, 1, 2, 3, 4].map((r) =>
-  ["L", "A", "Z", "Y", "G", "L", "M"]
-    .map((letter) => GLYPHS[letter][r])
-    .join(" "),
-);
+// --- ASCII `LAZYGLM` wordmark. Hand-authored, fixed 58-col width, 5 rows tall.
+// The previous tiny hash glyphs were readable but underwhelming. This keeps the
+// banner dependency-free and plain ASCII while giving the CLI a stronger,
+// better-aligned first impression. Exported so tests stay in sync with the art
+// without coupling to magic strings. ---
+export const WORDMARK = [
+  " _        _     ______   __   __   _____   _       __  __ ",
+  "| |      / \\   |__  / \\  \\ \\ / /  / ____| | |     |  \\/  |",
+  "| |     / _ \\    / /   \\  \\ V /  | |  __  | |     | |\\/| |",
+  "| |___ / ___ \\  / /_      | |   | |__| |  | |___  | |  | |",
+  "|_____/_/   \\_\\/____|     |_|    \\_____|  |_____| |_|  |_|",
+];
+const WORDMARK_WIDTH = WORDMARK[0].length;
 
 // --- box characters: Unicode (light) under TTY, ASCII (+ - |) otherwise.
 // Only the TTY path actually draws a box, but the helper degrades correctly so a
@@ -51,7 +47,7 @@ const BOX = {
   ascii: { tl: "+", tr: "+", bl: "+", br: "+", h: "-", v: "|" },
 };
 
-const PANEL_WIDTH = 46; // inner content width of the info panel (fits the yolo line)
+const PANEL_WIDTH = WORDMARK_WIDTH - 4; // panel total width aligns with the wordmark
 const LABEL_WIDTH = 9; // left-aligned label field (model/provider/cwd/...)
 
 // Visible-width helpers so styled rows (with raw ANSI codes) still pad to the
@@ -97,6 +93,15 @@ function truncateToWidth(s, maxW) {
     w += cw;
   }
   return acc + "…";
+}
+
+function centerVisible(s, width) {
+  const value = truncateToWidth(s, width);
+  const v = renderedWidth(value);
+  if (v >= width) return value;
+  const left = Math.floor((width - v) / 2);
+  const right = width - v - left;
+  return " ".repeat(left) + value + " ".repeat(right);
 }
 
 /** One `label  value` row, padded to exactly `width` rendered columns. */
@@ -146,6 +151,7 @@ export function renderBanner({
   for (let r = 0; r < WORDMARK.length; r++) {
     out.push(`${GRADIENT[r]}${WORDMARK[r]}${RESET}`);
   }
+  out.push(`${DIM}${centerVisible("GLM-native coding agent", WORDMARK_WIDTH)}${RESET}`);
   out.push("");
 
   // Info panel.
