@@ -43,8 +43,24 @@ const MIN_CONTENT_TOKENS = 3;
 
 const HIGH_IMPACT_SHELL_PATTERNS = [
   /\bgh\s+release\b/i,
-  /\b(?:curl|wget)\b[^|\n]*\|\s*(?:(?:sudo|env|command)\b(?:\s+(?:-[^\s]+|[A-Za-z_][A-Za-z0-9_]*=[^\s]+))*\s+)*(?:\/(?:usr\/)?bin\/)?(?:sh|bash|zsh)\b/i,
 ];
+const REMOTE_INSTALLER_PIPE = /\b(?:curl|wget)\b[^|\n]*\|\s*(?<target>[^;&|\n]+)/gi;
+const PIPELINE_SHELLS = new Set(["sh", "bash", "zsh"]);
+const NO_OPTIONS_WITH_VALUE = new Set();
+const SUDO_OPTIONS_WITH_VALUE = new Set([
+  "-C", "--close-from",
+  "-D", "--chdir",
+  "-g", "--group",
+  "-h", "--host",
+  "-p", "--prompt",
+  "-R", "--chroot",
+  "-r", "--role",
+  "-T", "--command-timeout",
+  "-t", "--type",
+  "-U", "--other-user",
+  "-u", "--user",
+]);
+const ENV_OPTIONS_WITH_VALUE = new Set(["-C", "--chdir", "-S", "-u", "--unset"]);
 
 const RM_INVOCATION = /\brm\b(?<args>[^;&|\n]*)/gi;
 const RECURSIVE_METADATA_INVOCATION = /\b(?:chmod|chown)\b(?<args>[^;&|\n]*)/gi;
@@ -185,10 +201,121 @@ function npmGlobalOptionName(token) {
   return equalsAt === -1 ? token : token.slice(0, equalsAt);
 }
 
+function shellWords(value = "") {
+  const text = String(value);
+  const words = [];
+  let current = "";
+  let quote = null;
+  let escaped = false;
+
+  for (const ch of text) {
+    if (escaped) {
+      current += ch;
+      escaped = false;
+      continue;
+    }
+
+    if (ch === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+
+    if (quote) {
+      if (ch === quote) quote = null;
+      else current += ch;
+      continue;
+    }
+
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+
+    if (/\s/.test(ch)) {
+      if (current) {
+        words.push(current);
+        current = "";
+      }
+      continue;
+    }
+
+    current += ch;
+  }
+
+  if (escaped) current += "\\";
+  if (current) words.push(current);
+  return words;
+}
+
+function commandName(token) {
+  return String(token).replace(/\\/g, "/").split("/").pop();
+}
+
+function optionName(token) {
+  const equalsAt = token.indexOf("=");
+  return equalsAt === -1 ? token : token.slice(0, equalsAt);
+}
+
+function isAssignment(token) {
+  return /^[A-Za-z_][A-Za-z0-9_]*=/.test(token);
+}
+
+function skipWrapperOptions(tokens, start, optionsWithValue) {
+  let i = start;
+  while (i < tokens.length) {
+    const token = tokens[i];
+    if (token === "--") return i + 1;
+    if (isAssignment(token)) {
+      i += 1;
+      continue;
+    }
+    if (!token.startsWith("-")) return i;
+
+    const option = optionName(token);
+    i += 1;
+    if (optionsWithValue.has(option) && !token.includes("=")) i += 1;
+  }
+  return i;
+}
+
+function pipelineTargetInvokesShell(tokens) {
+  let i = 0;
+  while (i < tokens.length) {
+    const name = commandName(tokens[i]);
+    if (PIPELINE_SHELLS.has(name)) return true;
+    if (name === "sudo") {
+      i = skipWrapperOptions(tokens, i + 1, SUDO_OPTIONS_WITH_VALUE);
+      continue;
+    }
+    if (name === "env") {
+      i = skipWrapperOptions(tokens, i + 1, ENV_OPTIONS_WITH_VALUE);
+      continue;
+    }
+    if (name === "command") {
+      i = skipWrapperOptions(tokens, i + 1, NO_OPTIONS_WITH_VALUE);
+      continue;
+    }
+    if (isAssignment(tokens[i])) {
+      i += 1;
+      continue;
+    }
+    return false;
+  }
+  return false;
+}
+
+function hasRemoteInstallerPipeline(command = "") {
+  const commandText = String(command);
+  for (const match of commandText.matchAll(REMOTE_INSTALLER_PIPE)) {
+    if (pipelineTargetInvokesShell(shellWords(match.groups?.target || ""))) return true;
+  }
+  return false;
+}
+
 function hasNpmPublishInvocation(command = "") {
   const commandText = String(command);
   for (const match of commandText.matchAll(NPM_INVOCATION)) {
-    const tokens = (match.groups?.args || "").trim().split(/\s+/).filter(Boolean);
+    const tokens = shellWords(match.groups?.args || "");
 
     for (let i = 0; i < tokens.length; i += 1) {
       const token = tokens[i];
@@ -215,7 +342,7 @@ function hasNpmPublishInvocation(command = "") {
 function hasGitPushInvocation(command = "") {
   const commandText = String(command);
   for (const match of commandText.matchAll(GIT_INVOCATION)) {
-    const tokens = (match.groups?.args || "").trim().split(/\s+/).filter(Boolean);
+    const tokens = shellWords(match.groups?.args || "");
 
     for (let i = 0; i < tokens.length; i += 1) {
       const token = tokens[i];
@@ -277,6 +404,7 @@ function isHighImpactShell(command = "") {
     hasRecursiveMetadataChange(commandText) ||
     hasGitPushInvocation(commandText) ||
     hasNpmPublishInvocation(commandText) ||
+    hasRemoteInstallerPipeline(commandText) ||
     HIGH_IMPACT_SHELL_PATTERNS.some((re) => re.test(commandText))
   );
 }
