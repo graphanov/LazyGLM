@@ -52,6 +52,26 @@ test("blocks high-impact shell commands without mitigation", async () => {
   assert.match(res.reason, /High-impact shell commands/i);
 });
 
+test("blocks high-impact shell commands when rm recursive and force flags are split", async () => {
+  const res = await pre("run_shell", {
+    command: "rm -r -f dist",
+    consequence_prediction:
+      "Deletes the dist directory and may remove generated build artifacts that later commands expect to exist.",
+  });
+  assert.equal(res.decision, "block");
+  assert.match(res.reason, /High-impact shell commands/i);
+});
+
+test("blocks high-impact shell commands when rm uses long recursive and force flags", async () => {
+  const res = await pre("run_shell", {
+    command: "rm --recursive --force dist",
+    consequence_prediction:
+      "Deletes the dist directory and may remove generated build artifacts that later commands expect to exist.",
+  });
+  assert.equal(res.decision, "block");
+  assert.match(res.reason, /High-impact shell commands/i);
+});
+
 test("passes high-impact shell commands with scoped mitigation", async () => {
   const res = await pre("run_shell", {
     command: "rm -rf dist",

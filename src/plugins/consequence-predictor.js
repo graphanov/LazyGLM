@@ -18,7 +18,6 @@ const GENERIC_PREDICTIONS = new Set([
 ]);
 
 const HIGH_IMPACT_SHELL_PATTERNS = [
-  /\brm\s+-(?:[^\s]*r[^\s]*f|[^\s]*f[^\s]*r)\b/i,
   /\bgit\s+push\b/i,
   /\bgh\s+release\b/i,
   /\bnpm\s+publish\b/i,
@@ -26,6 +25,33 @@ const HIGH_IMPACT_SHELL_PATTERNS = [
   /\bchmod\s+-R\b/i,
   /\bchown\s+-R\b/i,
 ];
+
+const RM_INVOCATION = /\brm\b(?<args>[^;&|\n]*)/gi;
+
+function hasRecursiveForceRm(command = "") {
+  const commandText = String(command);
+  for (const match of commandText.matchAll(RM_INVOCATION)) {
+    const tokens = (match.groups?.args || "").trim().split(/\s+/).filter(Boolean);
+    let recursive = false;
+    let force = false;
+
+    for (const token of tokens) {
+      if (token === "--") break;
+      if (!token.startsWith("-")) continue;
+
+      if (token === "--recursive") recursive = true;
+      if (token === "--force") force = true;
+      if (token.startsWith("--")) continue;
+
+      const shortFlags = token.slice(1);
+      if (/[rR]/.test(shortFlags)) recursive = true;
+      if (/f/.test(shortFlags)) force = true;
+    }
+
+    if (recursive && force) return true;
+  }
+  return false;
+}
 
 const MITIGATION_WORDS = /\b(mitigat|rollback|recover|backup|dry[- ]?run|scoped|limited|verify|test|confirm|non[- ]?destructive|no irreversible)\b/i;
 
@@ -45,7 +71,8 @@ function isGenericPrediction(prediction) {
 }
 
 function isHighImpactShell(command = "") {
-  return HIGH_IMPACT_SHELL_PATTERNS.some((re) => re.test(String(command)));
+  const commandText = String(command);
+  return hasRecursiveForceRm(commandText) || HIGH_IMPACT_SHELL_PATTERNS.some((re) => re.test(commandText));
 }
 
 function missingPredictionReason(toolName) {
