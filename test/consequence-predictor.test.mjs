@@ -111,6 +111,33 @@ test("blocks remote installer pipelines through env shells without mitigation", 
   assert.match(res.reason, /High-impact shell commands/i);
 });
 
+test("blocks git push with global options before push without mitigation", async () => {
+  const commands = [
+    "git -C . push --force",
+    "git -c push.default=current -C . push origin HEAD",
+    "git --git-dir=.git --work-tree=. push origin main",
+  ];
+
+  for (const command of commands) {
+    const res = await pre("run_shell", {
+      command,
+      consequence_prediction:
+        "Updates remote refs from the local checkout and may overwrite shared repository state if the target or flags are wrong.",
+    });
+    assert.equal(res.decision, "block", command);
+    assert.match(res.reason, /High-impact shell commands/i, command);
+  }
+});
+
+test("passes non-push git commands with global options", async () => {
+  const res = await pre("run_shell", {
+    command: "git -C . status --short",
+    consequence_prediction:
+      "Reads repository status in the selected checkout and should not mutate files or remote refs; failures only affect this inspection step.",
+  });
+  assert.equal(res, undefined);
+});
+
 test("passes high-impact shell commands with scoped mitigation", async () => {
   const res = await pre("run_shell", {
     command: "rm -rf dist",

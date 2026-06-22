@@ -18,7 +18,6 @@ const GENERIC_PREDICTIONS = new Set([
 ]);
 
 const HIGH_IMPACT_SHELL_PATTERNS = [
-  /\bgit\s+push\b/i,
   /\bgh\s+release\b/i,
   /\bnpm\s+publish\b/i,
   /\b(?:curl|wget)\b[^|\n]*\|\s*(?:(?:sudo|env|command)\b(?:\s+(?:-[^\s]+|[A-Za-z_][A-Za-z0-9_]*=[^\s]+))*\s+)*(?:\/(?:usr\/)?bin\/)?(?:sh|bash|zsh)\b/i,
@@ -26,6 +25,30 @@ const HIGH_IMPACT_SHELL_PATTERNS = [
 
 const RM_INVOCATION = /\brm\b(?<args>[^;&|\n]*)/gi;
 const RECURSIVE_METADATA_INVOCATION = /\b(?:chmod|chown)\b(?<args>[^;&|\n]*)/gi;
+const GIT_INVOCATION = /\bgit\b(?<args>[^;&|\n]*)/gi;
+const GIT_GLOBAL_OPTIONS_WITH_VALUE = new Set([
+  "-C",
+  "-c",
+  "--config-env",
+  "--exec-path",
+  "--git-dir",
+  "--namespace",
+  "--super-prefix",
+  "--work-tree",
+]);
+const GIT_GLOBAL_OPTION_FLAGS = new Set([
+  "-p",
+  "-P",
+  "--bare",
+  "--glob-pathspecs",
+  "--icase-pathspecs",
+  "--literal-pathspecs",
+  "--no-optional-locks",
+  "--no-pager",
+  "--no-replace-objects",
+  "--noglob-pathspecs",
+  "--paginate",
+]);
 
 function hasRecursiveForceRm(command = "") {
   const commandText = String(command);
@@ -68,6 +91,34 @@ function hasRecursiveMetadataChange(command = "") {
   return false;
 }
 
+function gitGlobalOptionName(token) {
+  const equalsAt = token.indexOf("=");
+  return equalsAt === -1 ? token : token.slice(0, equalsAt);
+}
+
+function hasGitPushInvocation(command = "") {
+  const commandText = String(command);
+  for (const match of commandText.matchAll(GIT_INVOCATION)) {
+    const tokens = (match.groups?.args || "").trim().split(/\s+/).filter(Boolean);
+
+    for (let i = 0; i < tokens.length; i += 1) {
+      const token = tokens[i];
+      if (token === "push") return true;
+      if (token === "--" || !token.startsWith("-")) break;
+
+      const option = gitGlobalOptionName(token);
+      if (GIT_GLOBAL_OPTIONS_WITH_VALUE.has(option)) {
+        if (!token.includes("=")) i += 1;
+        continue;
+      }
+      if (token.startsWith("-C") || token.startsWith("-c")) continue;
+      if (GIT_GLOBAL_OPTION_FLAGS.has(option)) continue;
+      break;
+    }
+  }
+  return false;
+}
+
 const MITIGATION_WORDS = /\b(mitigat\w*|rollback|recover\w*|backup|dry[- ]?run|scop(?:e|ed|ing)|limit(?:ed|ing)?|verif(?:y|ies|ied|ying|ication)|test(?:ed|ing|s)?|confirm(?:ed|ing|s)?|non[- ]?destructive|no irreversible)\b/i;
 
 function normalizePrediction(value) {
@@ -90,6 +141,7 @@ function isHighImpactShell(command = "") {
   return (
     hasRecursiveForceRm(commandText) ||
     hasRecursiveMetadataChange(commandText) ||
+    hasGitPushInvocation(commandText) ||
     HIGH_IMPACT_SHELL_PATTERNS.some((re) => re.test(commandText))
   );
 }
