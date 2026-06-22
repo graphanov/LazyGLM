@@ -9,7 +9,7 @@ import { loadSkills, listSkillNames, getSkill, detectSkillInvocation } from "./s
 import { resolveProviderConfig, listModels } from "./agent/provider.js";
 import { readJson } from "./util.js";
 import { HookEngine } from "./hooks/engine.js";
-import { truncate } from "./util.js";
+import { createRunEventPrinter } from "./cli-output.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -68,124 +68,6 @@ function parseFlags(argv) {
     }
   }
   return { flags, positional };
-}
-
-const GRAY = "\x1b[90m";
-const DIM = "\x1b[2m";
-const YELLOW = "\x1b[33m";
-const RESET = "\x1b[0m";
-
-// Streaming state: the agent emits assistant_delta / reasoning_delta fragments
-// that must be printed inline and closed with a newline before the next block.
-let streamOpen = false;
-let streamMode = null; // "text" | "reasoning"
-let streamedText = false; // suppresses the assistant_text echo when deltas already showed it
-
-function closeStream() {
-  if (streamOpen) {
-    process.stdout.write(RESET + "\n");
-    streamOpen = false;
-    streamMode = null;
-  }
-}
-
-function printEvent(ev) {
-  switch (ev.type) {
-    case "start":
-      console.log(`\n🚀 LazyGLM session ${ev.sessionId} | model: ${ev.model} | provider: ${ev.provider || "?"} | role: ${ev.role || "default"}`);
-      console.log(`   cwd: ${ev.cwd}`);
-      console.log(`   task: ${truncate(ev.task, 200)}\n`);
-      break;
-    case "reasoning_delta":
-      // Reasoning streams first (GLM-5.2 thinks before answering). Show it dimmed
-      // so the terminal isn't silent during long thinking — that silence is what
-      // breaks trust in non-streaming agents.
-      if (!streamOpen) {
-        process.stdout.write(GRAY + "✶ ");
-        streamOpen = true;
-        streamMode = "reasoning";
-      } else if (streamMode !== "reasoning") {
-        process.stdout.write(RESET + "\n" + GRAY + "✶ ");
-        streamMode = "reasoning";
-      }
-      process.stdout.write(ev.text);
-      break;
-    case "assistant_delta":
-      if (streamOpen && streamMode === "reasoning") {
-        process.stdout.write(RESET + "\n");
-      }
-      if (!streamOpen || streamMode !== "text") {
-        process.stdout.write("💬 ");
-      }
-      streamOpen = true;
-      streamMode = "text";
-      streamedText = true;
-      process.stdout.write(ev.text);
-      break;
-    case "assistant_text":
-      // Close any open stream line first.
-      if (streamedText) {
-        closeStream();
-        streamedText = false;
-      } else {
-        closeStream();
-        if (ev.content?.trim()) console.log(`💬 ${truncate(ev.content, 1200)}`);
-      }
-      break;
-    case "tool_call_start":
-      closeStream();
-      break;
-    case "tool_call": {
-      closeStream();
-      const arg = ev.input ? truncate(ev.input, 160) : "";
-      console.log(`🔧 ${ev.name}(${arg}) [turn ${ev.turn}]`);
-      break;
-    }
-    case "tool_result":
-      console.log(`   ↳ ${truncate(ev.result, 400)}`);
-      break;
-    case "blocked":
-      console.log(`⛔ blocked ${ev.tool}: ${ev.reasons.join("; ")}`);
-      break;
-    case "retry":
-      closeStream();
-      console.log(`${YELLOW}   ⏳ retry ${ev.attempt}: ${ev.reason} (waiting ${ev.delay}ms)${RESET}`);
-      break;
-    case "reasoning_budget_exceeded":
-      closeStream();
-      console.log(`${YELLOW}   🧠 reasoning budget exceeded: ${ev.used}/${ev.budget} tokens — stopping${RESET}`);
-      break;
-    case "usage": {
-      // Surface reasoning-token spend — the GLM-native cost signal. Only print
-      // when reasoning tokens are non-zero to avoid noise on non-reasoning tiers.
-      const cum = ev.cumulative || {};
-      const turnReasoning = ev.usage?.completion_tokens_details?.reasoning_tokens || ev.usage?.reasoning_tokens || 0;
-      if (turnReasoning > 0 || cum.reasoning > 0) {
-        console.log(`${GRAY}   🧠 reasoning: +${turnReasoning} (cum ${cum.reasoning || 0}) | tokens in/out: ${cum.prompt || 0}/${cum.completion || 0}${RESET}`);
-      }
-      break;
-    }
-    case "finish":
-      closeStream();
-      console.log(`\n✅ FINISH: ${truncate(ev.summary, 1500)}\n`);
-      break;
-    case "compact":
-      console.log(`   (context compacted — #${ev.compactionCount})`);
-      break;
-    case "ultrawork_iteration":
-      closeStream();
-      console.log(`\n🔁 ULTRAWORK iteration ${ev.iteration}/${ev.max}`);
-      break;
-    case "ultrawork_verify":
-      console.log(`   verify: ${ev.pass ? "PASS ✅" : "FAIL ❌"} — ${truncate(ev.reason, 300)}`);
-      break;
-    case "error":
-      closeStream();
-      console.error(`❌ error: ${ev.message}`);
-      break;
-    default:
-      break;
-  }
 }
 
 export async function main(argv) {
@@ -312,6 +194,7 @@ export async function main(argv) {
       const maxTurns = Number(flags["max-turns"] || 80);
       const reasoningBudget = Number(flags["max-reasoning-tokens"] || 0);
       const ultrawork = !!flags.ultrawork || /\$ulw-loop\b/i.test(task);
+      const printEvent = createRunEventPrinter({ stdout: process.stdout, stderr: process.stderr, isTTY: process.stdout.isTTY === true });
 
       if (ultrawork) {
         const completionPromise = flags["completion-promise"] || "the task is fully implemented, builds cleanly, and passes verification.";
