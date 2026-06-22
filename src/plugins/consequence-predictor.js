@@ -41,7 +41,12 @@ const GENERIC_FILLER_WORDS = new Set([
 ]);
 const MIN_CONTENT_TOKENS = 3;
 
-const REMOTE_INSTALLER_PIPE = /\b(?:curl|wget)\b[^|\n]*\|\s*(?<target>[^;&|\n]+)/gi;
+// Matches a curl/wget download piped into one or more stages, capturing the
+// FULL remainder of the pipeline (every `|`-separated stage, up to a statement
+// separator or newline). The scanner inspects ALL stages so a saver/filter
+// placed before the shell — e.g. `curl url | tee file | bash` — cannot bypass
+// the high-impact guard by making only the non-shell first stage visible.
+const REMOTE_INSTALLER_PIPE = /\b(?:curl|wget)\b[^|\n]*\|\s*(?<pipeline>[^;&\n]+)/gi;
 const PIPELINE_SHELLS = new Set(["sh", "bash", "zsh"]);
 const NO_OPTIONS_WITH_VALUE = new Set();
 const SUDO_OPTIONS_WITH_VALUE = new Set([
@@ -346,7 +351,12 @@ function pipelineTargetInvokesShell(tokens) {
 function hasRemoteInstallerPipeline(command = "") {
   const commandText = String(command);
   for (const match of commandText.matchAll(REMOTE_INSTALLER_PIPE)) {
-    if (pipelineTargetInvokesShell(shellWords(match.groups?.target || ""))) return true;
+    // Inspect every pipe-delimited stage of the captured pipeline, not just the
+    // first, so a saver/filter before the shell (e.g. `curl url | tee file |
+    // bash`) cannot hide the shell stage and bypass the guard.
+    for (const stage of (match.groups?.pipeline || "").split("|")) {
+      if (pipelineTargetInvokesShell(shellWords(stage))) return true;
+    }
   }
   return false;
 }
