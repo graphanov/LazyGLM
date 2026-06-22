@@ -249,7 +249,7 @@ lazyglm run "refactor the parser" --max-reasoning-tokens 20000
 
 ```
 bin/lazyglm.js            CLI entrypoint
-src/cli.js                command dispatcher (run | chat/REPL | doctor | models | skills | install)
+src/cli.js                command dispatcher (run | chat/REPL | doctor | models | skills | skill | install | uninstall | hook)
 src/config.js             global user config (~/.lazyglm/config.json, chmod 600; key never in process.env)
 src/onboard.js            first-run onboarding (provider + key)
 src/repl.js               interactive self-sustained REPL (streaming + tools + hooks + sessions)
