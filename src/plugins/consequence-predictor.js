@@ -55,6 +55,8 @@ const PIPELINE_SHELLS = new Set([
   "csh",
   "tcsh",
 ]);
+const SHELL_COMMAND_STRING_DEPTH_LIMIT = 3;
+const SHELL_COMMAND_STRING_OPTIONS_WITH_VALUE = new Set(["-o", "-O", "--init-file", "--rcfile"]);
 const NO_OPTIONS_WITH_VALUE = new Set();
 const SUDO_OPTIONS_WITH_VALUE = new Set([
   "-C", "--close-from",
@@ -475,6 +477,46 @@ function skipWrapperOptions(tokens, start, optionsWithValue) {
   return i;
 }
 
+function shellCommandStringAfterOptions(tokens, start) {
+  const valueChars = shortValueOptionChars(SHELL_COMMAND_STRING_OPTIONS_WITH_VALUE);
+  const commandStringValueChars = new Set(valueChars);
+  commandStringValueChars.add("c");
+
+  for (let i = start; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token === "--") return undefined;
+    if (isAssignment(token)) continue;
+    if (!token.startsWith("-")) return undefined;
+
+    if (token.startsWith("--")) {
+      const option = optionName(token);
+      if (SHELL_COMMAND_STRING_OPTIONS_WITH_VALUE.has(option) && !token.includes("=")) i += 1;
+      continue;
+    }
+
+    const cluster = splitShortCluster(token, commandStringValueChars);
+    if (cluster.valueChar === "c") {
+      return cluster.valueConsumesNext ? tokens[i + 1] : cluster.attachedValue;
+    }
+    if (cluster.valueConsumesNext) i += 1;
+  }
+  return undefined;
+}
+
+function hasShellCommandStringHighImpact(command = "", depth = 0) {
+  if (depth >= SHELL_COMMAND_STRING_DEPTH_LIMIT) return false;
+
+  for (const tokens of shellCommandStages(command)) {
+    for (let commandIndex = 0; commandIndex < tokens.length; commandIndex += 1) {
+      if (!PIPELINE_SHELLS.has(commandName(tokens[commandIndex]))) continue;
+
+      const nestedCommand = shellCommandStringAfterOptions(tokens, commandIndex + 1);
+      if (nestedCommand !== undefined && isHighImpactShell(nestedCommand, depth + 1)) return true;
+    }
+  }
+  return false;
+}
+
 // Walks sudo's option tokens (starting after the `sudo` token) and reports
 // whether sudo is launching a shell that would execute the piped installer.
 // Returns true on -s/--shell or -i/--login; stops (returns false) once a
@@ -876,7 +918,7 @@ function hasPositiveMitigationSignal(prediction) {
   return MITIGATION_WORDS.test(positiveText) || TEST_MITIGATION_WORDS.test(positiveText);
 }
 
-function isHighImpactShell(command = "") {
+function isHighImpactShell(command = "", depth = 0) {
   const commandText = String(command);
   return (
     hasRecursiveForceRm(commandText) ||
@@ -884,7 +926,8 @@ function isHighImpactShell(command = "") {
     hasGitPushInvocation(commandText) ||
     hasNpmRegistryMutationInvocation(commandText) ||
     hasGhReleaseInvocation(commandText) ||
-    hasRemoteInstallerPipeline(commandText)
+    hasRemoteInstallerPipeline(commandText) ||
+    hasShellCommandStringHighImpact(commandText, depth)
   );
 }
 
