@@ -227,13 +227,35 @@ test("blocks npm publish with global options before publish without mitigation",
   }
 });
 
-test("passes npm run publish script as non-publish subcommand", async () => {
-  const res = await pre("run_shell", {
-    command: "npm run publish",
-    consequence_prediction:
-      "Runs the local package script named publish; failures are limited to script execution and do not directly invoke npm registry publishing.",
-  });
-  assert.equal(res, undefined);
+test("passes npm run publish/unpublish scripts as non-registry subcommands", async () => {
+  const commands = ["npm run publish", "npm run unpublish"];
+
+  for (const command of commands) {
+    const res = await pre("run_shell", {
+      command,
+      consequence_prediction:
+        "Runs the local package script named by npm run; failures are limited to script execution and do not directly mutate the npm registry.",
+    });
+    assert.equal(res, undefined, command);
+  }
+});
+
+test("blocks npm unpublish as a registry mutation without mitigation", async () => {
+  const commands = [
+    "npm unpublish lazyglm@0.1.0",
+    "npm --registry https://registry.npmjs.org unpublish lazyglm@0.1.0",
+    "npm --otp 123456 unpublish lazyglm@0.1.0",
+  ];
+
+  for (const command of commands) {
+    const res = await pre("run_shell", {
+      command,
+      consequence_prediction:
+        "Removes a published package version from the configured registry and may break users or automation that depend on it.",
+    });
+    assert.equal(res.decision, "block", command);
+    assert.match(res.reason, /High-impact shell commands/i, command);
+  }
 });
 
 test("blocks npm publish with publish-scoped options before publish without mitigation", async () => {

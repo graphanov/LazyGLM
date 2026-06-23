@@ -195,14 +195,16 @@ const NPM_GLOBAL_OPTION_FLAGS = new Set([
 const NPM_PUBLISH_OPTIONS_WITH_VALUE = new Set(["--access", "--provenance-file"]);
 const NPM_PUBLISH_OPTION_FLAGS = new Set(["--provenance"]);
 
-const NPM_PUBLISH_SUBCOMMANDS = new Set(["publish", "pub"]);
+// Registry-mutating npm subcommands that must be classified high-impact. `pub`
+// is an alias for `publish`; `unpublish` removes a published package/version.
+const NPM_REGISTRY_MUTATION_SUBCOMMANDS = new Set(["publish", "pub", "unpublish"]);
 
 // npm subcommands. Used only to decide whether a non-option token that follows
 // an unrecognized config option is that option's value or the real subcommand
-// (see hasNpmPublishInvocation). Listed conservatively so a value-taking
+// (see hasNpmRegistryMutationInvocation). Listed conservatively so a value-taking
 // option not enumerated in NPM_GLOBAL_OPTIONS_WITH_VALUE cannot mask a later
-// publish. `npm run publish` breaks on `run` before any option is inspected,
-// so it never reaches the value-consume branch.
+// registry mutation. `npm run publish` breaks on `run` before any option is
+// inspected, so it never reaches the value-consume branch.
 const NPM_SUBCOMMANDS = new Set([
   "access", "add", "audit", "bin", "bugs", "cache", "ci", "config", "create",
   "dedupe", "deprecate", "diff", "dist-tag", "docs", "doctor", "edit", "exec",
@@ -501,14 +503,14 @@ function hasRemoteInstallerPipeline(command = "") {
   return false;
 }
 
-function hasNpmPublishInvocation(command = "") {
+function hasNpmRegistryMutationInvocation(command = "") {
   const commandText = String(command);
   for (const match of commandText.matchAll(NPM_INVOCATION)) {
     const tokens = shellWords(match.groups?.args || "");
 
     for (let i = 0; i < tokens.length; i += 1) {
       const token = tokens[i];
-      if (NPM_PUBLISH_SUBCOMMANDS.has(token)) return true;
+      if (NPM_REGISTRY_MUTATION_SUBCOMMANDS.has(token)) return true;
       if (token === "--" || !token.startsWith("-")) break;
 
       const option = npmGlobalOptionName(token);
@@ -529,15 +531,16 @@ function hasNpmPublishInvocation(command = "") {
       // gated, and an unrecognized flag must not let it slip past. A
       // value-taking option not enumerated above would otherwise leave its
       // space-separated value as the next token, where the non-dash break
-      // masks `publish` (e.g. `npm --custom-prefix v publish`). Consume one
-      // following non-option token as that value, but never consume `publish`
-      // itself, never consume past `--`, and never consume a real subcommand.
+      // masks a registry mutation (e.g. `npm --custom-prefix v publish`). Consume
+      // one following non-option token as that value, but never consume a
+      // registry mutation itself, never consume past `--`, and never consume a
+      // real subcommand.
       const next = tokens[i + 1];
       if (
         next !== undefined &&
         next !== "--" &&
         !next.startsWith("-") &&
-        !NPM_PUBLISH_SUBCOMMANDS.has(next) &&
+        !NPM_REGISTRY_MUTATION_SUBCOMMANDS.has(next) &&
         !NPM_SUBCOMMANDS.has(next)
       ) {
         i += 1;
@@ -720,7 +723,7 @@ function isHighImpactShell(command = "") {
     hasRecursiveForceRm(commandText) ||
     hasRecursiveMetadataChange(commandText) ||
     hasGitPushInvocation(commandText) ||
-    hasNpmPublishInvocation(commandText) ||
+    hasNpmRegistryMutationInvocation(commandText) ||
     hasGhReleaseInvocation(commandText) ||
     hasRemoteInstallerPipeline(commandText)
   );
