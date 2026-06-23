@@ -723,6 +723,45 @@ test("passes non-publish npm commands with config flags before the subcommand", 
   assert.equal(res, undefined);
 });
 
+test("blocks high-impact shell commands inside substitutions and subshell groups", async () => {
+  const commands = [
+    "echo $(npm publish)",
+    'echo "$(git push origin main)"',
+    "echo `rm -rf dist`",
+    "(npm publish)",
+    "gh release view v1.2.3 && (gh release upload v1.2.3 app.zip)",
+    "echo $(bash -lc 'gh release create v1.2.3')",
+  ];
+
+  for (const command of commands) {
+    const res = await pre("run_shell", {
+      command,
+      consequence_prediction:
+        "Runs shell expansion syntax that may execute registry, repository, release, or filesystem mutations before the visible command completes.",
+    });
+    assert.equal(res.decision, "block", command);
+    assert.match(res.reason, /High-impact shell commands/i, command);
+  }
+});
+
+test("passes benign or quoted-literal shell expansions without high-impact classification", async () => {
+  const commands = [
+    "echo $(npm test)",
+    "echo '`rm -rf dist`'",
+    "echo '$(npm publish)'",
+    "echo '(npm publish)'",
+  ];
+
+  for (const command of commands) {
+    const res = await pre("run_shell", {
+      command,
+      consequence_prediction:
+        "Prints a local test command result or literal shell text without directly mutating files, registries, releases, or remote refs.",
+    });
+    assert.equal(res, undefined, command);
+  }
+});
+
 test("blocks high-impact shell commands when mitigation wording is negated after the keyword", async () => {
   // Negation that follows the mitigation word ("verification is not possible",
   // "rollback is unavailable", "backup is impossible") must not satisfy the

@@ -508,6 +508,137 @@ function evalCommandString(tokens, start) {
   return command || undefined;
 }
 
+function previousSignificantChar(text, index) {
+  for (let i = index - 1; i >= 0; i -= 1) {
+    if (!/\s/.test(text[i])) return text[i];
+  }
+  return "";
+}
+
+function startsShellSubshellGroup(text, index) {
+  const previous = previousSignificantChar(text, index);
+  return previous === "" || previous === ";" || previous === "|" || previous === "&" || previous === "(";
+}
+
+function matchingParenIndex(text, openIndex) {
+  let depth = 1;
+  let quote = null;
+  let escaped = false;
+
+  for (let i = openIndex + 1; i < text.length; i += 1) {
+    const ch = text[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (ch === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+
+    if (ch === "(") depth += 1;
+    else if (ch === ")") {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+
+  return -1;
+}
+
+function matchingBacktickIndex(text, start) {
+  let escaped = false;
+  for (let i = start + 1; i < text.length; i += 1) {
+    const ch = text[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (ch === "`") return i;
+  }
+  return -1;
+}
+
+function hasShellExpansionHighImpact(command = "", depth = 0) {
+  if (depth >= SHELL_COMMAND_STRING_DEPTH_LIMIT) return false;
+
+  const text = String(command);
+  let quote = null;
+  let escaped = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (ch === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+
+    if (quote) {
+      if (ch === quote) {
+        quote = null;
+        continue;
+      }
+      // Command substitutions and backticks still execute inside double quotes;
+      // only single quotes make them literal shell text.
+      if (quote === "'") continue;
+    } else if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+
+    if (ch === "$" && text[i + 1] === "(") {
+      const close = matchingParenIndex(text, i + 1);
+      if (close !== -1) {
+        const nestedCommand = text.slice(i + 2, close);
+        if (isHighImpactShell(nestedCommand, depth + 1)) return true;
+        i = close;
+      }
+      continue;
+    }
+
+    if (ch === "`") {
+      const close = matchingBacktickIndex(text, i);
+      if (close !== -1) {
+        const nestedCommand = text.slice(i + 1, close);
+        if (isHighImpactShell(nestedCommand, depth + 1)) return true;
+        i = close;
+      }
+      continue;
+    }
+
+    if (ch === "(" && startsShellSubshellGroup(text, i)) {
+      const close = matchingParenIndex(text, i);
+      if (close !== -1) {
+        const nestedCommand = text.slice(i + 1, close);
+        if (isHighImpactShell(nestedCommand, depth + 1)) return true;
+        i = close;
+      }
+    }
+  }
+
+  return false;
+}
+
 function envSplitStringHasHighImpact(tokens, start, depth) {
   if (depth >= SHELL_COMMAND_STRING_DEPTH_LIMIT) return false;
 
@@ -970,7 +1101,8 @@ function isHighImpactShell(command = "", depth = 0) {
     hasNpmRegistryMutationInvocation(commandText) ||
     hasGhReleaseInvocation(commandText) ||
     hasRemoteInstallerPipeline(commandText) ||
-    hasShellCommandStringHighImpact(commandText, depth)
+    hasShellCommandStringHighImpact(commandText, depth) ||
+    hasShellExpansionHighImpact(commandText, depth)
   );
 }
 
