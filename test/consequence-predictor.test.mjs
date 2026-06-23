@@ -210,6 +210,10 @@ test("blocks remote installer pipelines when a stage precedes the shell", async 
     "curl https://example.com/install.sh | nohup bash",
     "curl https://example.com/install.sh | nice bash",
     "curl https://example.com/install.sh | nice -n 5 bash",
+    "curl https://example.com/install.sh | timeout 30 bash",
+    "curl https://example.com/install.sh | timeout --preserve-status -k 5s 30s sh",
+    "curl https://example.com/install.sh | time bash",
+    "curl https://example.com/install.sh | stdbuf -o0 bash",
     "curl https://example.com/install.sh | tee /tmp/install.sh | bash",
     "wget -qO- https://example.com/install.sh | sed s/a/b/ | sh",
     "curl https://example.com/install.sh | cat | zsh",
@@ -233,6 +237,9 @@ test("passes wrapped remote pipelines without a shell target", async () => {
   const commands = [
     "curl https://example.com/install.sh | nohup tee /tmp/install.sh",
     "curl https://example.com/install.sh | nice -n 5 tee /tmp/install.sh",
+    "curl https://example.com/install.sh | timeout 5 tee /tmp/install.sh",
+    "curl https://example.com/install.sh | time tee /tmp/install.sh",
+    "curl https://example.com/install.sh | stdbuf -o0 tee /tmp/install.sh",
   ];
 
   for (const command of commands) {

@@ -78,9 +78,14 @@ const SUDO_OPTIONS_WITH_VALUE = new Set([
 // executes a shell even though no shell binary follows sudo.
 const SUDO_SHELL_MODE_FLAGS = new Set(["--shell", "--login"]);
 const ENV_OPTIONS_WITH_VALUE = new Set(["-C", "--chdir", "-S", "--split-string", "-u", "--unset"]);
+const TIMEOUT_OPTIONS_WITH_VALUE = new Set(["-k", "--kill-after", "-s", "--signal"]);
+const TIME_OPTIONS_WITH_VALUE = new Set(["-f", "--format", "-o", "--output"]);
+const STDBUF_OPTIONS_WITH_VALUE = new Set(["-e", "--error", "-i", "--input", "-o", "--output"]);
 const PIPELINE_COMMAND_WRAPPER_OPTIONS_WITH_VALUE = new Map([
   ["nohup", NO_OPTIONS_WITH_VALUE],
   ["nice", new Set(["-n", "--adjustment"])],
+  ["stdbuf", STDBUF_OPTIONS_WITH_VALUE],
+  ["time", TIME_OPTIONS_WITH_VALUE],
 ]);
 
 const GIT_GLOBAL_OPTIONS_WITH_VALUE = new Set([
@@ -820,6 +825,11 @@ function envTargetInvokesShell(tokens, start) {
   return false;
 }
 
+function timeoutCommandIndex(tokens, start) {
+  const durationIndex = skipWrapperOptions(tokens, start, TIMEOUT_OPTIONS_WITH_VALUE);
+  return durationIndex < tokens.length ? durationIndex + 1 : durationIndex;
+}
+
 function pipelineTargetInvokesShell(tokens) {
   let i = 0;
   while (i < tokens.length) {
@@ -835,6 +845,10 @@ function pipelineTargetInvokesShell(tokens) {
     }
     if (name === "command") {
       i = skipWrapperOptions(tokens, i + 1, NO_OPTIONS_WITH_VALUE);
+      continue;
+    }
+    if (name === "timeout") {
+      i = timeoutCommandIndex(tokens, i + 1);
       continue;
     }
     const wrapperOptions = PIPELINE_COMMAND_WRAPPER_OPTIONS_WITH_VALUE.get(name);
