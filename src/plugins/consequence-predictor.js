@@ -41,12 +41,6 @@ const GENERIC_FILLER_WORDS = new Set([
 ]);
 const MIN_CONTENT_TOKENS = 3;
 
-// Matches a curl/wget download piped into one or more stages, capturing the
-// FULL remainder of the pipeline (every `|`-separated stage, up to a statement
-// separator or newline). The scanner inspects ALL stages so a saver/filter
-// placed before the shell — e.g. `curl url | tee file | bash` — cannot bypass
-// the high-impact guard by making only the non-shell first stage visible.
-const REMOTE_INSTALLER_PIPE = /\b(?:curl|wget)\b[^|\n]*\|\s*(?<pipeline>[^;&\n]+)/gi;
 // Direct shell executables that read and execute piped installer stdin. Keep this
 // explicit: a remote installer piped into `dash`/`fish` is still remote code
 // execution even when it is not the most common `sh`/`bash` spelling.
@@ -82,11 +76,6 @@ const SUDO_OPTIONS_WITH_VALUE = new Set([
 const SUDO_SHELL_MODE_FLAGS = new Set(["--shell", "--login"]);
 const ENV_OPTIONS_WITH_VALUE = new Set(["-C", "--chdir", "-S", "--split-string", "-u", "--unset"]);
 
-const RM_INVOCATION = /\brm\b(?<args>[^;&|\n]*)/gi;
-const RECURSIVE_METADATA_INVOCATION = /\b(?:chmod|chown)\b(?<args>[^;&|\n]*)/gi;
-const GIT_INVOCATION = /\bgit\b(?<args>[^;&|\n]*)/gi;
-const NPM_INVOCATION = /\bnpm\b(?<args>[^;&|\n]*)/gi;
-const GH_INVOCATION = /\bgh\b(?<args>[^;&|\n]*)/gi;
 const GIT_GLOBAL_OPTIONS_WITH_VALUE = new Set([
   "-C",
   "-c",
@@ -224,41 +213,44 @@ const NPM_SUBCOMMANDS = new Set([
 ]);
 
 function hasRecursiveForceRm(command = "") {
-  const commandText = String(command);
-  for (const match of commandText.matchAll(RM_INVOCATION)) {
-    const tokens = (match.groups?.args || "").trim().split(/\s+/).filter(Boolean);
-    let recursive = false;
-    let force = false;
+  for (const tokens of shellCommandStages(command)) {
+    for (let commandIndex = 0; commandIndex < tokens.length; commandIndex += 1) {
+      if (commandName(tokens[commandIndex]) !== "rm") continue;
 
-    for (const token of tokens) {
-      if (token === "--") break;
-      if (!token.startsWith("-")) continue;
+      let recursive = false;
+      let force = false;
+      for (const token of tokens.slice(commandIndex + 1)) {
+        if (token === "--") break;
+        if (!token.startsWith("-")) continue;
 
-      if (token === "--recursive") recursive = true;
-      if (token === "--force") force = true;
-      if (token.startsWith("--")) continue;
+        if (token === "--recursive") recursive = true;
+        if (token === "--force") force = true;
+        if (token.startsWith("--")) continue;
 
-      const shortFlags = token.slice(1);
-      if (/[rR]/.test(shortFlags)) recursive = true;
-      if (/f/.test(shortFlags)) force = true;
+        const shortFlags = token.slice(1);
+        if (/[rR]/.test(shortFlags)) recursive = true;
+        if (/f/.test(shortFlags)) force = true;
+      }
+
+      if (recursive && force) return true;
     }
-
-    if (recursive && force) return true;
   }
   return false;
 }
 
 function hasRecursiveMetadataChange(command = "") {
-  const commandText = String(command);
-  for (const match of commandText.matchAll(RECURSIVE_METADATA_INVOCATION)) {
-    const tokens = (match.groups?.args || "").trim().split(/\s+/).filter(Boolean);
+  for (const tokens of shellCommandStages(command)) {
+    for (let commandIndex = 0; commandIndex < tokens.length; commandIndex += 1) {
+      const name = commandName(tokens[commandIndex]);
+      if (name !== "chmod" && name !== "chown") continue;
 
-    for (const token of tokens) {
-      if (token === "--") break;
-      if (!token.startsWith("-")) continue;
-      if (token === "--recursive") return true;
-      if (token.startsWith("--")) continue;
-      if (/R/.test(token.slice(1))) return true;
+      for (const token of tokens.slice(commandIndex + 1)) {
+        if (token === "--") break;
+        if (!token.startsWith("-")) continue;
+        if (token === "--recursive") return true;
+        if (token.startsWith("--")) continue;
+        if (/R/.test(token.slice(1))) return true;
+      }
     }
   }
   return false;
@@ -318,6 +310,96 @@ function shellWords(value = "") {
   if (escaped) current += "\\";
   if (current) words.push(current);
   return words;
+}
+
+// Parse shell command text into command stages while applying the same simple
+// backslash and quote handling as shellWords(). High-impact classifiers must
+// inspect normalized tokens (e.g. `n\pm publish` -> `npm publish`) instead of
+// raw regex matches, because the shell executes escaped command names normally.
+function shellPipelines(value = "") {
+  const text = String(value);
+  const pipelines = [];
+  let pipeline = [];
+  let tokens = [];
+  let current = "";
+  let quote = null;
+  let escaped = false;
+
+  function pushToken() {
+    if (!current) return;
+    tokens.push(current);
+    current = "";
+  }
+
+  function pushStage() {
+    pushToken();
+    if (!tokens.length) return;
+    pipeline.push(tokens);
+    tokens = [];
+  }
+
+  function pushPipeline() {
+    pushStage();
+    if (!pipeline.length) return;
+    pipelines.push(pipeline);
+    pipeline = [];
+  }
+
+  for (let index = 0; index < text.length; index += 1) {
+    const ch = text[index];
+    if (escaped) {
+      current += ch;
+      escaped = false;
+      continue;
+    }
+
+    if (ch === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+
+    if (quote) {
+      if (ch === quote) quote = null;
+      else current += ch;
+      continue;
+    }
+
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+
+    if (ch === "|") {
+      if (text[index + 1] === "|") {
+        pushPipeline();
+        index += 1;
+      } else {
+        pushStage();
+      }
+      continue;
+    }
+
+    if (ch === ";" || ch === "&" || ch === "\n") {
+      pushPipeline();
+      if (ch === "&" && text[index + 1] === "&") index += 1;
+      continue;
+    }
+
+    if (/\s/.test(ch)) {
+      pushToken();
+      continue;
+    }
+
+    current += ch;
+  }
+
+  if (escaped) current += "\\";
+  pushPipeline();
+  return pipelines;
+}
+
+function shellCommandStages(value = "") {
+  return shellPipelines(value).flat();
 }
 
 function commandName(token) {
@@ -497,13 +579,17 @@ function pipelineTargetInvokesShell(tokens) {
 }
 
 function hasRemoteInstallerPipeline(command = "") {
-  const commandText = String(command);
-  for (const match of commandText.matchAll(REMOTE_INSTALLER_PIPE)) {
-    // Inspect every pipe-delimited stage of the captured pipeline, not just the
-    // first, so a saver/filter before the shell (e.g. `curl url | tee file |
-    // bash`) cannot hide the shell stage and bypass the guard.
-    for (const stage of (match.groups?.pipeline || "").split("|")) {
-      if (pipelineTargetInvokesShell(shellWords(stage))) return true;
+  for (const pipeline of shellPipelines(command)) {
+    for (let sourceIndex = 0; sourceIndex < pipeline.length - 1; sourceIndex += 1) {
+      const hasRemoteDownloader = pipeline[sourceIndex].some((token) => {
+        const name = commandName(token);
+        return name === "curl" || name === "wget";
+      });
+      if (!hasRemoteDownloader) continue;
+
+      for (const stage of pipeline.slice(sourceIndex + 1)) {
+        if (pipelineTargetInvokesShell(stage)) return true;
+      }
     }
   }
   return false;
@@ -511,9 +597,11 @@ function hasRemoteInstallerPipeline(command = "") {
 
 function npmShellCommandHasRegistryMutation(command = "", depth = 0) {
   if (depth >= 3) return false;
-  const commandText = String(command);
-  for (const match of commandText.matchAll(NPM_INVOCATION)) {
-    if (npmTokensHaveRegistryMutation(shellWords(match.groups?.args || ""), 0, depth)) return true;
+  for (const tokens of shellCommandStages(command)) {
+    for (let commandIndex = 0; commandIndex < tokens.length; commandIndex += 1) {
+      if (commandName(tokens[commandIndex]) !== "npm") continue;
+      if (npmTokensHaveRegistryMutation(tokens, commandIndex + 1, depth)) return true;
+    }
   }
   return false;
 }
@@ -623,23 +711,24 @@ function hasNpmRegistryMutationInvocation(command = "") {
 }
 
 function hasGitPushInvocation(command = "") {
-  const commandText = String(command);
-  for (const match of commandText.matchAll(GIT_INVOCATION)) {
-    const tokens = shellWords(match.groups?.args || "");
+  for (const tokens of shellCommandStages(command)) {
+    for (let commandIndex = 0; commandIndex < tokens.length; commandIndex += 1) {
+      if (commandName(tokens[commandIndex]) !== "git") continue;
 
-    for (let i = 0; i < tokens.length; i += 1) {
-      const token = tokens[i];
-      if (token === "push") return true;
-      if (token === "--" || !token.startsWith("-")) break;
+      for (let i = commandIndex + 1; i < tokens.length; i += 1) {
+        const token = tokens[i];
+        if (token === "push") return true;
+        if (token === "--" || !token.startsWith("-")) break;
 
-      const option = gitGlobalOptionName(token);
-      if (GIT_GLOBAL_OPTIONS_WITH_VALUE.has(option)) {
-        if (!token.includes("=")) i += 1;
-        continue;
+        const option = gitGlobalOptionName(token);
+        if (GIT_GLOBAL_OPTIONS_WITH_VALUE.has(option)) {
+          if (!token.includes("=")) i += 1;
+          continue;
+        }
+        if (token.startsWith("-C") || token.startsWith("-c")) continue;
+        if (GIT_GLOBAL_OPTION_FLAGS.has(option)) continue;
+        break;
       }
-      if (token.startsWith("-C") || token.startsWith("-c")) continue;
-      if (GIT_GLOBAL_OPTION_FLAGS.has(option)) continue;
-      break;
     }
   }
   return false;
@@ -664,38 +753,37 @@ function ghReleaseSubcommandAfterOptions(tokens, start) {
 }
 
 function hasGhReleaseInvocation(command = "") {
-  const commandText = String(command);
-  for (const match of commandText.matchAll(GH_INVOCATION)) {
-    const tokens = shellWords(match.groups?.args || "");
+  for (const tokens of shellCommandStages(command)) {
+    for (let commandIndex = 0; commandIndex < tokens.length; commandIndex += 1) {
+      if (commandName(tokens[commandIndex]) !== "gh") continue;
 
-    for (let i = 0; i < tokens.length; i += 1) {
-      const token = tokens[i];
-      if (token === "release") {
-        // Only the mutating subcommands (create/new/upload/delete/delete-asset/edit)
-        // are high-impact; read-only `gh release view|list|download` must pass.
-        // gh inherited flags such as -R/--repo can appear either before
-        // `release` or between `release` and the subcommand, so skip those
-        // parent options before classifying the subcommand.
-        const subcommand = ghReleaseSubcommandAfterOptions(tokens, i + 1);
-        if (GH_RELEASE_MUTATING_SUBCOMMANDS.has(subcommand)) return true;
-        // Read-only release subcommand: do not return false here. A chained
-        // command may pair a read-only release with a mutating one (e.g.
-        // `gh release view v1 && gh release upload v1 app.zip`); break out of
-        // this invocation's tokens so the outer matchAll scan reaches the next
-        // `gh` invocation. (GH_INVOCATION stops at &/;/|, so each `gh` is its
-        // own match.)
+      for (let i = commandIndex + 1; i < tokens.length; i += 1) {
+        const token = tokens[i];
+        if (token === "release") {
+          // Only the mutating subcommands (create/new/upload/delete/delete-asset/edit)
+          // are high-impact; read-only `gh release view|list|download` must pass.
+          // gh inherited flags such as -R/--repo can appear either before
+          // `release` or between `release` and the subcommand, so skip those
+          // parent options before classifying the subcommand.
+          const subcommand = ghReleaseSubcommandAfterOptions(tokens, i + 1);
+          if (GH_RELEASE_MUTATING_SUBCOMMANDS.has(subcommand)) return true;
+          // Read-only release subcommand: do not return false here. A chained
+          // command may pair a read-only release with a mutating one (e.g.
+          // `gh release view v1 && gh release upload v1 app.zip`); break out of
+          // this gh invocation so the outer stage scan reaches the next one.
+          break;
+        }
+        if (token === "--" || !token.startsWith("-")) break;
+
+        const option = optionName(token);
+        if (GH_GLOBAL_OPTIONS_WITH_VALUE.has(option)) {
+          if (!token.includes("=")) i += 1;
+          continue;
+        }
+        if (token.startsWith("-R") && token.length > 2) continue;
+        if (GH_GLOBAL_OPTION_FLAGS.has(option)) continue;
         break;
       }
-      if (token === "--" || !token.startsWith("-")) break;
-
-      const option = optionName(token);
-      if (GH_GLOBAL_OPTIONS_WITH_VALUE.has(option)) {
-        if (!token.includes("=")) i += 1;
-        continue;
-      }
-      if (token.startsWith("-R") && token.length > 2) continue;
-      if (GH_GLOBAL_OPTION_FLAGS.has(option)) continue;
-      break;
     }
   }
   return false;
