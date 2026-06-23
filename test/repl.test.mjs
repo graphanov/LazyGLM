@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { loadUserConfig, saveUserConfig, isOnboarded, resetConfigCache } from "../src/config.js";
 import { needsOnboarding, runOnboarding } from "../src/onboard.js";
 import { createSession, appendEvent, listSessions, loadSessionEvents } from "../src/sessions.js";
-import { replayIntoContext, formatReasoning, formatText, formatToolCall, formatToolResult, turnDivider } from "../src/repl.js";
+import { replayIntoContext, formatReasoning, formatText, formatToolCall, formatToolResult, turnDivider, turnRule, turnStart, turnEnd } from "../src/repl.js";
 import { Context, assistantMessageFrom } from "../src/agent/context.js";
 import { chat } from "../src/agent/provider.js";
 
@@ -65,6 +65,48 @@ test("REPL turn-format helpers can render without ANSI for non-TTY output", () =
   assertNoAnsi(formatToolCall("read_file", { path: "src/repl.js" }, { isTTY: false }));
   assertNoAnsi(formatToolResult("ok", { isTTY: false }));
   assertNoAnsi(turnDivider({ isTTY: false }));
+});
+
+test("REPL turn-frame helpers render a symmetric dim rule on TTY", () => {
+  const rule = turnRule();
+  assert.ok(rule.includes("─"));
+  assert.ok(rule.includes(DIM));
+  assert.doesNotMatch(rule, /✶|💬|🔧|↳/);
+
+  const start = turnStart("hello", { isTTY: true });
+  assert.ok(start.startsWith("\n"), "turnStart TTY opens with a blank line before the rule");
+  assert.ok(start.includes("─"));
+  assert.ok(start.includes(DIM));
+  assert.doesNotMatch(start, /✶|💬|🔧|↳/);
+
+  const end = turnEnd({ isTTY: true });
+  assert.ok(end.endsWith("\n\n"), "turnEnd TTY closes with the rule followed by a blank line");
+  assert.ok(end.includes("─"));
+  assert.ok(end.includes(DIM));
+  assert.doesNotMatch(end, /✶|💬|🔧|↳/);
+
+  // Frame symmetry: the rule width (count of ─) is identical top and bottom.
+  const ruleChars = (s) => (s.match(/─/g) || []).length;
+  assert.equal(ruleChars(start), ruleChars(end), "turnStart/turnEnd rule widths must match");
+  assert.equal(ruleChars(rule), ruleChars(start), "turnRule width must match the frame");
+});
+
+test("REPL turn-frame helpers stay zero-ANSI and empty/plain for non-TTY", () => {
+  assert.equal(turnRule({ isTTY: false }), "");
+  assert.equal(turnEnd({ isTTY: false }), "");
+
+  const echo = turnStart("hello", { isTTY: false });
+  assertNoAnsi(echo);
+  assert.equal(echo, "> hello\n");
+  assert.ok(!echo.includes("─"), "non-TTY echo must carry no rule glyph");
+
+  // Long input is truncated to the same cap used elsewhere, no rule glyph.
+  const longText = "x".repeat(500);
+  const trunc = turnStart(longText, { isTTY: false });
+  assertNoAnsi(trunc);
+  assert.ok(trunc.length < longText.length, "long input must be truncated");
+  assert.ok(trunc.includes("truncated"), "truncation marker must be present");
+  assert.ok(!trunc.includes("─"), "truncated non-TTY echo must carry no rule glyph");
 });
 
 test.after(async () => {

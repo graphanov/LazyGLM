@@ -31,6 +31,12 @@ const GREEN = "\x1b[32m";
 const RESET = "\x1b[0m";
 const TOOL_INDENT = "   ";
 const TOOL_DIVIDER_RULE = "─".repeat(18);
+// Fixed-width rule that frames a whole assistant+tool turn. Deliberately NOT
+// derived from process.stdout.columns so render output (and tests) stay
+// deterministic — mirrors the TOOL_DIVIDER_RULE approach. Wide enough to frame
+// the indented `── tools ──` divider, which nests inside a turn untouched.
+const TURN_RULE_WIDTH = 60;
+const TURN_RULE = "─".repeat(TURN_RULE_WIDTH);
 
 function ansi(code, { isTTY = true } = {}) {
   return isTTY ? code : "";
@@ -66,6 +72,25 @@ export function formatToolResult(result = "", opts = {}) {
 
 export function turnDivider(opts = {}) {
   return `${TOOL_INDENT}${ansi(DIM, opts)}${TOOL_DIVIDER_RULE} tools ${TOOL_DIVIDER_RULE}${ansi(RESET, opts)}`;
+}
+
+// Turn-boundary frame helpers (purely additive). Each assistant+tool turn is
+// wrapped so consecutive turns stop blending. TTY: a dim fixed-width rule
+// above and below the turn (symmetric). Non-TTY: a plain `> text` echo with
+// zero ANSI and no rule, so piped output stays clean + parseable. The existing
+// `── tools ──` divider nests inside this frame and is left untouched.
+export function turnRule({ isTTY = true } = {}) {
+  return isTTY ? `${DIM}${TURN_RULE}${RESET}` : "";
+}
+
+export function turnStart(userText, { isTTY = true } = {}) {
+  if (!isTTY) return `> ${truncate(userText ?? "", 100)}\n`;
+  return `\n${turnRule({ isTTY })}\n`;
+}
+
+export function turnEnd({ isTTY = true } = {}) {
+  if (!isTTY) return "";
+  return `${turnRule({ isTTY })}\n\n`;
 }
 
 const REPL_PERSONA = `You are LazyGLM, a terminal-based AI coding agent connected directly to the user's file system via a CLI.
@@ -508,6 +533,11 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
     ctx.push({ role: "user", content });
     await appendEvent(session, { type: "user", content: userContent });
 
+    // Frame this turn so consecutive turns don't blend (TTY: dim rule above,
+    // matching rule below at every exit; non-TTY: plain `> text` echo). The
+    // `── tools ──` divider nests inside this frame untouched.
+    process.stdout.write(turnStart(userContent, renderOpts()));
+
     const MAX_TURNS = 40;
     for (let turn = 1; turn <= MAX_TURNS; turn++) {
       resetTurnDivider(`repl:${turn}`);
@@ -534,6 +564,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
       } catch (err) {
         closeStream();
         process.stdout.write(`\n${YELLOW}❌ ${err.message}${RESET}\n`);
+        process.stdout.write(turnEnd(renderOpts()));
         return;
       }
 
@@ -560,6 +591,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
       // text-only (no tool call) → end the turn, return control to the user
       if (!resp.tool_calls || resp.tool_calls.length === 0) {
         await engine.fire("Stop", { response: resp.content, finished: false });
+        process.stdout.write(turnEnd(renderOpts()));
         return;
       }
 
@@ -617,12 +649,14 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
       }
       if (finished) {
         await engine.fire("Stop", { response: "(finish)", finished: true });
+        process.stdout.write(turnEnd(renderOpts()));
         return;
       }
       // otherwise loop: the model continues with the tool results
     }
     closeStream();
     process.stdout.write(`\n   ${YELLOW}(turn limit reached — task may be incomplete)${RESET}\n`);
+    process.stdout.write(turnEnd(renderOpts()));
   };
 
   const handleLine = async (raw) => {
