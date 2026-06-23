@@ -112,6 +112,7 @@ const GH_RELEASE_MUTATING_SUBCOMMANDS = new Set([
   "create",
   "upload",
   "delete",
+  "delete-asset",
   "edit",
 ]);
 const NPM_GLOBAL_OPTIONS_WITH_VALUE = new Set([
@@ -177,6 +178,24 @@ const NPM_GLOBAL_OPTION_FLAGS = new Set([
 // npm option sets above for clarity.
 const NPM_PUBLISH_OPTIONS_WITH_VALUE = new Set(["--access", "--provenance-file"]);
 const NPM_PUBLISH_OPTION_FLAGS = new Set(["--provenance"]);
+
+// npm subcommands. Used only to decide whether a non-option token that follows
+// an unrecognized config option is that option's value or the real subcommand
+// (see hasNpmPublishInvocation). Listed conservatively so a value-taking
+// option not enumerated in NPM_GLOBAL_OPTIONS_WITH_VALUE cannot mask a later
+// publish. `npm run publish` breaks on `run` before any option is inspected,
+// so it never reaches the value-consume branch.
+const NPM_SUBCOMMANDS = new Set([
+  "access", "add", "audit", "bin", "bugs", "cache", "ci", "config", "create",
+  "dedupe", "deprecate", "diff", "dist-tag", "docs", "doctor", "edit", "exec",
+  "explain", "explore", "find-dupes", "fund", "get", "help", "hook", "i",
+  "init", "install", "install-clean", "link", "ln", "login", "logout", "ls",
+  "org", "outdated", "owner", "pack", "ping", "pkg", "prefix", "profile",
+  "prune", "publish", "query", "rebuild", "remove", "restart", "rm", "root",
+  "run", "run-script", "search", "set", "shrinkwrap", "start", "stop", "t",
+  "team", "test", "token", "uninstall", "unpublish", "unstar", "update",
+  "upgrade", "version", "view", "whoami",
+]);
 
 function hasRecursiveForceRm(command = "") {
   const commandText = String(command);
@@ -439,7 +458,22 @@ function hasNpmPublishInvocation(command = "") {
       // can precede the subcommand; the value-taking ones live in the sets
       // above. Any other option here is still a config/global flag, so keep
       // scanning rather than stopping — a real `npm <opts> publish` must stay
-      // gated, and an unrecognized flag must not let it slip past.
+      // gated, and an unrecognized flag must not let it slip past. A
+      // value-taking option not enumerated above would otherwise leave its
+      // space-separated value as the next token, where the non-dash break
+      // masks `publish` (e.g. `npm --custom-prefix v publish`). Consume one
+      // following non-option token as that value, but never consume `publish`
+      // itself, never consume past `--`, and never consume a real subcommand.
+      const next = tokens[i + 1];
+      if (
+        next !== undefined &&
+        next !== "--" &&
+        !next.startsWith("-") &&
+        next !== "publish" &&
+        !NPM_SUBCOMMANDS.has(next)
+      ) {
+        i += 1;
+      }
       continue;
     }
   }
@@ -477,10 +511,17 @@ function hasGhReleaseInvocation(command = "") {
     for (let i = 0; i < tokens.length; i += 1) {
       const token = tokens[i];
       if (token === "release") {
-        // Only the mutating subcommands (create/upload/delete/edit) are
-        // high-impact; read-only `gh release view|list|download` must pass.
+        // Only the mutating subcommands (create/upload/delete/delete-asset/edit)
+        // are high-impact; read-only `gh release view|list|download` must pass.
         const subcommand = tokens[i + 1];
-        return GH_RELEASE_MUTATING_SUBCOMMANDS.has(subcommand);
+        if (GH_RELEASE_MUTATING_SUBCOMMANDS.has(subcommand)) return true;
+        // Read-only release subcommand: do not return false here. A chained
+        // command may pair a read-only release with a mutating one (e.g.
+        // `gh release view v1 && gh release upload v1 app.zip`); break out of
+        // this invocation's tokens so the outer matchAll scan reaches the next
+        // `gh` invocation. (GH_INVOCATION stops at &/;/|, so each `gh` is its
+        // own match.)
+        break;
       }
       if (token === "--" || !token.startsWith("-")) break;
 

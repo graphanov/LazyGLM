@@ -336,8 +336,8 @@ test("passes non-release gh commands with global options", async () => {
 });
 
 test("passes read-only gh release inspections as non-mutating", async () => {
-  // Only mutating release subcommands (create/upload/delete/edit) are
-  // high-impact; view/list/download are read-only and must not be blocked.
+  // Only mutating release subcommands (create/upload/delete/delete-asset/edit)
+  // are high-impact; view/list/download are read-only and must not be blocked.
   const commands = [
     "gh release view v1.2.3",
     "gh release list",
@@ -352,6 +352,40 @@ test("passes read-only gh release inspections as non-mutating", async () => {
         "Inspects GitHub Release metadata without mutating the repository or any published artifact.",
     });
     assert.equal(res, undefined, command);
+  }
+});
+
+test("blocks gh release delete-asset as a mutating release command", async () => {
+  const commands = [
+    "gh release delete-asset v1.2.3 build.zip",
+    "gh -R owner/repo release delete-asset v1.2.3 build.zip",
+  ];
+
+  for (const command of commands) {
+    const res = await pre("run_shell", {
+      command,
+      consequence_prediction:
+        "Deletes a release asset and may remove a published binary that users or automation depend on.",
+    });
+    assert.equal(res.decision, "block", command);
+    assert.match(res.reason, /High-impact shell commands/i, command);
+  }
+});
+
+test("blocks mutating gh release commands after read-only release inspections", async () => {
+  const commands = [
+    "gh release view v1.2.3 && gh release upload v1.2.3 app.zip",
+    "gh release list; gh release delete v1.2.3",
+  ];
+
+  for (const command of commands) {
+    const res = await pre("run_shell", {
+      command,
+      consequence_prediction:
+        "Reads release state first, then mutates the release artifact or tag and could publish or remove assets.",
+    });
+    assert.equal(res.decision, "block", command);
+    assert.match(res.reason, /High-impact shell commands/i, command);
   }
 });
 
@@ -435,6 +469,8 @@ test("blocks npm publish with config flags before publish without mitigation", a
     "npm --include=optional publish",
     "npm --include optional publish",
     "npm --no-audit publish",
+    "npm --custom-prefix v publish",
+    "npm --custom-prefix=v publish",
   ];
 
   for (const command of commands) {
