@@ -105,6 +105,12 @@ test("passes benign shell command strings without high-impact classification", a
     "env -S 'bash -lc \"npm test\"'",
     "eval 'npm test'",
     "bash -lc 'eval \"npm test\"'",
+    "echo rm -rf dist",
+    "bash -lc 'echo rm -rf dist'",
+    "printf '%s\\n' npm publish",
+    "echo npm publish",
+    "echo git push origin main",
+    "echo gh release create v1.2.3",
   ];
 
   for (const command of commands) {
