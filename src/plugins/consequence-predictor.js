@@ -626,6 +626,19 @@ function hasShellExpansionHighImpact(command = "", depth = 0) {
       continue;
     }
 
+    // Bash process substitutions (`<(cmd)` / `>(cmd)`) execute the nested
+    // command before the visible command completes. Quotes make this syntax
+    // literal, unlike `$()` and backticks inside double quotes.
+    if (!quote && (ch === "<" || ch === ">") && text[i + 1] === "(") {
+      const close = matchingParenIndex(text, i + 1);
+      if (close !== -1) {
+        const nestedCommand = text.slice(i + 2, close);
+        if (isHighImpactShell(nestedCommand, depth + 1)) return true;
+        i = close;
+      }
+      continue;
+    }
+
     if (ch === "(" && startsShellSubshellGroup(text, i)) {
       const close = matchingParenIndex(text, i);
       if (close !== -1) {

@@ -728,9 +728,13 @@ test("blocks high-impact shell commands inside substitutions and subshell groups
     "echo $(npm publish)",
     'echo "$(git push origin main)"',
     "echo `rm -rf dist`",
+    "cat <(npm publish)",
+    "tee >(git push origin main)",
+    "diff <(npm pack --dry-run) <(gh release create v1.2.3)",
     "(npm publish)",
     "gh release view v1.2.3 && (gh release upload v1.2.3 app.zip)",
     "echo $(bash -lc 'gh release create v1.2.3')",
+    "bash -lc 'cat <(gh release upload v1.2.3 app.zip)'",
   ];
 
   for (const command of commands) {
@@ -750,6 +754,8 @@ test("passes benign or quoted-literal shell expansions without high-impact class
     "echo '`rm -rf dist`'",
     "echo '$(npm publish)'",
     "echo '(npm publish)'",
+    'echo "<(npm publish)"',
+    "echo '>(gh release create v1.2.3)'",
   ];
 
   for (const command of commands) {
