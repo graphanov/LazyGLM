@@ -202,7 +202,8 @@ const NPM_REGISTRY_MUTATION_SUBCOMMANDS = new Set(["publish", "pub", "unpublish"
 // `npm unpublish` command. Treat those nested registry mutations as high-impact
 // without over-blocking local scripts such as `npm exec -- npm run publish`.
 const NPM_EXEC_SUBCOMMANDS = new Set(["exec", "x"]);
-const NPM_EXEC_OPTIONS_WITH_VALUE = new Set(["-c", "--call", "-p", "--package"]);
+const NPM_EXEC_CALL_OPTIONS_WITH_VALUE = new Set(["-c", "--call"]);
+const NPM_EXEC_PACKAGE_OPTIONS_WITH_VALUE = new Set(["-p", "--package"]);
 
 // npm subcommands. Used only to decide whether a non-option token that follows
 // an unrecognized config option is that option's value or the real subcommand
@@ -508,6 +509,15 @@ function hasRemoteInstallerPipeline(command = "") {
   return false;
 }
 
+function npmShellCommandHasRegistryMutation(command = "", depth = 0) {
+  if (depth >= 3) return false;
+  const commandText = String(command);
+  for (const match of commandText.matchAll(NPM_INVOCATION)) {
+    if (npmTokensHaveRegistryMutation(shellWords(match.groups?.args || ""), 0, depth)) return true;
+  }
+  return false;
+}
+
 function nestedNpmCommandHasRegistryMutation(tokens, start, depth) {
   for (let i = start; i < tokens.length; i += 1) {
     const token = tokens[i];
@@ -528,12 +538,22 @@ function npmExecHasRegistryMutation(tokens, start, depth) {
     if (!token.startsWith("-")) return nestedNpmCommandHasRegistryMutation(tokens, i, depth);
 
     const option = npmGlobalOptionName(token);
-    if (NPM_GLOBAL_OPTIONS_WITH_VALUE.has(option) || NPM_EXEC_OPTIONS_WITH_VALUE.has(option)) {
+    if (NPM_EXEC_CALL_OPTIONS_WITH_VALUE.has(option)) {
+      const call = token.includes("=") ? token.slice(token.indexOf("=") + 1) : tokens[i + 1];
+      if (call !== undefined && npmShellCommandHasRegistryMutation(call, depth + 1)) return true;
       if (!token.includes("=")) i += 1;
       continue;
     }
+    if (NPM_GLOBAL_OPTIONS_WITH_VALUE.has(option) || NPM_EXEC_PACKAGE_OPTIONS_WITH_VALUE.has(option)) {
+      if (!token.includes("=")) i += 1;
+      continue;
+    }
+    if (token.startsWith("-c") && token.length > 2) {
+      if (npmShellCommandHasRegistryMutation(token.slice(2), depth + 1)) return true;
+      continue;
+    }
     if (
-      (token.startsWith("-w") || token.startsWith("-C") || token.startsWith("-p") || token.startsWith("-c")) &&
+      (token.startsWith("-w") || token.startsWith("-C") || token.startsWith("-p")) &&
       token.length > 2
     ) {
       continue;
@@ -599,11 +619,7 @@ function npmTokensHaveRegistryMutation(tokens, start = 0, depth = 0) {
 }
 
 function hasNpmRegistryMutationInvocation(command = "") {
-  const commandText = String(command);
-  for (const match of commandText.matchAll(NPM_INVOCATION)) {
-    if (npmTokensHaveRegistryMutation(shellWords(match.groups?.args || ""))) return true;
-  }
-  return false;
+  return npmShellCommandHasRegistryMutation(command, 0);
 }
 
 function hasGitPushInvocation(command = "") {
