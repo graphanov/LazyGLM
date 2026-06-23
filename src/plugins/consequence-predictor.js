@@ -556,6 +556,24 @@ function hasGitPushInvocation(command = "") {
   return false;
 }
 
+function ghReleaseSubcommandAfterOptions(tokens, start) {
+  for (let i = start; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token === "--") return tokens[i + 1];
+    if (!token.startsWith("-")) return token;
+
+    const option = optionName(token);
+    if (GH_GLOBAL_OPTIONS_WITH_VALUE.has(option)) {
+      if (!token.includes("=")) i += 1;
+      continue;
+    }
+    if (token.startsWith("-R") && token.length > 2) continue;
+    if (GH_GLOBAL_OPTION_FLAGS.has(option)) continue;
+    return undefined;
+  }
+  return undefined;
+}
+
 function hasGhReleaseInvocation(command = "") {
   const commandText = String(command);
   for (const match of commandText.matchAll(GH_INVOCATION)) {
@@ -566,7 +584,10 @@ function hasGhReleaseInvocation(command = "") {
       if (token === "release") {
         // Only the mutating subcommands (create/new/upload/delete/delete-asset/edit)
         // are high-impact; read-only `gh release view|list|download` must pass.
-        const subcommand = tokens[i + 1];
+        // gh inherited flags such as -R/--repo can appear either before
+        // `release` or between `release` and the subcommand, so skip those
+        // parent options before classifying the subcommand.
+        const subcommand = ghReleaseSubcommandAfterOptions(tokens, i + 1);
         if (GH_RELEASE_MUTATING_SUBCOMMANDS.has(subcommand)) return true;
         // Read-only release subcommand: do not return false here. A chained
         // command may pair a read-only release with a mutating one (e.g.

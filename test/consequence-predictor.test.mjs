@@ -353,6 +353,25 @@ test("passes non-release gh commands with global options", async () => {
   assert.equal(res, undefined);
 });
 
+test("blocks gh release commands with parent options before mutating subcommands", async () => {
+  const commands = [
+    "gh release -R owner/repo create v1.2.3",
+    "gh release --repo owner/repo create v1.2.3",
+    "gh release --repo=owner/repo edit v1.2.3 --notes updated",
+    "gh release -Rowner/repo upload v1.2.3 ./asset.zip",
+  ];
+
+  for (const command of commands) {
+    const res = await pre("run_shell", {
+      command,
+      consequence_prediction:
+        "Mutates GitHub Release metadata or assets and may publish or retract artifacts that users or automation depend on.",
+    });
+    assert.equal(res.decision, "block", command);
+    assert.match(res.reason, /High-impact shell commands/i, command);
+  }
+});
+
 test("passes read-only gh release inspections as non-mutating", async () => {
   // Only mutating release subcommands (create/upload/delete/delete-asset/edit)
   // are high-impact; view/list/download are read-only and must not be blocked.
@@ -361,6 +380,8 @@ test("passes read-only gh release inspections as non-mutating", async () => {
     "gh release list",
     "gh release download v1.2.3",
     "gh -R owner/repo release view v1.2.3",
+    "gh release -R owner/repo view v1.2.3",
+    "gh release --repo owner/repo list",
   ];
 
   for (const command of commands) {
