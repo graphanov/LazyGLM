@@ -29,6 +29,44 @@ const CYAN = "\x1b[36m";
 const YELLOW = "\x1b[33m";
 const GREEN = "\x1b[32m";
 const RESET = "\x1b[0m";
+const TOOL_INDENT = "   ";
+const TOOL_DIVIDER_RULE = "─".repeat(18);
+
+function ansi(code, { isTTY = true } = {}) {
+  return isTTY ? code : "";
+}
+
+function displayValue(value) {
+  if (value === undefined || value === null) return "";
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+export function formatReasoning(text = "", opts = {}) {
+  return `${ansi(GRAY, opts)}✶ ${text}`;
+}
+
+export function formatText(text = "") {
+  return `💬 ${text}`;
+}
+
+export function formatToolCall(name, args = "", opts = {}) {
+  const argText = truncate(displayValue(args), 100);
+  return `${TOOL_INDENT}${ansi(CYAN, opts)}🔧 ${name}${ansi(RESET, opts)}${ansi(DIM, opts)}(${argText})${ansi(RESET, opts)}`;
+}
+
+export function formatToolResult(result = "", opts = {}) {
+  const preview = truncate(displayValue(result), 400).replace(/\n/g, `\n${TOOL_INDENT}${ansi(GREEN, opts)}`);
+  return `${TOOL_INDENT}${ansi(GREEN, opts)}↳ ${preview}${ansi(RESET, opts)}`;
+}
+
+export function turnDivider(opts = {}) {
+  return `${TOOL_INDENT}${ansi(DIM, opts)}${TOOL_DIVIDER_RULE} tools ${TOOL_DIVIDER_RULE}${ansi(RESET, opts)}`;
+}
 
 const REPL_PERSONA = `You are LazyGLM, a terminal-based AI coding agent connected directly to the user's file system via a CLI.
 
@@ -75,34 +113,55 @@ class LineQueue {
 // --- streaming renderer (shared across REPL turns and /ultrawork) ---
 let streamOpen = false;
 let streamMode = null; // "text" | "reasoning"
+let toolDividerShown = false;
+let toolDividerKey = null;
+
+function renderOpts() {
+  return { isTTY: process.stdout.isTTY === true };
+}
+
+function resetTurnDivider(key = null) {
+  toolDividerKey = key;
+  toolDividerShown = false;
+}
+
+function writeTurnDivider(key = toolDividerKey) {
+  if (key !== toolDividerKey) resetTurnDivider(key);
+  if (toolDividerShown) return;
+  toolDividerShown = true;
+  if (process.stdout.isTTY === true) process.stdout.write(`${turnDivider(renderOpts())}\n`);
+}
 
 function closeStream() {
   if (streamOpen) {
-    process.stdout.write(RESET + "\n");
+    process.stdout.write(ansi(RESET, renderOpts()) + "\n");
     streamOpen = false;
     streamMode = null;
   }
 }
 
 function renderDelta(d) {
+  const opts = renderOpts();
   if (d.type === "reasoning") {
     if (!streamOpen) {
-      process.stdout.write(GRAY + "✶ ");
+      process.stdout.write(formatReasoning(d.text, opts));
       streamOpen = true;
       streamMode = "reasoning";
     } else if (streamMode !== "reasoning") {
-      process.stdout.write(RESET + "\n" + GRAY + "✶ ");
+      process.stdout.write(`${ansi(RESET, opts)}\n${formatReasoning(d.text, opts)}`);
       streamMode = "reasoning";
+    } else {
+      process.stdout.write(d.text);
     }
-    process.stdout.write(d.text);
   } else if (d.type === "text") {
-    if (streamOpen && streamMode === "reasoning") process.stdout.write(RESET + "\n");
-    if (!streamOpen || streamMode !== "text") process.stdout.write("\n💬 ");
+    if (streamOpen && streamMode === "reasoning") process.stdout.write(`${ansi(RESET, opts)}\n`);
+    if (!streamOpen || streamMode !== "text") process.stdout.write(formatText());
     streamOpen = true;
     streamMode = "text";
     process.stdout.write(d.text);
   } else if (d.type === "tool_call_start") {
     closeStream();
+    writeTurnDivider();
   }
 }
 
@@ -154,6 +213,7 @@ export function replayIntoContext(events, ctx) {
 function renderUltraworkEvent(ev) {
   switch (ev.type) {
     case "start":
+      resetTurnDivider("ultrawork:start");
       console.log(`\n🚀 iteration start | model: ${ev.model} | task: ${truncate(ev.task, 120)}`);
       break;
     case "reasoning_delta":
@@ -167,10 +227,11 @@ function renderUltraworkEvent(ev) {
       break;
     case "tool_call":
       closeStream();
-      console.log(`   ${DIM}🔧 ${ev.name}(${truncate(ev.input, 100)})${RESET}`);
+      writeTurnDivider(ev.turn === undefined ? "ultrawork" : `ultrawork:${ev.turn}`);
+      console.log(formatToolCall(ev.name, ev.input, renderOpts()));
       break;
     case "tool_result":
-      console.log(`   ${GRAY}↳ ${truncate(ev.result, 300)}${RESET}`);
+      console.log(formatToolResult(ev.result, renderOpts()));
       break;
     case "assistant_text":
       break; // already streamed via assistant_delta
@@ -449,6 +510,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
 
     const MAX_TURNS = 40;
     for (let turn = 1; turn <= MAX_TURNS; turn++) {
+      resetTurnDivider(`repl:${turn}`);
       await ctx.maybeCompact({
         onCompact: async ({ compactionCount }) => {
           await engine.fire("PostCompact", { compactionCount });
@@ -502,6 +564,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
       }
 
       // execute each tool call (Pre/PostToolUse hooks fire around it)
+      writeTurnDivider();
       let finished = false;
       for (const tc of resp.tool_calls) {
         const handler = TOOL_HANDLERS[tc.name];
@@ -519,9 +582,9 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
         let resultStr;
         if (pre.blocks.length) {
           resultStr = `Blocked by hook:\n${pre.blocks.join("\n")}`;
-          process.stdout.write(`\n   ${YELLOW}⛔ ${tc.name} blocked: ${pre.blocks.join("; ")}${RESET}\n`);
+          process.stdout.write(`${TOOL_INDENT}${ansi(YELLOW, renderOpts())}⛔ ${tc.name} blocked: ${pre.blocks.join("; ")}${ansi(RESET, renderOpts())}\n`);
         } else {
-          process.stdout.write(`\n   ${DIM}🔧 ${tc.name}(${truncate(JSON.stringify(tc.arguments), 100)})${RESET}\n`);
+          process.stdout.write(`${formatToolCall(tc.name, tc.arguments, renderOpts())}\n`);
           let result;
           try {
             result = await handler(tc.arguments, {
@@ -534,11 +597,10 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
           if (result && result.__finish) {
             finished = true;
             resultStr = `finish: ${result.summary}`;
-            process.stdout.write(`\n   ${GREEN}✅ ${result.summary}${RESET}\n`);
+            process.stdout.write(`${TOOL_INDENT}${ansi(GREEN, renderOpts())}✅ ${result.summary}${ansi(RESET, renderOpts())}\n`);
           } else {
             resultStr = typeof result === "string" ? result : JSON.stringify(result);
-            const preview = truncate(resultStr, 400).replace(/\n/g, `\n   ${GRAY}`);
-            process.stdout.write(`   ${GRAY}↳ ${preview}${RESET}\n`);
+            process.stdout.write(`${formatToolResult(resultStr, renderOpts())}\n`);
           }
           const post = await engine.fire("PostToolUse", {
             tool_name: tc.name,
