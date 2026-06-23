@@ -386,6 +386,7 @@ function shellPipelines(value = "") {
         index += 1;
       } else {
         pushStage();
+        if (text[index + 1] === "&") index += 1;
       }
       continue;
     }
@@ -529,6 +530,10 @@ function startsShellSubshellGroup(text, index) {
   return previous === "" || previous === ";" || previous === "|" || previous === "&" || previous === "(";
 }
 
+function startsShellCommandWord(text, index) {
+  return startsShellSubshellGroup(text, index);
+}
+
 function matchingParenIndex(text, openIndex) {
   let depth = 1;
   let quote = null;
@@ -638,6 +643,7 @@ function hasShellExpansionHighImpact(command = "", depth = 0) {
       if (close !== -1) {
         const nestedCommand = text.slice(i + 2, close);
         if (isHighImpactShell(nestedCommand, depth + 1)) return true;
+        if (startsShellCommandWord(text, i) && hasRemoteDownloadInvocation(nestedCommand)) return true;
         i = close;
       }
       continue;
@@ -648,6 +654,7 @@ function hasShellExpansionHighImpact(command = "", depth = 0) {
       if (close !== -1) {
         const nestedCommand = text.slice(i + 1, close);
         if (isHighImpactShell(nestedCommand, depth + 1)) return true;
+        if (startsShellCommandWord(text, i) && hasRemoteDownloadInvocation(nestedCommand)) return true;
         i = close;
       }
       continue;
