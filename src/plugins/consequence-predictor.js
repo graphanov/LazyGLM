@@ -198,6 +198,11 @@ const NPM_PUBLISH_OPTION_FLAGS = new Set(["--provenance"]);
 // Registry-mutating npm subcommands that must be classified high-impact. `pub`
 // is an alias for `publish`; `unpublish` removes a published package/version.
 const NPM_REGISTRY_MUTATION_SUBCOMMANDS = new Set(["publish", "pub", "unpublish"]);
+// `npm exec` and the documented `npm x` alias can run a nested `npm publish` /
+// `npm unpublish` command. Treat those nested registry mutations as high-impact
+// without over-blocking local scripts such as `npm exec -- npm run publish`.
+const NPM_EXEC_SUBCOMMANDS = new Set(["exec", "x"]);
+const NPM_EXEC_OPTIONS_WITH_VALUE = new Set(["-c", "--call", "-p", "--package"]);
 
 // npm subcommands. Used only to decide whether a non-option token that follows
 // an unrecognized config option is that option's value or the real subcommand
@@ -214,7 +219,7 @@ const NPM_SUBCOMMANDS = new Set([
   "prune", "pub", "publish", "query", "rebuild", "remove", "restart", "rm", "root",
   "run", "run-script", "search", "set", "shrinkwrap", "start", "stop", "t",
   "team", "test", "token", "uninstall", "unpublish", "unstar", "update",
-  "upgrade", "version", "view", "whoami",
+  "upgrade", "version", "view", "whoami", "x",
 ]);
 
 function hasRecursiveForceRm(command = "") {
@@ -503,50 +508,100 @@ function hasRemoteInstallerPipeline(command = "") {
   return false;
 }
 
+function nestedNpmCommandHasRegistryMutation(tokens, start, depth) {
+  for (let i = start; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (isAssignment(token)) continue;
+    if (commandName(token) === "npm") return npmTokensHaveRegistryMutation(tokens, i + 1, depth + 1);
+    return false;
+  }
+  return false;
+}
+
+function npmExecHasRegistryMutation(tokens, start, depth) {
+  if (depth >= 3) return false;
+
+  for (let i = start; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token === "--") return nestedNpmCommandHasRegistryMutation(tokens, i + 1, depth);
+    if (isAssignment(token)) continue;
+    if (!token.startsWith("-")) return nestedNpmCommandHasRegistryMutation(tokens, i, depth);
+
+    const option = npmGlobalOptionName(token);
+    if (NPM_GLOBAL_OPTIONS_WITH_VALUE.has(option) || NPM_EXEC_OPTIONS_WITH_VALUE.has(option)) {
+      if (!token.includes("=")) i += 1;
+      continue;
+    }
+    if (
+      (token.startsWith("-w") || token.startsWith("-C") || token.startsWith("-p") || token.startsWith("-c")) &&
+      token.length > 2
+    ) {
+      continue;
+    }
+    if (NPM_GLOBAL_OPTION_FLAGS.has(option)) continue;
+
+    const next = tokens[i + 1];
+    if (
+      next !== undefined &&
+      next !== "--" &&
+      !next.startsWith("-") &&
+      commandName(next) !== "npm" &&
+      !NPM_SUBCOMMANDS.has(next)
+    ) {
+      i += 1;
+    }
+  }
+  return false;
+}
+
+function npmTokensHaveRegistryMutation(tokens, start = 0, depth = 0) {
+  for (let i = start; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (NPM_REGISTRY_MUTATION_SUBCOMMANDS.has(token)) return true;
+    if (NPM_EXEC_SUBCOMMANDS.has(token)) return npmExecHasRegistryMutation(tokens, i + 1, depth);
+    if (token === "--" || !token.startsWith("-")) break;
+
+    const option = npmGlobalOptionName(token);
+    if (NPM_GLOBAL_OPTIONS_WITH_VALUE.has(option)) {
+      if (!token.includes("=")) i += 1;
+      continue;
+    }
+    if (NPM_PUBLISH_OPTIONS_WITH_VALUE.has(option)) {
+      if (!token.includes("=")) i += 1;
+      continue;
+    }
+    if ((token.startsWith("-w") || token.startsWith("-C")) && token.length > 2) continue;
+    if (NPM_GLOBAL_OPTION_FLAGS.has(option) || NPM_PUBLISH_OPTION_FLAGS.has(option)) continue;
+    // npm exposes many config flags (e.g. --omit, --include, --no-audit) that
+    // can precede the subcommand; the value-taking ones live in the sets
+    // above. Any other option here is still a config/global flag, so keep
+    // scanning rather than stopping — a real `npm <opts> publish` must stay
+    // gated, and an unrecognized flag must not let it slip past. A
+    // value-taking option not enumerated above would otherwise leave its
+    // space-separated value as the next token, where the non-dash break
+    // masks a registry mutation (e.g. `npm --custom-prefix v publish`). Consume
+    // one following non-option token as that value, but never consume a
+    // registry mutation itself, never consume past `--`, and never consume a
+    // real subcommand.
+    const next = tokens[i + 1];
+    if (
+      next !== undefined &&
+      next !== "--" &&
+      !next.startsWith("-") &&
+      !NPM_REGISTRY_MUTATION_SUBCOMMANDS.has(next) &&
+      !NPM_SUBCOMMANDS.has(next)
+    ) {
+      i += 1;
+    }
+    continue;
+  }
+  return false;
+}
+
 function hasNpmRegistryMutationInvocation(command = "") {
   const commandText = String(command);
   for (const match of commandText.matchAll(NPM_INVOCATION)) {
-    const tokens = shellWords(match.groups?.args || "");
-
-    for (let i = 0; i < tokens.length; i += 1) {
-      const token = tokens[i];
-      if (NPM_REGISTRY_MUTATION_SUBCOMMANDS.has(token)) return true;
-      if (token === "--" || !token.startsWith("-")) break;
-
-      const option = npmGlobalOptionName(token);
-      if (NPM_GLOBAL_OPTIONS_WITH_VALUE.has(option)) {
-        if (!token.includes("=")) i += 1;
-        continue;
-      }
-      if (NPM_PUBLISH_OPTIONS_WITH_VALUE.has(option)) {
-        if (!token.includes("=")) i += 1;
-        continue;
-      }
-      if ((token.startsWith("-w") || token.startsWith("-C")) && token.length > 2) continue;
-      if (NPM_GLOBAL_OPTION_FLAGS.has(option) || NPM_PUBLISH_OPTION_FLAGS.has(option)) continue;
-      // npm exposes many config flags (e.g. --omit, --include, --no-audit) that
-      // can precede the subcommand; the value-taking ones live in the sets
-      // above. Any other option here is still a config/global flag, so keep
-      // scanning rather than stopping — a real `npm <opts> publish` must stay
-      // gated, and an unrecognized flag must not let it slip past. A
-      // value-taking option not enumerated above would otherwise leave its
-      // space-separated value as the next token, where the non-dash break
-      // masks a registry mutation (e.g. `npm --custom-prefix v publish`). Consume
-      // one following non-option token as that value, but never consume a
-      // registry mutation itself, never consume past `--`, and never consume a
-      // real subcommand.
-      const next = tokens[i + 1];
-      if (
-        next !== undefined &&
-        next !== "--" &&
-        !next.startsWith("-") &&
-        !NPM_REGISTRY_MUTATION_SUBCOMMANDS.has(next) &&
-        !NPM_SUBCOMMANDS.has(next)
-      ) {
-        i += 1;
-      }
-      continue;
-    }
+    if (npmTokensHaveRegistryMutation(shellWords(match.groups?.args || ""))) return true;
   }
   return false;
 }

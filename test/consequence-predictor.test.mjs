@@ -258,6 +258,35 @@ test("blocks npm unpublish as a registry mutation without mitigation", async () 
   }
 });
 
+test("blocks npm registry mutations nested under npm exec without mitigation", async () => {
+  const commands = [
+    "npm exec -- npm unpublish lazyglm@0.1.0",
+    "npm exec -- npm --registry https://registry.npmjs.org unpublish lazyglm@0.1.0",
+    "npm exec --package npm -- npm pub",
+    "npm x -- npm publish",
+    "npm --workspace packages/foo exec -- npm publish",
+  ];
+
+  for (const command of commands) {
+    const res = await pre("run_shell", {
+      command,
+      consequence_prediction:
+        "Runs a nested npm command that mutates the package registry and may publish or remove package versions users depend on.",
+    });
+    assert.equal(res.decision, "block", command);
+    assert.match(res.reason, /High-impact shell commands/i, command);
+  }
+});
+
+test("passes npm exec when nested npm only runs a local script", async () => {
+  const res = await pre("run_shell", {
+    command: "npm exec -- npm run publish",
+    consequence_prediction:
+      "Runs a nested local npm script through npm exec; failures are limited to script execution and do not directly mutate the npm registry.",
+  });
+  assert.equal(res, undefined);
+});
+
 test("blocks npm publish with publish-scoped options before publish without mitigation", async () => {
   const commands = [
     "npm --access public publish",
