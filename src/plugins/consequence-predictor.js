@@ -67,7 +67,7 @@ const SUDO_OPTIONS_WITH_VALUE = new Set([
 // installer is piped through sudo in one of these shell modes, the pipeline
 // executes a shell even though no shell binary follows sudo.
 const SUDO_SHELL_MODE_FLAGS = new Set(["--shell", "--login"]);
-const ENV_OPTIONS_WITH_VALUE = new Set(["-C", "--chdir", "-S", "-u", "--unset"]);
+const ENV_OPTIONS_WITH_VALUE = new Set(["-C", "--chdir", "-S", "--split-string", "-u", "--unset"]);
 
 const RM_INVOCATION = /\brm\b(?<args>[^;&|\n]*)/gi;
 const RECURSIVE_METADATA_INVOCATION = /\b(?:chmod|chown)\b(?<args>[^;&|\n]*)/gi;
@@ -331,11 +331,17 @@ function splitShortCluster(token, valueChars) {
   for (let i = 0; i < body.length; i += 1) {
     const ch = body[i];
     if (valueChars.has(ch)) {
-      return { flags, valueConsumesNext: body.slice(i + 1).length === 0 };
+      const attachedValue = body.slice(i + 1);
+      return {
+        flags,
+        valueChar: ch,
+        attachedValue,
+        valueConsumesNext: attachedValue.length === 0,
+      };
     }
     flags.push(ch);
   }
-  return { flags, valueConsumesNext: false };
+  return { flags, valueChar: null, attachedValue: "", valueConsumesNext: false };
 }
 
 function skipWrapperOptions(tokens, start, optionsWithValue) {
@@ -396,6 +402,51 @@ function sudoLaunchesShell(tokens, start) {
   return false;
 }
 
+function envSplitStringInvokesShell(value) {
+  return pipelineTargetInvokesShell(shellWords(value));
+}
+
+// GNU env's -S/--split-string option processes its value into the command and
+// arguments to execute. A remote installer such as `curl url | env -S 'bash -eux'`
+// therefore invokes bash even though the shell binary is inside the option value
+// rather than a later token. Inspect the split value instead of skipping it as a
+// plain wrapper option argument.
+function envTargetInvokesShell(tokens, start) {
+  const valueChars = shortValueOptionChars(ENV_OPTIONS_WITH_VALUE);
+  let i = start;
+  while (i < tokens.length) {
+    const token = tokens[i];
+    if (token === "--") return pipelineTargetInvokesShell(tokens.slice(i + 1));
+    if (isAssignment(token)) {
+      i += 1;
+      continue;
+    }
+    if (!token.startsWith("-")) return pipelineTargetInvokesShell(tokens.slice(i));
+
+    if (token.startsWith("--")) {
+      const option = optionName(token);
+      if (option === "--split-string") {
+        const value = token.includes("=") ? token.slice(token.indexOf("=") + 1) : tokens[i + 1];
+        if (value !== undefined && envSplitStringInvokesShell(value)) return true;
+        i += token.includes("=") ? 1 : 2;
+        continue;
+      }
+      i += 1;
+      if (ENV_OPTIONS_WITH_VALUE.has(option) && !token.includes("=")) i += 1;
+      continue;
+    }
+
+    const cluster = splitShortCluster(token, valueChars);
+    if (cluster.valueChar === "S") {
+      const value = cluster.valueConsumesNext ? tokens[i + 1] : cluster.attachedValue;
+      if (value !== undefined && envSplitStringInvokesShell(value)) return true;
+    }
+    i += 1;
+    if (cluster.valueConsumesNext) i += 1;
+  }
+  return false;
+}
+
 function pipelineTargetInvokesShell(tokens) {
   let i = 0;
   while (i < tokens.length) {
@@ -407,8 +458,7 @@ function pipelineTargetInvokesShell(tokens) {
       continue;
     }
     if (name === "env") {
-      i = skipWrapperOptions(tokens, i + 1, ENV_OPTIONS_WITH_VALUE);
-      continue;
+      return envTargetInvokesShell(tokens, i + 1);
     }
     if (name === "command") {
       i = skipWrapperOptions(tokens, i + 1, NO_OPTIONS_WITH_VALUE);
