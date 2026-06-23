@@ -195,6 +195,8 @@ const NPM_GLOBAL_OPTION_FLAGS = new Set([
 const NPM_PUBLISH_OPTIONS_WITH_VALUE = new Set(["--access", "--provenance-file"]);
 const NPM_PUBLISH_OPTION_FLAGS = new Set(["--provenance"]);
 
+const NPM_PUBLISH_SUBCOMMANDS = new Set(["publish", "pub"]);
+
 // npm subcommands. Used only to decide whether a non-option token that follows
 // an unrecognized config option is that option's value or the real subcommand
 // (see hasNpmPublishInvocation). Listed conservatively so a value-taking
@@ -207,7 +209,7 @@ const NPM_SUBCOMMANDS = new Set([
   "explain", "explore", "find-dupes", "fund", "get", "help", "hook", "i",
   "init", "install", "install-clean", "link", "ln", "login", "logout", "ls",
   "org", "outdated", "owner", "pack", "ping", "pkg", "prefix", "profile",
-  "prune", "publish", "query", "rebuild", "remove", "restart", "rm", "root",
+  "prune", "pub", "publish", "query", "rebuild", "remove", "restart", "rm", "root",
   "run", "run-script", "search", "set", "shrinkwrap", "start", "stop", "t",
   "team", "test", "token", "uninstall", "unpublish", "unstar", "update",
   "upgrade", "version", "view", "whoami",
@@ -506,7 +508,7 @@ function hasNpmPublishInvocation(command = "") {
 
     for (let i = 0; i < tokens.length; i += 1) {
       const token = tokens[i];
-      if (token === "publish") return true;
+      if (NPM_PUBLISH_SUBCOMMANDS.has(token)) return true;
       if (token === "--" || !token.startsWith("-")) break;
 
       const option = npmGlobalOptionName(token);
@@ -535,7 +537,7 @@ function hasNpmPublishInvocation(command = "") {
         next !== undefined &&
         next !== "--" &&
         !next.startsWith("-") &&
-        next !== "publish" &&
+        !NPM_PUBLISH_SUBCOMMANDS.has(next) &&
         !NPM_SUBCOMMANDS.has(next)
       ) {
         i += 1;
@@ -629,9 +631,15 @@ function hasGhReleaseInvocation(command = "") {
 // counts as a mitigation signal. Bare `test`/`tests` is intentionally excluded
 // from the core word list: a path such as `rm -rf tests` names an affected
 // surface, not a mitigation. Test wording only counts when it is phrased as an
-// action or command that will validate the high-impact operation.
+// action or command that will validate the high-impact operation. Bare
+// `limited` is also excluded: it only counts when tied to an explicit bounded
+// target such as "limited to generated artifacts".
+const LIMITED_SCOPE_MITIGATION_ALTS =
+  "limit(?:ed|ing)?\\s+(?:to|within)\\s+(?:a\\s+|an\\s+|the\\s+)?(?:single|specific|named|targeted|scoped|bounded|local|current|selected|generated|disposable|temporary|repo|repository|workspace|file|files|path|paths|dir|directory|tree|artifact|artifacts|surface|scope)";
 const CORE_MITIGATION_WORD_ALTS =
-  "mitigat\\w*|rollback|recover\\w*|backup|dry[- ]?run|scop(?:e|ed|ing)|limit(?:ed|ing)?|verif(?:y|ies|ied|ying|ication)|confirm(?:ed|ing|s)?|non[- ]?destructive|no irreversible";
+  "mitigat\\w*|rollback|recover\\w*|backup|dry[- ]?run|scop(?:e|ed|ing)|" +
+  LIMITED_SCOPE_MITIGATION_ALTS +
+  "|verif(?:y|ies|ied|ying|ication)|confirm(?:ed|ing|s)?|non[- ]?destructive|no irreversible";
 const TEST_MITIGATION_ALTS =
   "(?:run|runs|running|rerun|reruns|rerunning|execute|executes|executing|pass|passes|passing)\\s+(?:the\\s+)?(?:unit\\s+|integration\\s+|smoke\\s+|regression\\s+)?tests?|" +
   "(?:npm|pnpm|yarn|node|pytest|cargo|go|make)\\s+test(?:s)?|" +

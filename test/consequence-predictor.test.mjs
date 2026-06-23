@@ -204,8 +204,10 @@ test("blocks git push with global options before push without mitigation", async
 test("blocks npm publish with global options before publish without mitigation", async () => {
   const commands = [
     "npm publish",
+    "npm pub",
     "npm --workspace packages/foo publish",
     "npm --registry https://registry.npmjs.org publish",
+    "npm --registry https://registry.npmjs.org pub",
     "npm --workspace=packages/foo --tag next publish",
     "npm -w packages/foo publish",
     // --tag-version-prefix takes a value not enumerated in the value-option
@@ -237,6 +239,7 @@ test("passes npm run publish script as non-publish subcommand", async () => {
 test("blocks npm publish with publish-scoped options before publish without mitigation", async () => {
   const commands = [
     "npm --access public publish",
+    "npm --access public pub",
     "npm --access=public publish",
     "npm --provenance publish",
     "npm --provenance-file ./prov.json publish",
@@ -270,6 +273,35 @@ test("passes high-impact shell commands with scoped mitigation", async () => {
       "Deletes only the generated dist directory before rebuilding; the scope is limited to disposable artifacts and npm test will verify the rebuild output.",
   });
   assert.equal(res, undefined);
+});
+
+test("passes high-impact shell commands with contextual limit wording", async () => {
+  const res = await pre("run_shell", {
+    command: "rm -rf dist",
+    consequence_prediction:
+      "Deletes generated artifacts; deletion is limited to generated artifacts in dist before continuing.",
+  });
+  assert.equal(res, undefined);
+});
+
+test("blocks high-impact shell commands when limited lacks a bounded target", async () => {
+  const res = await pre("run_shell", {
+    command: "rm -rf dist",
+    consequence_prediction:
+      "Deletes generated artifacts; failures are limited by normal command behavior and should be manageable.",
+  });
+  assert.equal(res.decision, "block");
+  assert.match(res.reason, /High-impact shell commands/i);
+});
+
+test("blocks high-impact shell commands when contextual limit wording is negated", async () => {
+  const res = await pre("run_shell", {
+    command: "rm -rf dist",
+    consequence_prediction:
+      "Deletes generated artifacts; the impact is not limited to generated files if the path is wrong.",
+  });
+  assert.equal(res.decision, "block");
+  assert.match(res.reason, /High-impact shell commands/i);
 });
 
 test("passes high-impact shell commands with verification wording", async () => {
@@ -554,6 +586,7 @@ test("blocks npm publish with config flags before publish without mitigation", a
   // a real registry publish bypass the high-impact gate.
   const commands = [
     "npm --omit dev publish",
+    "npm --omit dev pub",
     "npm --include=optional publish",
     "npm --include optional publish",
     "npm --no-audit publish",
