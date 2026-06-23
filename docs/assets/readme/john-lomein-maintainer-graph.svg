@@ -1,52 +1,59 @@
-<svg width="1100" height="500" viewBox="0 0 1100 500" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+<svg width="1200" height="620" viewBox="0 0 1200 620" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
 <title id="title">John Lomein maintainer graph</title>
 <desc id="desc">Flow from public issues and pull requests through CI, Codex review, John Lomein maintainer gate, and owner-only publish gates.</desc>
-<rect width="1100" height="500" rx="32" fill="#0B0D0E"/>
+<rect width="1200" height="620" rx="34" fill="#0B0D0E"/>
 <defs>
-  <linearGradient id="g" x1="0" y1="0" x2="1100" y2="500" gradientUnits="userSpaceOnUse">
+  <linearGradient id="g" x1="0" y1="0" x2="1200" y2="620" gradientUnits="userSpaceOnUse">
     <stop stop-color="#1E2324"/>
     <stop offset="1" stop-color="#0B0D0E"/>
   </linearGradient>
   <filter id="glow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="8" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
 </defs>
-<rect x="24" y="24" width="1052" height="452" rx="26" fill="url(#g)" stroke="#555D5C"/>
+<rect x="24" y="24" width="1152" height="572" rx="28" fill="url(#g)" stroke="#555D5C"/>
 <g font-family="Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif">
-  <text x="70" y="78" fill="#F1E9DA" font-size="32" font-weight="700">John Lomein maintains LazyGLM</text>
-  <text x="70" y="108" fill="#AAB2AE" font-size="17">Automated repo maintainer: reviews, fixes, verifies, and merges only after the latest head is clean.</text>
+  <text x="72" y="82" fill="#F1E9DA" font-size="34" font-weight="700">John Lomein maintains LazyGLM</text>
+  <text x="72" y="116" fill="#B7C0BB" font-size="18">Automated repo maintainer: reviews, fixes, verifies, and merges only after the latest head is clean.</text>
 
   <g fill="#15191A" stroke="#5A625F">
-    <rect x="70" y="170" width="170" height="90" rx="18"/>
-    <rect x="295" y="170" width="170" height="90" rx="18"/>
-    <rect x="520" y="170" width="170" height="90" rx="18"/>
-    <rect x="745" y="170" width="190" height="90" rx="18"/>
+    <rect x="72" y="178" width="190" height="98" rx="18"/>
+    <rect x="324" y="178" width="190" height="98" rx="18"/>
+    <rect x="576" y="178" width="190" height="98" rx="18"/>
+    <rect x="828" y="178" width="210" height="98" rx="18"/>
   </g>
-  <g fill="#F1E9DA" font-size="20" font-weight="700">
-    <text x="98" y="205">Issues + PRs</text>
-    <text x="327" y="205">CI + tests</text>
-    <text x="548" y="205">Codex review</text>
-    <text x="776" y="205">John gate</text>
+  <g fill="#F1E9DA" font-size="21" font-weight="700">
+    <text x="104" y="218">Issues + PRs</text>
+    <text x="362" y="218">CI + tests</text>
+    <text x="606" y="218">Codex review</text>
+    <text x="866" y="218">John gate</text>
   </g>
-  <g fill="#AAB2AE" font-size="14">
-    <text x="98" y="231">public work enters</text>
-    <text x="327" y="231">latest commit must pass</text>
-    <text x="548" y="231">independent review</text>
-    <text x="776" y="231">fix/review/resolve</text>
+  <g fill="#B7C0BB" font-size="15">
+    <text x="104" y="247">public work enters</text>
+    <text x="362" y="247">latest commit must pass</text>
+    <text x="606" y="247">independent review</text>
+    <text x="866" y="247">fix / review / resolve</text>
   </g>
   <g stroke="#5EF0C8" stroke-width="4" stroke-linecap="round" filter="url(#glow)">
-    <path d="M240 215H295"/>
-    <path d="M465 215H520"/>
-    <path d="M690 215H745"/>
-    <path d="M935 215H1000V315H930"/>
+    <path d="M262 227H324"/>
+    <path d="M514 227H576"/>
+    <path d="M766 227H828"/>
+    <path d="M1038 227H1090V372H1048"/>
   </g>
   <g>
-    <rect x="745" y="295" width="190" height="82" rx="18" fill="#1B1717" stroke="#E98652"/>
-    <text x="776" y="329" fill="#F1E9DA" font-size="20" font-weight="700">Owner gates</text>
-    <text x="776" y="354" fill="#F6C4B4" font-size="14">publish • release • secrets</text>
+    <rect x="824" y="326" width="224" height="104" rx="20" fill="#1B1717" stroke="#E98652"/>
+    <text x="858" y="366" fill="#F1E9DA" font-size="22" font-weight="700">Owner gates</text>
+    <text x="858" y="394" fill="#F6C4B4" font-size="15">publish • release • secrets</text>
   </g>
   <g>
-    <rect x="70" y="315" width="620" height="62" rx="18" fill="#111414" stroke="#37413F"/>
-    <text x="98" y="351" fill="#5EF0C8" font-size="18" font-weight="700">Safe recursion:</text>
-    <text x="224" y="351" fill="#D8D2C6" font-size="18">bots can propose and maintain; protected gates keep ownership human.</text>
+    <rect x="72" y="326" width="676" height="112" rx="20" fill="#111414" stroke="#37413F"/>
+    <text x="104" y="366" fill="#5EF0C8" font-size="20" font-weight="700">Safe recursion</text>
+    <text x="104" y="396" fill="#D8D2C6" font-size="18">Bots can propose and maintain.</text>
+    <text x="104" y="422" fill="#D8D2C6" font-size="18">Protected gates keep ownership human.</text>
   </g>
+  <g fill="#5EF0C8" opacity="0.72">
+    <rect x="72" y="498" width="22" height="22" rx="5"/>
+    <rect x="110" y="498" width="22" height="22" rx="5"/>
+    <rect x="148" y="498" width="22" height="22" rx="5"/>
+  </g>
+  <text x="188" y="516" fill="#B7C0BB" font-size="15">Latest-head checks, reviews, and threads decide whether a bot-maintained PR can close.</text>
 </g>
 </svg>
