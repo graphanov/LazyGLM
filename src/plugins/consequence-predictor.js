@@ -78,6 +78,10 @@ const SUDO_OPTIONS_WITH_VALUE = new Set([
 // executes a shell even though no shell binary follows sudo.
 const SUDO_SHELL_MODE_FLAGS = new Set(["--shell", "--login"]);
 const ENV_OPTIONS_WITH_VALUE = new Set(["-C", "--chdir", "-S", "--split-string", "-u", "--unset"]);
+const PIPELINE_COMMAND_WRAPPER_OPTIONS_WITH_VALUE = new Map([
+  ["nohup", NO_OPTIONS_WITH_VALUE],
+  ["nice", new Set(["-n", "--adjustment"])],
+]);
 
 const GIT_GLOBAL_OPTIONS_WITH_VALUE = new Set([
   "-C",
@@ -267,6 +271,10 @@ function gitGlobalOptionName(token) {
 function npmGlobalOptionName(token) {
   const equalsAt = token.indexOf("=");
   return equalsAt === -1 ? token : token.slice(0, equalsAt);
+}
+
+function isNpmExecutableName(name) {
+  return name === "npm" || /^npm@[^\s/]+$/.test(name);
 }
 
 function shellWords(value = "") {
@@ -822,6 +830,11 @@ function pipelineTargetInvokesShell(tokens) {
       i = skipWrapperOptions(tokens, i + 1, NO_OPTIONS_WITH_VALUE);
       continue;
     }
+    const wrapperOptions = PIPELINE_COMMAND_WRAPPER_OPTIONS_WITH_VALUE.get(name);
+    if (wrapperOptions) {
+      i = skipWrapperOptions(tokens, i + 1, wrapperOptions);
+      continue;
+    }
     if (isAssignment(tokens[i])) {
       i += 1;
       continue;
@@ -873,7 +886,7 @@ function npmShellCommandHasRegistryMutation(command = "", depth = 0) {
   for (const tokens of shellCommandStages(command)) {
     for (let commandIndex = 0; commandIndex < tokens.length; commandIndex += 1) {
       const name = commandName(tokens[commandIndex]);
-      if (name === "npm") {
+      if (isNpmExecutableName(name)) {
         if (npmTokensHaveRegistryMutation(tokens, commandIndex + 1, depth)) return true;
         continue;
       }
@@ -887,7 +900,7 @@ function nestedNpmCommandHasRegistryMutation(tokens, start, depth) {
   for (let i = start; i < tokens.length; i += 1) {
     const token = tokens[i];
     if (isAssignment(token)) continue;
-    if (commandName(token) === "npm") return npmTokensHaveRegistryMutation(tokens, i + 1, depth + 1);
+    if (isNpmExecutableName(commandName(token))) return npmTokensHaveRegistryMutation(tokens, i + 1, depth + 1);
     return false;
   }
   return false;
@@ -930,7 +943,7 @@ function npmExecHasRegistryMutation(tokens, start, depth) {
       next !== undefined &&
       next !== "--" &&
       !next.startsWith("-") &&
-      commandName(next) !== "npm" &&
+      !isNpmExecutableName(commandName(next)) &&
       !NPM_SUBCOMMANDS.has(next)
     ) {
       i += 1;
