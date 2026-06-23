@@ -91,8 +91,8 @@ const PIPELINE_COMMAND_WRAPPER_OPTIONS_WITH_VALUE = new Map([
 // executable that actually runs. The scanner is not a full shell parser, but it
 // must not stop at `if`/`do`/`then` while a high-impact command follows in the
 // same parsed stage.
-const SHELL_CONTROL_COMMAND_PREFIXES = new Set(["if", "then", "do", "else", "elif", "while", "until"]);
-const SHELL_CONTROL_STRUCTURE_WORDS = new Set(["for", "select", "case", "in", "fi", "done", "esac"]);
+const SHELL_CONTROL_COMMAND_PREFIXES = new Set(["!", "if", "then", "do", "else", "elif", "while", "until"]);
+const SHELL_CONTROL_STRUCTURE_WORDS = new Set(["for", "select", "in", "fi", "done", "esac"]);
 
 const GIT_GLOBAL_OPTIONS_WITH_VALUE = new Set([
   "-C",
@@ -447,6 +447,13 @@ function skipShellRedirection(tokens, index) {
   const operand = shellRedirectionOperand(tokens[index]);
   if (operand === undefined) return index;
   return operand === "" ? index + 2 : index + 1;
+}
+
+function caseArmCommandIndex(tokens, start) {
+  for (let i = start; i < tokens.length; i += 1) {
+    if (String(tokens[i]).endsWith(")")) return commandInvocationIndex(tokens, i + 1);
+  }
+  return -1;
 }
 
 // Short options that consume a value (e.g. sudo -u, git -C) as single chars,
@@ -957,6 +964,14 @@ function commandInvocationIndex(tokens, start = 0) {
     if (SHELL_CONTROL_COMMAND_PREFIXES.has(name)) {
       i += 1;
       continue;
+    }
+    if (name === "case") {
+      const caseCommandIndex = caseArmCommandIndex(tokens, i + 1);
+      if (caseCommandIndex !== -1) {
+        i = caseCommandIndex;
+        continue;
+      }
+      return -1;
     }
     if (SHELL_CONTROL_STRUCTURE_WORDS.has(name)) return -1;
     if (name === "sudo") {
