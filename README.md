@@ -74,7 +74,8 @@ John Lomein can:
 - run tests, inspect CI, and check the latest commit;
 - request or read independent Codex review;
 - push small fixes to bot-owned branches;
-- merge a pull request only when the current head is green, reviewed, and has no unresolved review threads.
+- merge a pull request only when owner approval is present, the current head is
+  green, reviews are clean, and there are no unresolved review threads.
 
 John Lomein cannot:
 
