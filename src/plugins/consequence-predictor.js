@@ -503,6 +503,11 @@ function shellCommandStringAfterOptions(tokens, start) {
   return undefined;
 }
 
+function evalCommandString(tokens, start) {
+  const command = tokens.slice(start).join(" ").trim();
+  return command || undefined;
+}
+
 function envSplitStringHasHighImpact(tokens, start, depth) {
   if (depth >= SHELL_COMMAND_STRING_DEPTH_LIMIT) return false;
 
@@ -541,6 +546,10 @@ function hasShellCommandStringHighImpact(command = "", depth = 0) {
   for (const tokens of shellCommandStages(command)) {
     for (let commandIndex = 0; commandIndex < tokens.length; commandIndex += 1) {
       const name = commandName(tokens[commandIndex]);
+      if (name === "eval") {
+        const nestedCommand = evalCommandString(tokens, commandIndex + 1);
+        if (nestedCommand !== undefined && isHighImpactShell(nestedCommand, depth + 1)) return true;
+      }
       if (name === "env" && envSplitStringHasHighImpact(tokens, commandIndex + 1, depth)) return true;
       if (!PIPELINE_SHELLS.has(name)) continue;
 

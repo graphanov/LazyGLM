@@ -83,6 +83,9 @@ test("blocks high-impact shell commands wrapped in shell command strings without
     "env -S 'bash -c \"npm publish\"'",
     "env --split-string='sh -c \"gh release create v1.0.0\"'",
     "env -S 'npm unpublish lazyglm@0.1.0'",
+    "eval 'npm publish'",
+    'eval "git push origin main"',
+    "bash -lc 'eval \"gh release create v1.0.0\"'",
   ];
 
   for (const command of commands) {
@@ -100,6 +103,8 @@ test("passes benign shell command strings without high-impact classification", a
   const commands = [
     "bash -lc 'npm test'",
     "env -S 'bash -lc \"npm test\"'",
+    "eval 'npm test'",
+    "bash -lc 'eval \"npm test\"'",
   ];
 
   for (const command of commands) {
