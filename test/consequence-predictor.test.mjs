@@ -80,6 +80,9 @@ test("blocks high-impact shell commands wrapped in shell command strings without
     "bash -c 'rm -rf dist'",
     "zsh -fc 'gh release create v1.0.0'",
     "env bash -euo pipefail -c 'npm unpublish lazyglm@0.1.0'",
+    "env -S 'bash -c \"npm publish\"'",
+    "env --split-string='sh -c \"gh release create v1.0.0\"'",
+    "env -S 'npm unpublish lazyglm@0.1.0'",
   ];
 
   for (const command of commands) {
@@ -94,12 +97,19 @@ test("blocks high-impact shell commands wrapped in shell command strings without
 });
 
 test("passes benign shell command strings without high-impact classification", async () => {
-  const res = await pre("run_shell", {
-    command: "bash -lc 'npm test'",
-    consequence_prediction:
-      "Runs the local test command in a shell; failures affect only process output and do not mutate files or remote services.",
-  });
-  assert.equal(res, undefined);
+  const commands = [
+    "bash -lc 'npm test'",
+    "env -S 'bash -lc \"npm test\"'",
+  ];
+
+  for (const command of commands) {
+    const res = await pre("run_shell", {
+      command,
+      consequence_prediction:
+        "Runs the local test command in a shell; failures affect only process output and do not mutate files or remote services.",
+    });
+    assert.equal(res, undefined, command);
+  }
 });
 
 test("blocks high-impact shell commands when rm recursive and force flags are split", async () => {

@@ -503,12 +503,46 @@ function shellCommandStringAfterOptions(tokens, start) {
   return undefined;
 }
 
+function envSplitStringHasHighImpact(tokens, start, depth) {
+  if (depth >= SHELL_COMMAND_STRING_DEPTH_LIMIT) return false;
+
+  const valueChars = shortValueOptionChars(ENV_OPTIONS_WITH_VALUE);
+  for (let i = start; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token === "--") return false;
+    if (isAssignment(token)) continue;
+    if (!token.startsWith("-")) return false;
+
+    if (token.startsWith("--")) {
+      const option = optionName(token);
+      if (option === "--split-string") {
+        const value = token.includes("=") ? token.slice(token.indexOf("=") + 1) : tokens[i + 1];
+        if (value !== undefined && isHighImpactShell(value, depth + 1)) return true;
+        if (!token.includes("=")) i += 1;
+        continue;
+      }
+      if (ENV_OPTIONS_WITH_VALUE.has(option) && !token.includes("=")) i += 1;
+      continue;
+    }
+
+    const cluster = splitShortCluster(token, valueChars);
+    if (cluster.valueChar === "S") {
+      const value = cluster.valueConsumesNext ? tokens[i + 1] : cluster.attachedValue;
+      if (value !== undefined && isHighImpactShell(value, depth + 1)) return true;
+    }
+    if (cluster.valueConsumesNext) i += 1;
+  }
+  return false;
+}
+
 function hasShellCommandStringHighImpact(command = "", depth = 0) {
   if (depth >= SHELL_COMMAND_STRING_DEPTH_LIMIT) return false;
 
   for (const tokens of shellCommandStages(command)) {
     for (let commandIndex = 0; commandIndex < tokens.length; commandIndex += 1) {
-      if (!PIPELINE_SHELLS.has(commandName(tokens[commandIndex]))) continue;
+      const name = commandName(tokens[commandIndex]);
+      if (name === "env" && envSplitStringHasHighImpact(tokens, commandIndex + 1, depth)) return true;
+      if (!PIPELINE_SHELLS.has(name)) continue;
 
       const nestedCommand = shellCommandStringAfterOptions(tokens, commandIndex + 1);
       if (nestedCommand !== undefined && isHighImpactShell(nestedCommand, depth + 1)) return true;
