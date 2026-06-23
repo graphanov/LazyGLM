@@ -355,6 +355,12 @@ test("blocks high-impact shell commands after control keywords without mitigatio
     "if ! git push origin main; then :; fi",
     "case $target in prod) npm publish;; esac",
     "case $target in prod) gh release upload v1.2.3 app.zip;; esac",
+    "case $target in prod|staging) npm publish;; esac",
+    "case $target in dev|prod) gh release create v1.2.3;; esac",
+    "{ npm publish; }",
+    "{ git push origin main; }",
+    "exec npm publish",
+    "exec -a npm npm publish",
   ];
 
   for (const command of commands) {
@@ -375,6 +381,9 @@ test("passes benign redirected and control-flow shell commands", async () => {
     "for x in 1; do npm test; done",
     "! npm test",
     "case $target in test) npm test;; esac",
+    "case $target in dev|test) npm test;; esac",
+    "{ npm test; }",
+    "exec npm test",
   ];
 
   for (const command of commands) {

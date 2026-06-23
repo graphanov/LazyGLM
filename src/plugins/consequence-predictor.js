@@ -59,6 +59,7 @@ const SCRIPT_FILE_CONSUMERS = new Set(["source", "."]);
 const SHELL_COMMAND_STRING_DEPTH_LIMIT = 3;
 const SHELL_COMMAND_STRING_OPTIONS_WITH_VALUE = new Set(["-o", "-O", "--init-file", "--rcfile"]);
 const NO_OPTIONS_WITH_VALUE = new Set();
+const EXEC_OPTIONS_WITH_VALUE = new Set(["-a"]);
 const SUDO_OPTIONS_WITH_VALUE = new Set([
   "-C", "--close-from",
   "-D", "--chdir",
@@ -82,6 +83,7 @@ const TIMEOUT_OPTIONS_WITH_VALUE = new Set(["-k", "--kill-after", "-s", "--signa
 const TIME_OPTIONS_WITH_VALUE = new Set(["-f", "--format", "-o", "--output"]);
 const STDBUF_OPTIONS_WITH_VALUE = new Set(["-e", "--error", "-i", "--input", "-o", "--output"]);
 const PIPELINE_COMMAND_WRAPPER_OPTIONS_WITH_VALUE = new Map([
+  ["exec", EXEC_OPTIONS_WITH_VALUE],
   ["nohup", NO_OPTIONS_WITH_VALUE],
   ["nice", new Set(["-n", "--adjustment"])],
   ["stdbuf", STDBUF_OPTIONS_WITH_VALUE],
@@ -91,8 +93,8 @@ const PIPELINE_COMMAND_WRAPPER_OPTIONS_WITH_VALUE = new Map([
 // executable that actually runs. The scanner is not a full shell parser, but it
 // must not stop at `if`/`do`/`then` while a high-impact command follows in the
 // same parsed stage.
-const SHELL_CONTROL_COMMAND_PREFIXES = new Set(["!", "if", "then", "do", "else", "elif", "while", "until"]);
-const SHELL_CONTROL_STRUCTURE_WORDS = new Set(["for", "select", "in", "fi", "done", "esac"]);
+const SHELL_CONTROL_COMMAND_PREFIXES = new Set(["!", "{", "if", "then", "do", "else", "elif", "while", "until"]);
+const SHELL_CONTROL_STRUCTURE_WORDS = new Set(["}", "for", "select", "in", "fi", "done", "esac"]);
 
 const GIT_GLOBAL_OPTIONS_WITH_VALUE = new Set([
   "-C",
@@ -962,6 +964,10 @@ function commandInvocationIndex(tokens, start = 0) {
       continue;
     }
     if (SHELL_CONTROL_COMMAND_PREFIXES.has(name)) {
+      i += 1;
+      continue;
+    }
+    if (String(tokens[i]).endsWith(")")) {
       i += 1;
       continue;
     }
