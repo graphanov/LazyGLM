@@ -87,6 +87,12 @@ const PIPELINE_COMMAND_WRAPPER_OPTIONS_WITH_VALUE = new Map([
   ["stdbuf", STDBUF_OPTIONS_WITH_VALUE],
   ["time", TIME_OPTIONS_WITH_VALUE],
 ]);
+// Shell syntax words that can legally occupy the command position before the
+// executable that actually runs. The scanner is not a full shell parser, but it
+// must not stop at `if`/`do`/`then` while a high-impact command follows in the
+// same parsed stage.
+const SHELL_CONTROL_COMMAND_PREFIXES = new Set(["if", "then", "do", "else", "elif", "while", "until"]);
+const SHELL_CONTROL_STRUCTURE_WORDS = new Set(["for", "select", "case", "in", "fi", "done", "esac"]);
 
 const GIT_GLOBAL_OPTIONS_WITH_VALUE = new Set([
   "-C",
@@ -431,6 +437,18 @@ function isAssignment(token) {
   return /^[A-Za-z_][A-Za-z0-9_]*=/.test(token);
 }
 
+function shellRedirectionOperand(token) {
+  const text = String(token);
+  const match = text.match(/^(?:\d+)?(?:<<<|<<-?|<>|>>|>\||>&|<&|>|<)(.*)$/) || text.match(/^&>>?(.*)$/);
+  return match ? match[1] : undefined;
+}
+
+function skipShellRedirection(tokens, index) {
+  const operand = shellRedirectionOperand(tokens[index]);
+  if (operand === undefined) return index;
+  return operand === "" ? index + 2 : index + 1;
+}
+
 // Short options that consume a value (e.g. sudo -u, git -C) as single chars,
 // derived from the long-form set so both spellings agree.
 function shortValueOptionChars(optionsWithValue) {
@@ -469,6 +487,12 @@ function skipWrapperOptions(tokens, start, optionsWithValue) {
   const valueChars = shortValueOptionChars(optionsWithValue);
   let i = start;
   while (i < tokens.length) {
+    const afterRedirection = skipShellRedirection(tokens, i);
+    if (afterRedirection !== i) {
+      i = afterRedirection;
+      continue;
+    }
+
     const token = tokens[i];
     if (token === "--") return i + 1;
     if (isAssignment(token)) {
@@ -781,6 +805,12 @@ function hasShellCommandStringHighImpact(command = "", depth = 0) {
 function sudoLaunchesShell(tokens, start) {
   const valueChars = shortValueOptionChars(SUDO_OPTIONS_WITH_VALUE);
   for (let i = start; i < tokens.length; i += 1) {
+    const afterRedirection = skipShellRedirection(tokens, i);
+    if (afterRedirection !== i) {
+      i = afterRedirection - 1;
+      continue;
+    }
+
     const token = tokens[i];
     if (token === "--") return false;
     if (isAssignment(token)) continue;
@@ -801,6 +831,35 @@ function sudoLaunchesShell(tokens, start) {
     if (cluster.valueConsumesNext) i += 1;
   }
   return false;
+}
+
+function sudoShellCommandIndex(tokens, start) {
+  const valueChars = shortValueOptionChars(SUDO_OPTIONS_WITH_VALUE);
+  let shellMode = false;
+  for (let i = start; i < tokens.length; i += 1) {
+    const afterRedirection = skipShellRedirection(tokens, i);
+    if (afterRedirection !== i) {
+      i = afterRedirection - 1;
+      continue;
+    }
+
+    const token = tokens[i];
+    if (token === "--") return shellMode ? commandInvocationIndex(tokens, i + 1) : -1;
+    if (isAssignment(token)) continue;
+    if (!token.startsWith("-")) return shellMode ? i : -1;
+
+    if (token.startsWith("--")) {
+      const option = optionName(token);
+      if (SUDO_SHELL_MODE_FLAGS.has(option)) shellMode = true;
+      if (SUDO_OPTIONS_WITH_VALUE.has(option) && !token.includes("=")) i += 1;
+      continue;
+    }
+
+    const cluster = splitShortCluster(token, valueChars);
+    if (cluster.flags.includes("s") || cluster.flags.includes("i")) shellMode = true;
+    if (cluster.valueConsumesNext) i += 1;
+  }
+  return -1;
 }
 
 function envSplitStringInvokesShell(value) {
@@ -884,12 +943,28 @@ function envCommandIndex(tokens, start) {
 function commandInvocationIndex(tokens, start = 0) {
   let i = start;
   while (i < tokens.length) {
+    const afterRedirection = skipShellRedirection(tokens, i);
+    if (afterRedirection !== i) {
+      i = afterRedirection;
+      continue;
+    }
+
     const name = commandName(tokens[i]);
     if (isAssignment(tokens[i])) {
       i += 1;
       continue;
     }
+    if (SHELL_CONTROL_COMMAND_PREFIXES.has(name)) {
+      i += 1;
+      continue;
+    }
+    if (SHELL_CONTROL_STRUCTURE_WORDS.has(name)) return -1;
     if (name === "sudo") {
+      const shellCommandIndex = sudoShellCommandIndex(tokens, i + 1);
+      if (shellCommandIndex !== -1) {
+        i = shellCommandIndex;
+        continue;
+      }
       if (sudoLaunchesShell(tokens, i + 1)) return i;
       i = skipWrapperOptions(tokens, i + 1, SUDO_OPTIONS_WITH_VALUE);
       continue;

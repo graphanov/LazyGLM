@@ -304,6 +304,83 @@ test("blocks npm publish with global options before publish without mitigation",
   }
 });
 
+test("blocks high-impact shell commands after leading redirections without mitigation", async () => {
+  const commands = [
+    ">out npm publish",
+    "> out npm publish",
+    "2>/tmp/log git push origin main",
+    "&>out gh release create v1.2.3",
+    "&>> out npm unpublish lazyglm@0.1.0",
+  ];
+
+  for (const command of commands) {
+    const res = await pre("run_shell", {
+      command,
+      consequence_prediction:
+        "Runs a redirected shell command that may mutate registry, release, or repository state if the executable is classified incorrectly.",
+    });
+    assert.equal(res.decision, "block", command);
+    assert.match(res.reason, /High-impact shell commands/i, command);
+  }
+});
+
+test("blocks sudo shell modes with explicit high-impact commands without mitigation", async () => {
+  const commands = [
+    "sudo -s npm publish",
+    "sudo --shell git push origin main",
+    "sudo -i gh release create v1.2.3",
+    "sudo -u root -s npm unpublish lazyglm@0.1.0",
+    "sudo -s bash -lc 'npm publish'",
+  ];
+
+  for (const command of commands) {
+    const res = await pre("run_shell", {
+      command,
+      consequence_prediction:
+        "Runs a sudo shell-mode command that may mutate registry, release, or repository state with elevated privileges.",
+    });
+    assert.equal(res.decision, "block", command);
+    assert.match(res.reason, /High-impact shell commands/i, command);
+  }
+});
+
+test("blocks high-impact shell commands after control keywords without mitigation", async () => {
+  const commands = [
+    "if npm publish; then :; fi",
+    "if true; then gh release create v1.2.3; fi",
+    "while git push origin main; do :; done",
+    "for x in 1; do npm publish; done",
+    "until gh release upload v1.2.3 app.zip; do :; done",
+  ];
+
+  for (const command of commands) {
+    const res = await pre("run_shell", {
+      command,
+      consequence_prediction:
+        "Runs shell control flow that may hide a registry, release, or repository mutation behind reserved words.",
+    });
+    assert.equal(res.decision, "block", command);
+    assert.match(res.reason, /High-impact shell commands/i, command);
+  }
+});
+
+test("passes benign redirected and control-flow shell commands", async () => {
+  const commands = [
+    ">out npm test",
+    "if npm test; then echo ok; fi",
+    "for x in 1; do npm test; done",
+  ];
+
+  for (const command of commands) {
+    const res = await pre("run_shell", {
+      command,
+      consequence_prediction:
+        "Runs local test or echo commands while redirecting output; failures affect only local process output and test status.",
+    });
+    assert.equal(res, undefined, command);
+  }
+});
+
 test("passes npm run publish/unpublish scripts as non-registry subcommands", async () => {
   const commands = ["npm run publish", "npm run unpublish"];
 
