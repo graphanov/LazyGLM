@@ -595,9 +595,22 @@ function matchingBacktickIndex(text, start) {
 
 function hasRemoteDownloadInvocation(command = "") {
   for (const tokens of shellCommandStages(command)) {
-    for (const token of tokens) {
-      const name = commandName(token);
-      if (name === "curl" || name === "wget") return true;
+    if (stageHasRemoteDownloadInvocation(tokens)) return true;
+  }
+  return false;
+}
+
+function stageHasRemoteDownloadInvocation(tokens) {
+  return tokens.some((token) => {
+    const name = commandName(token);
+    return name === "curl" || name === "wget";
+  });
+}
+
+function commandConsumesScriptFromStdin(command = "") {
+  for (const pipeline of shellPipelines(command)) {
+    for (const stage of pipeline) {
+      if (pipelineTargetConsumesScript(stage)) return true;
     }
   }
   return false;
@@ -609,6 +622,15 @@ function processSubstitutionFeedsScriptConsumer(text, index, nestedCommand) {
   const stagesBeforeSubstitution = shellCommandStages(String(text).slice(0, index));
   const currentStage = stagesBeforeSubstitution[stagesBeforeSubstitution.length - 1] || [];
   return pipelineTargetConsumesScript(currentStage);
+}
+
+function processSubstitutionConsumesDownloaderOutput(text, index, nestedCommand) {
+  if (text[index] !== ">") return false;
+  if (!commandConsumesScriptFromStdin(nestedCommand)) return false;
+
+  const pipelinesBeforeSubstitution = shellPipelines(String(text).slice(0, index));
+  const currentPipeline = pipelinesBeforeSubstitution[pipelinesBeforeSubstitution.length - 1] || [];
+  return currentPipeline.some((stage) => stageHasRemoteDownloadInvocation(stage));
 }
 
 function hasShellExpansionHighImpact(command = "", depth = 0) {
@@ -674,7 +696,8 @@ function hasShellExpansionHighImpact(command = "", depth = 0) {
         const nestedCommand = text.slice(i + 2, close);
         if (
           isHighImpactShell(nestedCommand, depth + 1) ||
-          processSubstitutionFeedsScriptConsumer(text, i, nestedCommand)
+          processSubstitutionFeedsScriptConsumer(text, i, nestedCommand) ||
+          processSubstitutionConsumesDownloaderOutput(text, i, nestedCommand)
         ) {
           return true;
         }
