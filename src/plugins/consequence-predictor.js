@@ -55,6 +55,7 @@ const PIPELINE_SHELLS = new Set([
   "csh",
   "tcsh",
 ]);
+const SCRIPT_FILE_CONSUMERS = new Set(["source", "."]);
 const SHELL_COMMAND_STRING_DEPTH_LIMIT = 3;
 const SHELL_COMMAND_STRING_OPTIONS_WITH_VALUE = new Set(["-o", "-O", "--init-file", "--rcfile"]);
 const NO_OPTIONS_WITH_VALUE = new Set();
@@ -574,6 +575,24 @@ function matchingBacktickIndex(text, start) {
   return -1;
 }
 
+function hasRemoteDownloadInvocation(command = "") {
+  for (const tokens of shellCommandStages(command)) {
+    for (const token of tokens) {
+      const name = commandName(token);
+      if (name === "curl" || name === "wget") return true;
+    }
+  }
+  return false;
+}
+
+function processSubstitutionFeedsScriptConsumer(text, index, nestedCommand) {
+  if (!hasRemoteDownloadInvocation(nestedCommand)) return false;
+
+  const stagesBeforeSubstitution = shellCommandStages(String(text).slice(0, index));
+  const currentStage = stagesBeforeSubstitution[stagesBeforeSubstitution.length - 1] || [];
+  return pipelineTargetConsumesScript(currentStage);
+}
+
 function hasShellExpansionHighImpact(command = "", depth = 0) {
   if (depth >= SHELL_COMMAND_STRING_DEPTH_LIMIT) return false;
 
@@ -633,7 +652,12 @@ function hasShellExpansionHighImpact(command = "", depth = 0) {
       const close = matchingParenIndex(text, i + 1);
       if (close !== -1) {
         const nestedCommand = text.slice(i + 2, close);
-        if (isHighImpactShell(nestedCommand, depth + 1)) return true;
+        if (
+          isHighImpactShell(nestedCommand, depth + 1) ||
+          processSubstitutionFeedsScriptConsumer(text, i, nestedCommand)
+        ) {
+          return true;
+        }
         i = close;
       }
       continue;
@@ -807,6 +831,26 @@ function pipelineTargetInvokesShell(tokens) {
   return false;
 }
 
+function pipelineTargetConsumesScript(tokens) {
+  if (pipelineTargetInvokesShell(tokens)) return true;
+
+  let i = 0;
+  while (i < tokens.length) {
+    const name = commandName(tokens[i]);
+    if (SCRIPT_FILE_CONSUMERS.has(name)) return true;
+    if (name === "command") {
+      i = skipWrapperOptions(tokens, i + 1, NO_OPTIONS_WITH_VALUE);
+      continue;
+    }
+    if (isAssignment(tokens[i])) {
+      i += 1;
+      continue;
+    }
+    return false;
+  }
+  return false;
+}
+
 function hasRemoteInstallerPipeline(command = "") {
   for (const pipeline of shellPipelines(command)) {
     for (let sourceIndex = 0; sourceIndex < pipeline.length - 1; sourceIndex += 1) {
@@ -828,8 +872,12 @@ function npmShellCommandHasRegistryMutation(command = "", depth = 0) {
   if (depth >= 3) return false;
   for (const tokens of shellCommandStages(command)) {
     for (let commandIndex = 0; commandIndex < tokens.length; commandIndex += 1) {
-      if (commandName(tokens[commandIndex]) !== "npm") continue;
-      if (npmTokensHaveRegistryMutation(tokens, commandIndex + 1, depth)) return true;
+      const name = commandName(tokens[commandIndex]);
+      if (name === "npm") {
+        if (npmTokensHaveRegistryMutation(tokens, commandIndex + 1, depth)) return true;
+        continue;
+      }
+      if (name === "npx" && npmExecHasRegistryMutation(tokens, commandIndex + 1, depth)) return true;
     }
   }
   return false;
