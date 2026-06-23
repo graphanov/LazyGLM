@@ -47,7 +47,20 @@ const MIN_CONTENT_TOKENS = 3;
 // placed before the shell — e.g. `curl url | tee file | bash` — cannot bypass
 // the high-impact guard by making only the non-shell first stage visible.
 const REMOTE_INSTALLER_PIPE = /\b(?:curl|wget)\b[^|\n]*\|\s*(?<pipeline>[^;&\n]+)/gi;
-const PIPELINE_SHELLS = new Set(["sh", "bash", "zsh"]);
+// Direct shell executables that read and execute piped installer stdin. Keep this
+// explicit: a remote installer piped into `dash`/`fish` is still remote code
+// execution even when it is not the most common `sh`/`bash` spelling.
+const PIPELINE_SHELLS = new Set([
+  "sh",
+  "bash",
+  "zsh",
+  "dash",
+  "ksh",
+  "mksh",
+  "fish",
+  "csh",
+  "tcsh",
+]);
 const NO_OPTIONS_WITH_VALUE = new Set();
 const SUDO_OPTIONS_WITH_VALUE = new Set([
   "-C", "--close-from",
@@ -612,20 +625,29 @@ function hasGhReleaseInvocation(command = "") {
   return false;
 }
 
-// Shared alternation so the positive and negated matchers always agree on what
-// counts as a mitigation signal.
-const MITIGATION_WORD_ALTS =
-  "mitigat\\w*|rollback|recover\\w*|backup|dry[- ]?run|scop(?:e|ed|ing)|limit(?:ed|ing)?|verif(?:y|ies|ied|ying|ication)|test(?:ed|ing|s)?|confirm(?:ed|ing|s)?|non[- ]?destructive|no irreversible";
-const MITIGATION_WORDS = new RegExp("\\b(?:" + MITIGATION_WORD_ALTS + ")\\b", "i");
+// Shared alternations so the positive and negated matchers always agree on what
+// counts as a mitigation signal. Bare `test`/`tests` is intentionally excluded
+// from the core word list: a path such as `rm -rf tests` names an affected
+// surface, not a mitigation. Test wording only counts when it is phrased as an
+// action or command that will validate the high-impact operation.
+const CORE_MITIGATION_WORD_ALTS =
+  "mitigat\\w*|rollback|recover\\w*|backup|dry[- ]?run|scop(?:e|ed|ing)|limit(?:ed|ing)?|verif(?:y|ies|ied|ying|ication)|confirm(?:ed|ing|s)?|non[- ]?destructive|no irreversible";
+const TEST_MITIGATION_ALTS =
+  "(?:run|runs|running|rerun|reruns|rerunning|execute|executes|executing|pass|passes|passing)\\s+(?:the\\s+)?(?:unit\\s+|integration\\s+|smoke\\s+|regression\\s+)?tests?|" +
+  "(?:npm|pnpm|yarn|node|pytest|cargo|go|make)\\s+test(?:s)?|" +
+  "tests?\\s+(?:will|would|should|must|can)\\s+(?:pass|verify|confirm|validate|cover)|" +
+  "testing\\s+(?:will|would|should|must|can)\\s+(?:verify|confirm|validate|cover)";
+const MITIGATION_WORDS = new RegExp("\\b(?:" + CORE_MITIGATION_WORD_ALTS + ")\\b", "i");
+const TEST_MITIGATION_WORDS = new RegExp("\\b(?:" + TEST_MITIGATION_ALTS + ")\\b", "i");
 // Negators. Words that negate a mitigation AFTER the keyword ("rollback is
 // unavailable", "verification is impossible") are included alongside the
 // pre-keyword negators ("no verification").
 const NEGATION_WORDS =
   "no|not|never|without|lack(?:s|ing)?|missing|unavailable|impossible|absent|cannot|can't|won't|doesn['’]t|don't|isn['’]t|aren['’]t";
 // A mitigation cluster is one mitigation word, optionally extended across
-// or/and/nor so "test or verify" is consumed as one unit.
+// or/and/nor so "rollback or verification" is consumed as one unit.
 const MITIGATION_CLUSTER =
-  "(?:" + MITIGATION_WORD_ALTS + ")\\b(?:[\\s,.;:-]*(?:or|and|nor)[\\s,.;:-]+(?:" + MITIGATION_WORD_ALTS + ")\\b)*";
+  "(?:" + CORE_MITIGATION_WORD_ALTS + ")\\b(?:[\\s,.;:-]*(?:or|and|nor)[\\s,.;:-]+(?:" + CORE_MITIGATION_WORD_ALTS + ")\\b)*";
 // A mitigation is negated when a negator lands within a few words on EITHER
 // side of the cluster. Both arms strip the mitigation word(s) before
 // MITIGATION_WORDS is re-tested, so an explicitly unmitigated high-impact
@@ -637,6 +659,14 @@ const NEGATED_MITIGATION_WORDS = new RegExp(
     "(?:" + NEGATION_WORDS + ")\\b(?:[\\s,.;:-]+\\w+){0,3}?[\\s,.;:-]+" + MITIGATION_CLUSTER +
     "|" +
     MITIGATION_CLUSTER + "(?:[\\s,.;:-]+\\w+){0,3}?[\\s,.;:-]+(?:" + NEGATION_WORDS + ")\\b" +
+  ")",
+  "gi",
+);
+const NEGATED_TEST_MITIGATION_WORDS = new RegExp(
+  "\\b(?:" +
+    "(?:" + NEGATION_WORDS + ")\\b(?:[\\s,.;:-]+\\w+){0,4}?[\\s,.;:-]+(?:" + TEST_MITIGATION_ALTS + ")" +
+    "|" +
+    "(?:" + TEST_MITIGATION_ALTS + ")(?:[\\s,.;:-]+\\w+){0,4}?[\\s,.;:-]+(?:" + NEGATION_WORDS + ")\\b" +
   ")",
   "gi",
 );
@@ -670,7 +700,10 @@ function isGenericPrediction(prediction) {
 }
 
 function hasPositiveMitigationSignal(prediction) {
-  return MITIGATION_WORDS.test(prediction.replace(NEGATED_MITIGATION_WORDS, ""));
+  const positiveText = prediction
+    .replace(NEGATED_MITIGATION_WORDS, "")
+    .replace(NEGATED_TEST_MITIGATION_WORDS, "");
+  return MITIGATION_WORDS.test(positiveText) || TEST_MITIGATION_WORDS.test(positiveText);
 }
 
 function isHighImpactShell(command = "") {
