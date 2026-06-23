@@ -1,9 +1,21 @@
 <div align="center">
 
+<img src="docs/assets/readme/john-lomein-avatar-ring.png" alt="John Lomein robotic crab maintainer avatar" width="150" />
+
 # LazyGLM
 
-**A dedicated coding-agent CLI for GLM models.**
+**A dedicated coding-agent CLI for GLM models — maintained by John Lomein, an automated maintainer bot.**
+
 Interactive terminal workflow for Z.ai/Zhipu's GLM family: REPL, tool use, sessions, model routing, and verified completion loops.
+
+<p>
+  <a href="#install">Install</a> ·
+  <a href="#use-your-zai-coding-plan">z.ai setup</a> ·
+  <a href="#interactive-repl">REPL</a> ·
+  <a href="#maintained-by-john-lomein">John Lomein</a>
+</p>
+
+<img src="docs/assets/readme/john-lomein-maintainer-loop.gif" alt="Animated maintainer loop showing John Lomein reviewing issues, CI, Codex review, merge gates, and owner-only release boundaries" width="780" />
 
 </div>
 
@@ -15,6 +27,17 @@ LazyGLM is a standalone terminal coding agent for **GLM models**. It gives GLM
 users a Claude Code-style CLI: start `lazyglm`, talk to an agent, let it
 read/write/patch files, run commands, track sessions, route model tiers, and
 keep working through verification loops.
+
+This repo is also a public experiment in bot-maintained software. **John Lomein**
+(the robotic crab above) is the visible automated maintainer for LazyGLM: he
+watches issues and pull requests, runs the review loop, fixes small failures,
+and can merge only after the current head is clean.
+
+| Surface | What it uses | Who keeps it moving |
+| --- | --- | --- |
+| `lazyglm` CLI | z.ai / GLM coding models | **John Lomein**, automated maintainer bot |
+| Pull requests | tools + hooks + verification | CI, Codex review, and John Lomein's merge gate |
+| Release / publish gates | npm / GitHub Releases | **Owner only** — John does not publish or cut releases |
 
 **GLM** (General Language Model) is Z.ai/Zhipu AI's model family for reasoning,
 coding, long-context, and agentic work. LazyGLM defaults to **GLM-5.2** through
@@ -34,6 +57,36 @@ verification loops. The implementation is different: lazycodex extends the
 OpenAI Codex CLI; LazyGLM ships a standalone GLM runtime and adds GLM-specific
 behavior like reasoning-token visibility, z.ai Coding Plan setup, and visible
 model routing across GLM tiers.
+
+## Maintained by John Lomein
+
+**John Lomein is the automated maintainer bot for the public LazyGLM repo.** He
+is intentionally visible: comments, reviews, and maintainer actions should read
+as bot work, not as a hidden human pretending to be manual maintenance.
+
+<p align="center">
+  <img src="docs/assets/readme/john-lomein-maintainer-graph.svg" alt="John Lomein maintenance graph: issues and PRs go through CI, Codex review, John Lomein's gate, and owner-only publish gates" width="900" />
+</p>
+
+John Lomein can:
+
+- triage issues and pull requests;
+- run tests, inspect CI, and check the latest commit;
+- request or read independent Codex review;
+- push small fixes to bot-owned branches;
+- merge a pull request only when owner approval is present, the current head is
+  green, reviews are clean, and there are no unresolved review threads.
+
+John Lomein cannot:
+
+- publish to npm;
+- create GitHub Releases;
+- change secrets, branch protection, or repository permissions;
+- force-push or rewrite history;
+- bypass the owner for release, credential, or security gates.
+
+The short version: **John keeps the repo tidy and moving; the owner keeps the
+keys and release authority.**
 
 ## Install
 
@@ -143,7 +196,7 @@ lazyglm --model glm-4.7       # start on the routine/daily-driver tier
 
 Inside the REPL:
 
-```
+```text
 lazyglm> create hello.js that prints hi, then run it
 lazyglm> /model glm-4.7            # switch tier mid-conversation
 lazyglm> /cost                      # cumulative tokens incl. reasoning
@@ -243,11 +296,12 @@ lazyglm run "refactor the parser" --max-reasoning-tokens 20000
 | 🛡️ **Discipline plugins** | rules, comment-checker, executor-verify, start-work-continuation, telemetry (local-only) |
 | 🔁 **Ultrawork loop** | `--ultrawork` / `/ultrawork` verified-completion loop (run → verify → continue) |
 | 📋 **Skills** | `$init-deep`, `$ulw-plan`, `$start-work`, `$ulw-loop`, `$review-work`, `$remove-ai-slops`, `$programming` |
+| 🦀 **Bot-maintained repo** | John Lomein keeps PRs moving through review, tests, and clean-head merge gates |
 | 🩺 **Doctor** | Provider + model + routing + plugin + skill health report |
 
 ## Architecture
 
-```
+```text
 bin/lazyglm.js            CLI entrypoint
 src/cli.js                command dispatcher (run | chat/REPL | doctor | models | skills | skill | install | uninstall | hook)
 src/config.js             global user config (~/.lazyglm/config.json, chmod 600; key never in process.env)
@@ -268,19 +322,20 @@ src/doctor.js             health report
 src/ulw.js                Ultrawork verified-completion loop
 skills/                   markdown skills (GLM-tuned)
 config/                   model-catalog.json + roles.json
-test/                     92 passing tests (node --test)
+test/                     105 passing tests
 ```
 
 ## Test
 
 ```bash
-npm test    # 92 tests
+npm test    # 105 tests
 ```
 
 ## Maintainer workflows
 
-- Pull request review process: [`docs/PR_REVIEW.md`](docs/PR_REVIEW.md)
-- npm trusted publishing: [`docs/PUBLISHING.md`](docs/PUBLISHING.md)
+- John Lomein maintainer model: see [Maintained by John Lomein](#maintained-by-john-lomein).
+- Pull request review process: [`docs/PR_REVIEW.md`](docs/PR_REVIEW.md).
+- npm trusted publishing: [`docs/PUBLISHING.md`](docs/PUBLISHING.md) — owner-gated, not a bot action.
 
 Development notes, scratch plans, transcripts, and run logs stay local/untracked; this repo intentionally does not use committed active/done planning folders.
 
