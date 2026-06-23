@@ -110,6 +110,9 @@ const GH_GLOBAL_OPTION_FLAGS = new Set(["--help", "-h"]);
 // (https://cli.github.com/manual/gh_release).
 const GH_RELEASE_MUTATING_SUBCOMMANDS = new Set([
   "create",
+  // `gh release new` is the documented alias for `gh release create`
+  // (ALIASES in `gh release create --help`), so it mutates a release too.
+  "new",
   "upload",
   "delete",
   "delete-asset",
@@ -511,7 +514,7 @@ function hasGhReleaseInvocation(command = "") {
     for (let i = 0; i < tokens.length; i += 1) {
       const token = tokens[i];
       if (token === "release") {
-        // Only the mutating subcommands (create/upload/delete/delete-asset/edit)
+        // Only the mutating subcommands (create/new/upload/delete/delete-asset/edit)
         // are high-impact; read-only `gh release view|list|download` must pass.
         const subcommand = tokens[i + 1];
         if (GH_RELEASE_MUTATING_SUBCOMMANDS.has(subcommand)) return true;

@@ -355,6 +355,25 @@ test("passes read-only gh release inspections as non-mutating", async () => {
   }
 });
 
+test("blocks gh release new alias as a mutating release command", async () => {
+  // `gh release new` is the documented alias for `gh release create`
+  // (`gh release create --help` ALIASES) and must be gated the same way.
+  const commands = [
+    "gh release new v1.2.3",
+    "gh -R owner/repo release new v1.2.3",
+  ];
+
+  for (const command of commands) {
+    const res = await pre("run_shell", {
+      command,
+      consequence_prediction:
+        "Creates a GitHub Release that may publish a release artifact which is hard to retract if the tag or notes are wrong.",
+    });
+    assert.equal(res.decision, "block", command);
+    assert.match(res.reason, /High-impact shell commands/i, command);
+  }
+});
+
 test("blocks gh release delete-asset as a mutating release command", async () => {
   const commands = [
     "gh release delete-asset v1.2.3 build.zip",
