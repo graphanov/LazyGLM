@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compareSemver, checkUpdate } from "../src/update.js";
+import { compareSemver, checkUpdate, selfUpdate } from "../src/update.js";
 
 // --- compareSemver: pure x.y.z comparison across patch/minor/major deltas ---
 
@@ -58,4 +58,92 @@ test("checkUpdate: fetcher throws -> error, exit 2", async () => {
   assert.equal(res.status, "error");
   assert.equal(res.exitCode, 2);
   assert.match(res.detail, /registry down/);
+});
+
+// --- selfUpdate orchestration: prompt/force/install paths stay injectable ---
+
+function captureStdout() {
+  let output = "";
+  return {
+    stdout: { write(chunk) { output += chunk; } },
+    output: () => output,
+  };
+}
+
+test("selfUpdate without --force prompts and skips install when declined", async () => {
+  const capture = captureStdout();
+  let prompted = false;
+  let installed = false;
+  const res = await selfUpdate({
+    fetchRemote: async () => "0.2.0",
+    readLocal,
+    prompt: async () => { prompted = true; return "n"; },
+    installer: () => { installed = true; },
+    stdout: capture.stdout,
+  });
+
+  assert.equal(prompted, true);
+  assert.equal(installed, false);
+  assert.equal(res.status, "behind");
+  assert.equal(res.updated, false);
+  assert.equal(res.exitCode, 1);
+  assert.match(capture.output(), /update available/);
+  assert.match(capture.output(), /Skipped update/);
+});
+
+test("selfUpdate --force skips prompt and installs when behind", async () => {
+  const capture = captureStdout();
+  let prompted = false;
+  let installed = false;
+  const res = await selfUpdate({
+    force: true,
+    fetchRemote: async () => "0.2.0",
+    readLocal,
+    prompt: async () => { prompted = true; return "n"; },
+    installer: () => { installed = true; },
+    stdout: capture.stdout,
+  });
+
+  assert.equal(prompted, false);
+  assert.equal(installed, true);
+  assert.equal(res.status, "behind");
+  assert.equal(res.updated, true);
+  assert.equal(res.exitCode, 0);
+  assert.match(capture.output(), /Updated lazyglm to 0\.2\.0/);
+});
+
+test("selfUpdate reports installer failure as exit 2", async () => {
+  const capture = captureStdout();
+  const res = await selfUpdate({
+    force: true,
+    fetchRemote: async () => "0.2.0",
+    readLocal,
+    installer: () => { throw new Error("install failed"); },
+    stdout: capture.stdout,
+  });
+
+  assert.equal(res.status, "behind");
+  assert.equal(res.updated, false);
+  assert.equal(res.exitCode, 2);
+  assert.match(res.detail, /install failed/);
+  assert.match(capture.output(), /Update failed: install failed/);
+});
+
+test("selfUpdate does not prompt or install when already up to date", async () => {
+  const capture = captureStdout();
+  let prompted = false;
+  let installed = false;
+  const res = await selfUpdate({
+    fetchRemote: async () => "0.1.3",
+    readLocal,
+    prompt: async () => { prompted = true; return "y"; },
+    installer: () => { installed = true; },
+    stdout: capture.stdout,
+  });
+
+  assert.equal(prompted, false);
+  assert.equal(installed, false);
+  assert.equal(res.status, "equal");
+  assert.equal(res.exitCode, 0);
+  assert.match(capture.output(), /up to date/);
 });
