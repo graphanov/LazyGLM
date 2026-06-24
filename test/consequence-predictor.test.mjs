@@ -287,6 +287,8 @@ test("blocks npm publish with global options before publish without mitigation",
     "npm --registry https://registry.npmjs.org pub",
     "npm --workspace=packages/foo --tag next publish",
     "npm -w packages/foo publish",
+    "npm -- publish",
+    "npm -- pub",
     // --tag-version-prefix takes a value not enumerated in the value-option
     // set; without consuming it, the value masked `publish` and bypassed the
     // high-impact gate.
@@ -414,6 +416,7 @@ test("blocks npm unpublish as a registry mutation without mitigation", async () 
     "npm unpublish lazyglm@0.1.0",
     "npm --registry https://registry.npmjs.org unpublish lazyglm@0.1.0",
     "npm --otp 123456 unpublish lazyglm@0.1.0",
+    "npm -- unpublish lazyglm@0.1.0",
   ];
 
   for (const command of commands) {
@@ -431,6 +434,8 @@ test("blocks npm registry mutations nested under npm exec without mitigation", a
   const commands = [
     "npm exec -- npm unpublish lazyglm@0.1.0",
     "npm exec -- npm --registry https://registry.npmjs.org unpublish lazyglm@0.1.0",
+    "npm exec -- npm -- publish",
+    "npm exec -- npm -- unpublish lazyglm@0.1.0",
     "npm exec --package npm -- npm pub",
     "npm x -- npm publish",
     "npm --workspace packages/foo exec -- npm publish",

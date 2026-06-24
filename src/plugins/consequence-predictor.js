@@ -1163,7 +1163,10 @@ function npmTokensHaveRegistryMutation(tokens, start = 0, depth = 0) {
     const token = tokens[i];
     if (NPM_REGISTRY_MUTATION_SUBCOMMANDS.has(token)) return true;
     if (NPM_EXEC_SUBCOMMANDS.has(token)) return npmExecHasRegistryMutation(tokens, i + 1, depth);
-    if (token === "--" || !token.startsWith("-")) break;
+    // npm accepts `--` before the subcommand (for example `npm -- publish`),
+    // so the option terminator must not mask a following registry mutation.
+    if (token === "--") continue;
+    if (!token.startsWith("-")) break;
 
     const option = npmGlobalOptionName(token);
     if (NPM_GLOBAL_OPTIONS_WITH_VALUE.has(option)) {
