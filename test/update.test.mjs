@@ -1,6 +1,29 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compareSemver, checkUpdate, selfUpdate } from "../src/update.js";
+import { compareSemver, normalizeVersion, checkUpdate, selfUpdate } from "../src/update.js";
+
+// --- normalizeVersion: strip quotes/whitespace (npm --json hardening) ---
+
+test("normalizeVersion strips surrounding double quotes", () => {
+  assert.equal(normalizeVersion('"1.2.3"'), "1.2.3");
+});
+
+test("normalizeVersion strips surrounding single quotes", () => {
+  assert.equal(normalizeVersion("'1.2.3'"), "1.2.3");
+});
+
+test("normalizeVersion trims whitespace", () => {
+  assert.equal(normalizeVersion("  1.2.3  "), "1.2.3");
+});
+
+test("normalizeVersion leaves a bare version untouched", () => {
+  assert.equal(normalizeVersion("1.2.3"), "1.2.3");
+});
+
+test("normalizeVersion coerces null/undefined to empty string", () => {
+  assert.equal(normalizeVersion(null), "");
+  assert.equal(normalizeVersion(undefined), "");
+});
 
 // --- compareSemver: pure x.y.z comparison across patch/minor/major deltas ---
 
@@ -58,6 +81,23 @@ test("checkUpdate: fetcher throws -> error, exit 2", async () => {
   assert.equal(res.status, "error");
   assert.equal(res.exitCode, 2);
   assert.match(res.detail, /registry down/);
+});
+
+// Regression (PR #25 Codex review P2, thread src/update.js:34): when npm is
+// configured for JSON output (NPM_CONFIG_JSON=true / global --json), `npm view
+// lazyglm version` returns a quoted string like "2.0.0". Without normalization
+// the quoted major parses as NaN and the result inverts: a real "behind" is
+// reported as "ahead", silently hiding the available update.
+
+test("checkUpdate: JSON-quoted remote version is normalized and classified correctly", async () => {
+  const res = await checkUpdate({
+    fetchRemote: async () => '"2.0.0"',
+    readLocal,
+  });
+  assert.equal(res.status, "behind");
+  assert.equal(res.exitCode, 1);
+  assert.equal(res.local, "0.1.3");
+  assert.equal(res.remote, '"2.0.0"');
 });
 
 // --- selfUpdate orchestration: prompt/force/install paths stay injectable ---

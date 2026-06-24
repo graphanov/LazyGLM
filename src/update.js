@@ -10,6 +10,15 @@ import { readJson } from "./util.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
+// Strip surrounding quotes and whitespace. npm honours NPM_CONFIG_JSON / --json
+// globally; when set, `npm view <pkg> version` returns a JSON-quoted string such
+// as "1.2.3" instead of the bare 1.2.3. Feeding that to compareSemver makes the
+// quoted major parse as NaN and inverts/equalises the result, silently hiding
+// available updates. (PR #25 Codex review P2, thread src/update.js:34.)
+export function normalizeVersion(v) {
+  return String(v ?? "").trim().replace(/^["']|["']$/g, "");
+}
+
 // Pure: compare two x.y.z versions. Returns -1 if a < b, 0 if equal, 1 if a > b.
 // Only the first three numeric components are considered (no prerelease/ranges).
 export function compareSemver(a, b) {
@@ -30,8 +39,10 @@ export async function readLocalVersion() {
 }
 
 // Real remote fetch via the npm registry. Overridable in tests via seams.
+// `--no-json` neutralises a global NPM_CONFIG_JSON/--json setting, which would
+// otherwise wrap the version in double quotes and break compareSemver.
 export function fetchRemoteVersion() {
-  return execSync("npm view lazyglm version", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+  return execSync("npm view lazyglm version --no-json", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
 }
 
 export function describeUpdate(result) {
@@ -56,7 +67,9 @@ export async function checkUpdate({ fetchRemote = fetchRemoteVersion, readLocal 
   if (!remote) {
     return { status: "error", detail: "registry returned an empty version", local, remote: null, exitCode: 2 };
   }
-  const cmp = compareSemver(local, remote);
+  const localN = normalizeVersion(local);
+  const remoteN = normalizeVersion(remote);
+  const cmp = compareSemver(localN, remoteN);
   if (cmp === 0) return { status: "equal", local, remote, exitCode: 0 };
   if (cmp < 0) return { status: "behind", local, remote, exitCode: 1 };
   return { status: "ahead", local, remote, exitCode: 0 };
