@@ -97,6 +97,13 @@ test("lastTurn omitted (no turn completed yet) degrades cleanly", () => {
   assert.match(nontty, /turn_ms=4200/, "turn_ms still present (timing captured independently of usage)");
 });
 
+test("unknown last-turn duration stays blank instead of rendering 0ms", () => {
+  const tty = renderStatus({ ...base, lastTurnMs: null, isTTY: true });
+  assert.ok(stripAnsi(tty).includes("turn —"), "TTY shows an unknown marker, not 0ms");
+  const nontty = renderStatus({ ...base, lastTurnMs: null, isTTY: false });
+  assert.match(nontty, /turn_ms=\s*(\||$)/, "non-TTY turn_ms is blank when no timed turn exists");
+});
+
 test("purity: defaults are safe (no crash, no ANSI) when called with empty opts", () => {
   const out = renderStatus({});
   assert.doesNotMatch(out, /\x1b/, "default isTTY:false => no ANSI");

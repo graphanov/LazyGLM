@@ -364,7 +364,7 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
   // until the first turn completes; lastTurnMs includes retry backoff (wall-clock
   // around chat()), so it is a human-facing figure, not a latency benchmark.
   let lastTurn = null;
-  let lastTurnMs = 0;
+  let lastTurnMs = null;
   let sessionStartMs = Date.now();
   const restoreTelemetry = (events) => {
     const restored = replayTelemetry(events);
