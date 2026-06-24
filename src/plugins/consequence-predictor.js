@@ -1825,7 +1825,7 @@ function hasXargsNestedHighImpact(command = "", depth = 0) {
     const commandIndex = commandInvocationIndex(tokens);
     if (commandIndex === -1 || commandName(tokens[commandIndex]) !== "xargs") continue;
     const nestedIndex = xargsNestedCommandIndex(tokens, commandIndex + 1);
-    if (nestedIndex !== -1 && isHighImpactShell(tokens.slice(nestedIndex).join(" "), depth + 1)) return true;
+    if (nestedIndex !== -1 && isHighImpactShell(shellCommandFromTokens(tokens.slice(nestedIndex)), depth + 1)) return true;
   }
   return false;
 }
@@ -1842,7 +1842,7 @@ function hasFindExecHighImpact(command = "", depth = 0) {
       for (let j = i + 1; j < tokens.length && tokens[j] !== ";" && tokens[j] !== "+"; j += 1) {
         nested.push(tokens[j]);
       }
-      if (nested.length && isHighImpactShell(nested.join(" "), depth + 1)) return true;
+      if (nested.length && isHighImpactShell(shellCommandFromTokens(nested), depth + 1)) return true;
     }
   }
   return false;
