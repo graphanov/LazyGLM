@@ -173,3 +173,28 @@ test("selfUpdate in non-interactive context skips prompt and points to --force",
   assert.equal(res.exitCode, 1);
   assert.match(capture.output(), /--force/);
 });
+
+// Regression (PR #25 Codex review P2, thread src/update.js:86): a redirected
+// stdout (e.g. `lazyglm update >update.log`) must be treated as
+// non-interactive even when stdin is a TTY, otherwise the prompt is written to
+// the redirected file and the user never sees it.
+
+test("selfUpdate with redirected stdout is non-interactive", async () => {
+  const capture = captureStdout();
+  let prompted = false;
+  let installed = false;
+  const res = await selfUpdate({
+    fetchRemote: async () => "0.2.0",
+    readLocal,
+    isInteractive: () => false,
+    prompt: async () => { prompted = true; return "y"; },
+    installer: () => { installed = true; },
+    stdout: capture.stdout,
+  });
+
+  assert.equal(prompted, false, "must not prompt when stdout is redirected");
+  assert.equal(installed, false);
+  assert.equal(res.updated, false);
+  assert.equal(res.exitCode, 1);
+  assert.match(capture.output(), /--force/);
+});

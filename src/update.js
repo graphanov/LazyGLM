@@ -83,7 +83,7 @@ export async function selfUpdate({
   readLocal = readLocalVersion,
   installer = defaultInstaller,
   prompt = defaultPrompt,
-  isInteractive = () => defaultInput.isTTY === true,
+  isInteractive = () => defaultInput.isTTY === true && defaultOutput.isTTY === true,
   stdout = process.stdout,
 } = {}) {
   const result = await checkUpdate({ fetchRemote, readLocal });
