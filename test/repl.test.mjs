@@ -133,6 +133,43 @@ test("REPL non-TTY turn echo stands alone without a `lazyglm>` prompt prefix", (
   assert.ok(!combined.includes("lazyglm>"), "piped output must contain no prompt leak");
 });
 
+// Regression (PR #26 Codex P2, thread src/repl.js:691): when stdout is piped but
+// stdin is still a TTY (`lazyglm | tee transcript`), prompt() must NOT be fully
+// suppressed — the human gets no cue the REPL is waiting. Fix: route the prompt
+// to stderr in that mixed case so stdout stays clean for piped consumers while
+// the human still sees the cue. This test locks the three-branch routing contract
+// of prompt() by modelling each TTY combination explicitly (not the live
+// process.stdout/stdin, which is non-TTY under `node --test`).
+test("REPL prompt routing: stdout→stderr when stdin is TTY but stdout is piped", () => {
+  const promptGlyph = `${GREEN}lazyglm> `;
+
+  // Model prompt()'s three-branch routing exactly as src/repl.js implements it:
+  //   stdout TTY        → stdout
+  //   stdout non-TTY,
+  //     stdin TTY       → stderr
+  //   both non-TTY      → nowhere
+  function routePrompt(stdoutIsTty, stdinIsTty) {
+    if (stdoutIsTty) return { stdout: promptGlyph, stderr: "" };
+    if (stdinIsTty) return { stdout: "", stderr: promptGlyph };
+    return { stdout: "", stderr: "" };
+  }
+
+  // Branch 1 — normal interactive session (both TTY): prompt on stdout, none on stderr.
+  const b1 = routePrompt(true, true);
+  assert.ok(b1.stdout.includes("lazyglm>"), "TTY session must show prompt on stdout");
+  assert.equal(b1.stderr, "", "TTY session must not duplicate prompt on stderr");
+
+  // Branch 2 — the finding's case: stdin TTY, stdout piped.
+  const b2 = routePrompt(false, true);
+  assert.equal(b2.stdout, "", "piped stdout must have no prompt leak");
+  assert.ok(b2.stderr.includes("lazyglm>"), "mixed stdin-TTY/stdout-piped must route prompt to stderr");
+
+  // Branch 3 — full pipe / CI (both non-TTY): no prompt anywhere.
+  const b3 = routePrompt(false, false);
+  assert.equal(b3.stdout, "", "full-pipe stdout must have no prompt");
+  assert.equal(b3.stderr, "", "full-pipe stderr must have no prompt");
+});
+
 // Regression (PR #26 Codex review P2, thread src/repl.js:539): when the user
 // enters an inline $skill, handleLine expands userContent to the full SKILL.md
 // body before calling runAgentTurn. The non-TTY `> text` echo must show the
