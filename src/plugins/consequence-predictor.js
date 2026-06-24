@@ -142,6 +142,23 @@ const GH_RELEASE_MUTATING_SUBCOMMANDS = new Set([
   "edit",
 ]);
 const GH_API_MUTATING_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
+const GH_API_FIELD_OPTIONS_WITH_VALUE = new Set(["-f", "--field", "-F", "--raw-field"]);
+const GH_API_VALUE_OPTIONS = new Set([
+  "-H", "--header",
+  "--hostname",
+  "--input",
+  "--jq", "-q",
+  "--template", "-t",
+  "--cache",
+  "--preview", "-p",
+]);
+const GH_API_FLAG_OPTIONS = new Set([
+  "--paginate",
+  "--slurp",
+  "--silent",
+  "--verbose",
+  "--include", "-i",
+]);
 const NPM_GLOBAL_OPTIONS_WITH_VALUE = new Set([
   "-C",
   "--cache",
@@ -1405,6 +1422,22 @@ function gitAliasFromConfig(value) {
   return match ? { name: match[1], expansion: match[2] } : null;
 }
 
+function shellAssignmentMap(tokens, end) {
+  const assignments = new Map();
+  for (const token of tokens.slice(0, end)) {
+    const match = String(token).match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (match) assignments.set(match[1], match[2]);
+  }
+  return assignments;
+}
+
+function gitAliasFromConfigEnv(value, assignments) {
+  const match = String(value || "").match(/^alias\.([A-Za-z0-9_-]+)=([A-Za-z_][A-Za-z0-9_]*)$/);
+  if (!match) return null;
+  const expansion = assignments.get(match[2]) || process.env[match[2]] || "";
+  return expansion ? { name: match[1], expansion } : null;
+}
+
 function gitAliasExpansionPushes(expansion, depth) {
   const text = String(expansion || "").trim();
   if (!text) return false;
@@ -1418,6 +1451,7 @@ function hasGitPushInvocation(command = "", depth = 0) {
     if (commandIndex === -1 || commandName(tokens[commandIndex]) !== "git") continue;
 
     const aliases = new Map();
+    const assignments = shellAssignmentMap(tokens, commandIndex);
     for (let i = commandIndex + 1; i < tokens.length; i += 1) {
       const token = tokens[i];
       if (token === "push") return true;
@@ -1434,6 +1468,13 @@ function hasGitPushInvocation(command = "", depth = 0) {
         const alias = gitAliasFromConfig(value);
         if (alias) aliases.set(alias.name, alias.expansion);
         if (token === "-c") i += 1;
+        continue;
+      }
+      if (option === "--config-env") {
+        const value = token.includes("=") ? token.slice(token.indexOf("=") + 1) : tokens[i + 1];
+        const alias = gitAliasFromConfigEnv(value, assignments);
+        if (alias) aliases.set(alias.name, alias.expansion);
+        if (!token.includes("=")) i += 1;
         continue;
       }
       if (GIT_GLOBAL_OPTIONS_WITH_VALUE.has(option)) {
@@ -1489,7 +1530,7 @@ function ghApiMutatesReleaseEndpoint(tokens, start) {
       continue;
     }
 
-    if (["-f", "--field", "-F", "--raw-field"].includes(token)) {
+    if (GH_API_FIELD_OPTIONS_WITH_VALUE.has(token)) {
       sawRequestFields = true;
       i += 1;
       continue;
@@ -1502,14 +1543,24 @@ function ghApiMutatesReleaseEndpoint(tokens, start) {
       sawRequestFields = true;
       continue;
     }
-    if (["-H", "--header", "--hostname", "--input", "--jq", "-q", "--template", "-t"].includes(token)) {
-      i += 1;
+    const option = optionName(token);
+    if (GH_API_VALUE_OPTIONS.has(option)) {
+      if (!token.includes("=")) i += 1;
       continue;
     }
-    if (token.startsWith("--hostname=") || token.startsWith("--input=") || token.startsWith("--jq=") || token.startsWith("--template=")) {
+    if (token.startsWith("-p") && token.length > 2) continue;
+    if (
+      token.startsWith("--header=") ||
+      token.startsWith("--hostname=") ||
+      token.startsWith("--input=") ||
+      token.startsWith("--jq=") ||
+      token.startsWith("--template=") ||
+      token.startsWith("--cache=") ||
+      token.startsWith("--preview=")
+    ) {
       continue;
     }
-    if (["--cache", "--paginate", "--slurp", "--silent", "--verbose", "--include", "-i"].includes(token)) continue;
+    if (GH_API_FLAG_OPTIONS.has(token)) continue;
     if (token.startsWith("-")) continue;
 
     if (!endpoint) endpoint = token;
@@ -1640,6 +1691,7 @@ function hasFindExecHighImpact(command = "", depth = 0) {
     const commandIndex = commandInvocationIndex(tokens);
     if (commandIndex === -1 || commandName(tokens[commandIndex]) !== "find") continue;
     for (let i = commandIndex + 1; i < tokens.length; i += 1) {
+      if (tokens[i] === "-delete") return true;
       if (tokens[i] !== "-exec" && tokens[i] !== "-execdir") continue;
       const nested = [];
       for (let j = i + 1; j < tokens.length && tokens[j] !== ";" && tokens[j] !== "+"; j += 1) {

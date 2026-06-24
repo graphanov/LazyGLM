@@ -1107,6 +1107,9 @@ test("blocks git aliases that expand to push", async () => {
     "git -c alias.ship=push ship origin main",
     "git -c alias.ship='push --force origin main' ship",
     "git -c alias.ship='!git push origin main' ship",
+    "FOO=push git --config-env=alias.ship=FOO ship origin main",
+    "FOO='push --force origin main' git --config-env=alias.ship=FOO ship",
+    "FOO='!git push origin main' git --config-env alias.ship=FOO ship",
   ];
 
   for (const command of commands) {
@@ -1125,6 +1128,10 @@ test("blocks gh api release mutations", async () => {
     "gh api -X POST repos/OWNER/REPO/releases -f tag_name=v1.2.3",
     "gh api --method PATCH repos/OWNER/REPO/releases/123 -f name=v1.2.3",
     "gh api -X DELETE repos/OWNER/REPO/releases/assets/123",
+    "gh api --cache 1h -X POST /repos/OWNER/REPO/releases -f tag_name=v1.2.3",
+    "gh api --cache=1h -X POST /repos/OWNER/REPO/releases -f tag_name=v1.2.3",
+    "gh api -p nebula-preview --method PATCH /repos/OWNER/REPO/releases/123 -f name=v1.2.3",
+    "gh api --preview nebula-preview -X DELETE /repos/OWNER/REPO/releases/assets/123",
   ];
 
   for (const command of commands) {
@@ -1139,18 +1146,28 @@ test("blocks gh api release mutations", async () => {
 });
 
 test("passes read-only gh api release inspections", async () => {
-  const res = await pre("run_shell", {
-    command: "gh api repos/OWNER/REPO/releases",
-    consequence_prediction:
-      "Reads GitHub Release metadata through the API without mutating tags, releases, or assets.",
-  });
-  assert.equal(res, undefined);
+  const commands = [
+    "gh api repos/OWNER/REPO/releases",
+    "gh api --cache 1h repos/OWNER/REPO/releases",
+    "gh api --preview nebula-preview repos/OWNER/REPO/releases",
+  ];
+
+  for (const command of commands) {
+    const res = await pre("run_shell", {
+      command,
+      consequence_prediction:
+        "Reads GitHub Release metadata through the API without mutating tags, releases, or assets.",
+    });
+    assert.equal(res, undefined, command);
+  }
 });
 
-test("blocks nested rm through common command runners", async () => {
+test("blocks nested rm and find delete through common command runners", async () => {
   const commands = [
     "printf '%s\\0' dist | xargs -0 rm -rf",
     "find dist -mindepth 1 -exec rm -rf {} +",
+    "find . -delete",
+    "find build -type f -delete",
   ];
 
   for (const command of commands) {
@@ -1168,6 +1185,7 @@ test("passes benign command-runner references to rm text", async () => {
   const commands = [
     "printf '%s\\0' dist | xargs -0 echo rm -rf",
     "find dist -mindepth 1 -print",
+    "find . -name delete -print",
   ];
 
   for (const command of commands) {
