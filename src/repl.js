@@ -684,7 +684,11 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
   // 10. REPL loop: prompt → read line → handle → repeat (sequential via the queue)
   let closed = false;
   const prompt = () => {
-    if (!closed) process.stdout.write(`${GREEN}lazyglm>${RESET} `);
+    // Suppress the colored interactive prompt when stdout is piped/non-TTY:
+    // otherwise it glues onto the non-TTY `> text` turn echo and pollutes
+    // piped output with ANSI escapes (`lazyglm> > hi`). The turn echo stands
+    // alone as a clean line for non-TTY consumers. (PR #26 Codex P2.)
+    if (!closed && process.stdout.isTTY === true) process.stdout.write(`${GREEN}lazyglm>${RESET} `);
   };
 
   while (!closed) {

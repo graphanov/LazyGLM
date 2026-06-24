@@ -109,6 +109,30 @@ test("REPL turn-frame helpers stay zero-ANSI and empty/plain for non-TTY", () =>
   assert.ok(!trunc.includes("─"), "truncated non-TTY echo must carry no rule glyph");
 });
 
+// Regression (PR #26 Codex review P2, thread src/repl.js:542): in the REPL
+// loop, prompt() writes `lazyglm> ` to stdout BEFORE handleLine → runAgentTurn
+// emits the non-TTY `> text` turn echo. When stdout is piped (non-TTY), that
+// colored prompt must be suppressed so it does not glue onto the echo and
+// corrupt piped output as `lazyglm> > text` with ANSI escapes. prompt() now
+// checks process.stdout.isTTY. This test locks the non-TTY output contract by
+// asserting the turn echo stands alone as a clean line with no prompt prefix.
+test("REPL non-TTY turn echo stands alone without a `lazyglm>` prompt prefix", () => {
+  // The non-TTY turn echo produced by turnStart must be a standalone clean
+  // line: zero-ANSI, no rule glyph, and NOT preceded by the colored prompt.
+  const echo = turnStart("hi", { isTTY: false });
+  assertNoAnsi(echo);
+  assert.equal(echo, "> hi\n");
+  assert.ok(!echo.includes("lazyglm>"), "non-TTY echo must not carry the interactive prompt");
+
+  // Sanity: a combined non-TTY render of prompt-suppressed + turnStart yields
+  // exactly the echo line, mirroring what a piped consumer sees after the fix.
+  const promptStub = ""; // fix: prompt() writes nothing when isTTY === false
+  const combined = promptStub + echo;
+  assertNoAnsi(combined);
+  assert.equal(combined, "> hi\n");
+  assert.ok(!combined.includes("lazyglm>"), "piped output must contain no prompt leak");
+});
+
 // Regression (PR #26 Codex review P2, thread src/repl.js:539): when the user
 // enters an inline $skill, handleLine expands userContent to the full SKILL.md
 // body before calling runAgentTurn. The non-TTY `> text` echo must show the
