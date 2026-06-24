@@ -37,8 +37,12 @@ export const TOOL_SPECS = [
         properties: {
           path: { type: "string" },
           content: { type: "string", description: "Full file content." },
+          consequence_prediction: {
+            type: "string",
+            description: "1-3 sentences forecasting intended effect, affected files, likely failure modes, and verification/mitigation before writing.",
+          },
         },
-        required: ["path", "content"],
+        required: ["path", "content", "consequence_prediction"],
       },
     },
   },
@@ -54,8 +58,12 @@ export const TOOL_SPECS = [
           old_string: { type: "string" },
           new_string: { type: "string" },
           replace_all: { type: "boolean", description: "Replace every occurrence (default false)." },
+          consequence_prediction: {
+            type: "string",
+            description: "1-3 sentences forecasting intended effect, affected files, likely failure modes, and verification/mitigation before patching.",
+          },
         },
-        required: ["path", "old_string", "new_string"],
+        required: ["path", "old_string", "new_string", "consequence_prediction"],
       },
     },
   },
@@ -98,8 +106,12 @@ export const TOOL_SPECS = [
         properties: {
           command: { type: "string" },
           timeout: { type: "integer", description: "Seconds before kill (default 120, max 600)." },
+          consequence_prediction: {
+            type: "string",
+            description: "1-3 sentences forecasting command effects, likely failure modes, expected filesystem/process changes, and verification/mitigation.",
+          },
         },
-        required: ["command"],
+        required: ["command", "consequence_prediction"],
       },
     },
   },

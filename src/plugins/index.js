@@ -2,6 +2,7 @@
 // component, retuned for GLM. Plugins subscribe to hook events; the engine
 // fires them in registration order.
 import rules from "./rules.js";
+import consequencePredictor from "./consequence-predictor.js";
 import commentChecker from "./comment-checker.js";
 import executorVerify from "./executor-verify.js";
 import startWorkContinuation from "./start-work-continuation.js";
@@ -13,6 +14,7 @@ import initDeep from "./init-deep.js";
 export const BUILTIN_PLUGINS = [
   telemetry,
   rules,
+  consequencePredictor,
   commentChecker,
   executorVerify,
   startWorkContinuation,
