@@ -18,6 +18,7 @@ import { install } from "./installer.js";
 import { runUltrawork } from "./ulw.js";
 import { readJson, gitInfo, truncate, nowIso } from "./util.js";
 import { renderBanner } from "./banner.js";
+import { renderStatus } from "./status.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join as pjoin } from "node:path";
 
@@ -326,6 +327,12 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
 
   // 6. Cost tracking
   const cumulative = { prompt: 0, completion: 0, reasoning: 0 };
+  // Last-turn usage + timing snapshot, surfaced by /status. lastTurn is null
+  // until the first turn completes; lastTurnMs includes retry backoff (wall-clock
+  // around chat()), so it is a human-facing figure, not a latency benchmark.
+  let lastTurn = null;
+  let lastTurnMs = 0;
+  const sessionStartMs = Date.now();
 
   // 7. Session (--continue resumes the last session file; otherwise fresh)
   let session;
@@ -376,6 +383,7 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
   /exit                 quit
   /clear                clear conversation (keep system prompt)
   /model <name>         switch model (e.g. glm-4.7-flash, glm-4.7, glm-5.2)
+  /status               show session, model, role/effort, timing, and token totals
   /cost                 show cumulative token spend (incl. reasoning)
   /compact              compact the context now
   /resume [n]           list past sessions, or resume the nth
@@ -417,6 +425,36 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
       case "cost":
         console.log(`   tokens in/out: ${cumulative.prompt}/${cumulative.completion} | ${GRAY}🧠 reasoning: ${cumulative.reasoning}${RESET}`);
         return;
+      case "status": {
+        // Derive reasoningEffort at /status time from the live role + catalog
+        // (mirrors router.js pickModel: roleEntry.reasoning_effort ||
+        // catalog.current.model_reasoning_effort). Done here so a /model switch
+        // is reflected without threading effort through providerConfig's return.
+        let effort = "high";
+        let role = providerConfig.role || "default";
+        try {
+          const cat = await readJson(pjoin(ROOT, "config", "model-catalog.json"), {});
+          const roleEntry = cat.roles?.[role] || cat.roles?.default || {};
+          effort = roleEntry.reasoning_effort || cat.current?.model_reasoning_effort || "high";
+        } catch {
+          // catalog read failure is non-fatal for a status line
+        }
+        console.log(
+          renderStatus({
+            sessionId: session?.id,
+            model: currentModel,
+            provider: providerConfig.provider,
+            role,
+            reasoningEffort: effort,
+            cumulative,
+            lastTurn,
+            sessionElapsedMs: Date.now() - sessionStartMs,
+            lastTurnMs,
+            isTTY: process.stdout.isTTY === true,
+          }),
+        );
+        return;
+      }
       case "compact": {
         const before = ctx.estimateTokens();
         const did = await ctx.maybeCompact({
@@ -519,6 +557,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
       });
 
       let resp;
+      const turnStartMs = Date.now();
       try {
         resp = await chat({
           model: currentModel,
@@ -536,6 +575,8 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
         process.stdout.write(`\n${YELLOW}❌ ${err.message}${RESET}\n`);
         return;
       }
+      // Per-turn timing: wall-clock around chat() (includes retry backoff).
+      lastTurnMs = Date.now() - turnStartMs;
 
       ctx.recordUsage(resp.usage);
       const u = resp.usage || {};
@@ -543,6 +584,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
       cumulative.prompt += u.prompt_tokens || 0;
       cumulative.completion += u.completion_tokens || 0;
       cumulative.reasoning += reasoning;
+      lastTurn = { prompt: u.prompt_tokens || 0, completion: u.completion_tokens || 0, reasoning };
       await appendEvent(session, { type: "usage", usage: u, cumulative: { ...cumulative } });
 
       closeStream();
