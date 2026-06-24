@@ -9,7 +9,16 @@ import { join } from "node:path";
 import { loadUserConfig, saveUserConfig, isOnboarded, resetConfigCache } from "../src/config.js";
 import { needsOnboarding, runOnboarding } from "../src/onboard.js";
 import { createSession, appendEvent, listSessions, loadSessionEvents } from "../src/sessions.js";
-import { replayIntoContext, replayTelemetry, formatReasoning, formatText, formatToolCall, formatToolResult, turnDivider } from "../src/repl.js";
+import {
+  replayIntoContext,
+  replayTelemetry,
+  replPromptTarget,
+  formatReasoning,
+  formatText,
+  formatToolCall,
+  formatToolResult,
+  turnDivider,
+} from "../src/repl.js";
 import { Context, assistantMessageFrom } from "../src/agent/context.js";
 import { chat } from "../src/agent/provider.js";
 
@@ -65,6 +74,12 @@ test("REPL turn-format helpers can render without ANSI for non-TTY output", () =
   assertNoAnsi(formatToolCall("read_file", { path: "src/repl.js" }, { isTTY: false }));
   assertNoAnsi(formatToolResult("ok", { isTTY: false }));
   assertNoAnsi(turnDivider({ isTTY: false }));
+});
+
+test("REPL prompt routing keeps piped stdout clean", () => {
+  assert.equal(replPromptTarget({ stdinIsTTY: false, stdoutIsTTY: false }), null, "fully piped REPL emits no prompt");
+  assert.equal(replPromptTarget({ stdinIsTTY: true, stdoutIsTTY: false }), "stderr", "human stdin with piped stdout prompts on stderr");
+  assert.equal(replPromptTarget({ stdinIsTTY: false, stdoutIsTTY: true }), "stdout", "TTY stdout keeps the normal prompt");
 });
 
 test.after(async () => {

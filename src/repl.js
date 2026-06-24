@@ -185,6 +185,12 @@ function extractFlag(s, flag) {
   return m ? m[1] : null;
 }
 
+export function replPromptTarget({ stdinIsTTY, stdoutIsTTY } = {}) {
+  if (stdoutIsTTY) return "stdout";
+  if (stdinIsTTY) return "stderr";
+  return null;
+}
+
 /** Rebuild a Context's messages from a session's event records. */
 export function replayIntoContext(events, ctx) {
   for (const ev of events) {
@@ -732,7 +738,13 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
   // 10. REPL loop: prompt → read line → handle → repeat (sequential via the queue)
   let closed = false;
   const prompt = () => {
-    if (!closed) process.stdout.write(`${GREEN}lazyglm>${RESET} `);
+    if (closed) return;
+    const target = replPromptTarget({
+      stdinIsTTY: process.stdin.isTTY === true,
+      stdoutIsTTY: process.stdout.isTTY === true,
+    });
+    if (target === "stdout") process.stdout.write(`${GREEN}lazyglm>${RESET} `);
+    else if (target === "stderr") process.stderr.write(`${GREEN}lazyglm>${RESET} `);
   };
 
   while (!closed) {
