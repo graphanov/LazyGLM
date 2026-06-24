@@ -77,6 +77,7 @@ test("selfUpdate without --force prompts and skips install when declined", async
   const res = await selfUpdate({
     fetchRemote: async () => "0.2.0",
     readLocal,
+    isInteractive: () => true,
     prompt: async () => { prompted = true; return "n"; },
     installer: () => { installed = true; },
     stdout: capture.stdout,
@@ -136,6 +137,7 @@ test("selfUpdate does not prompt or install when already up to date", async () =
   const res = await selfUpdate({
     fetchRemote: async () => "0.1.3",
     readLocal,
+    isInteractive: () => true,
     prompt: async () => { prompted = true; return "y"; },
     installer: () => { installed = true; },
     stdout: capture.stdout,
@@ -146,4 +148,28 @@ test("selfUpdate does not prompt or install when already up to date", async () =
   assert.equal(res.status, "equal");
   assert.equal(res.exitCode, 0);
   assert.match(capture.output(), /up to date/);
+});
+
+// Regression (PR #25 Codex review P2): non-TTY stdin must not hang on a prompt.
+// Without --force and no interactive stdin, skip install and point at --force.
+
+test("selfUpdate in non-interactive context skips prompt and points to --force", async () => {
+  const capture = captureStdout();
+  let prompted = false;
+  let installed = false;
+  const res = await selfUpdate({
+    fetchRemote: async () => "0.2.0",
+    readLocal,
+    isInteractive: () => false,
+    prompt: async () => { prompted = true; return "y"; },
+    installer: () => { installed = true; },
+    stdout: capture.stdout,
+  });
+
+  assert.equal(prompted, false, "must not prompt in non-interactive context");
+  assert.equal(installed, false);
+  assert.equal(res.status, "behind");
+  assert.equal(res.updated, false);
+  assert.equal(res.exitCode, 1);
+  assert.match(capture.output(), /--force/);
 });

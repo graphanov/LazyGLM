@@ -83,6 +83,7 @@ export async function selfUpdate({
   readLocal = readLocalVersion,
   installer = defaultInstaller,
   prompt = defaultPrompt,
+  isInteractive = () => defaultInput.isTTY === true,
   stdout = process.stdout,
 } = {}) {
   const result = await checkUpdate({ fetchRemote, readLocal });
@@ -93,6 +94,13 @@ export async function selfUpdate({
   if (result.status !== "behind") return result;
 
   if (!force) {
+    // Non-interactive contexts (piped/closed stdin, CI, --no-TTY) cannot answer
+    // a confirmation prompt. Calling question() would hang or exit early.
+    // Skip the install and point the user to --force instead of waiting.
+    if (!isInteractive()) {
+      stdout.write(`Update available — rerun with --force to install lazyglm@${result.remote}.\n`);
+      return { ...result, updated: false };
+    }
     let confirmed = "";
     try {
       confirmed = await prompt(`Install lazyglm@${result.remote} now? [y/N] `);
