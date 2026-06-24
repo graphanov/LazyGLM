@@ -526,7 +526,10 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
   };
 
   // --- one agent turn: stream GLM, execute tools, return control on text-only ---
-  const runAgentTurn = async (userContent) => {
+  // displayText: the raw user input as typed, used ONLY for the non-TTY `> text`
+  // echo so piped output logs the user's command rather than the expanded skill
+  // body. Defaults to userContent for non-skill turns. (PR #26 Codex P2.)
+  const runAgentTurn = async (userContent, displayText = userContent) => {
     const ups = await engine.fire("UserPromptSubmit", { prompt: userContent });
     let content = userContent;
     if (ups.injects.length) content = `${ups.injects.join("\n\n")}\n\n---\n\n${userContent}`;
@@ -536,7 +539,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
     // Frame this turn so consecutive turns don't blend (TTY: dim rule above,
     // matching rule below at every exit; non-TTY: plain `> text` echo). The
     // `── tools ──` divider nests inside this frame untouched.
-    process.stdout.write(turnStart(userContent, renderOpts()));
+    process.stdout.write(turnStart(displayText, renderOpts()));
 
     const MAX_TURNS = 40;
     for (let turn = 1; turn <= MAX_TURNS; turn++) {
@@ -675,7 +678,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
       if (skill) userContent = `${skill.body}\n\n---\n\nUSER REQUEST\n${input}`;
       else console.log(`${YELLOW}   (unknown skill: $${skillName})${RESET}`);
     }
-    await runAgentTurn(userContent);
+    await runAgentTurn(userContent, input);
   };
 
   // 10. REPL loop: prompt → read line → handle → repeat (sequential via the queue)

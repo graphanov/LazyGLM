@@ -109,6 +109,29 @@ test("REPL turn-frame helpers stay zero-ANSI and empty/plain for non-TTY", () =>
   assert.ok(!trunc.includes("─"), "truncated non-TTY echo must carry no rule glyph");
 });
 
+// Regression (PR #26 Codex review P2, thread src/repl.js:539): when the user
+// enters an inline $skill, handleLine expands userContent to the full SKILL.md
+// body before calling runAgentTurn. The non-TTY `> text` echo must show the
+// RAW user input, not the expanded skill body. runAgentTurn now takes a separate
+// displayText param (defaults to userContent) and passes it to turnStart.
+test("REPL non-TTY turn echo uses raw displayText, not expanded skill body", () => {
+  const rawInput = "$programming fix the bug";
+  const expandedBody = "---\nname: programming\n---\nFull skill body that is very long...\n\n---\n\nUSER REQUEST\n$programming fix the bug";
+
+  // Simulate what runAgentTurn does: turnStart(displayText) where displayText
+  // is the raw input, NOT the expanded userContent.
+  const echo = turnStart(rawInput, { isTTY: false });
+  assertNoAnsi(echo);
+  assert.equal(echo, `> ${rawInput}\n`);
+  assert.ok(!echo.includes("skill body"), "echo must not leak the expanded skill body");
+  assert.ok(!echo.includes("USER REQUEST"), "echo must not leak the expanded skill body");
+
+  // Sanity: the expanded body would have polluted the echo if passed directly.
+  const wrongEcho = turnStart(expandedBody, { isTTY: false });
+  assert.ok(wrongEcho.includes("truncated"), "expanded body is long enough to trigger truncation");
+  assert.ok(wrongEcho.includes("skill body"), "expanded body would leak into echo");
+});
+
 test.after(async () => {
   await Promise.all(homes.map((h) => rm(h, { recursive: true, force: true })));
 });
