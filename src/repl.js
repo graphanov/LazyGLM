@@ -379,6 +379,10 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
     cumulative.reasoning = restored.cumulative.reasoning;
     lastTurn = restored.lastTurn;
     sessionStartMs = restored.sessionStartMs;
+    // Persisted usage events do not carry a turn duration; clear the stale
+    // pre-resume lastTurnMs so /status does not pair resumed tokens with an
+    // unrelated wall-clock figure. It repopulates after the next turn.
+    lastTurnMs = null;
   };
 
   // 7. Session (--continue resumes the last session file; otherwise fresh)
