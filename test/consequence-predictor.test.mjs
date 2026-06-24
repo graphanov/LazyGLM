@@ -1207,7 +1207,8 @@ test("blocks nested rm and find delete through common command runners", async ()
   const commands = [
     "printf '%s\\0' dist | xargs -0 rm -rf",
     "printf '%s\\n' dist | xargs -E END rm -rf",
-    "printf '%s\\n' dist | xargs -e END rm -rf",
+    "printf '%s\\n' dist | xargs -eEND rm -rf",
+    "printf '%s\\n' dist | xargs -e rm -rf",
     "printf '%s\\n' dist | xargs -i {} rm -rf {}",
     "echo path | xargs -I{} sh -c 'rm -rf \"$1\"' sh {}",
     "find dist -mindepth 1 -exec rm -rf {} +",
@@ -1230,6 +1231,7 @@ test("blocks nested rm and find delete through common command runners", async ()
 test("passes benign command-runner references to rm text", async () => {
   const commands = [
     "printf '%s\\0' dist | xargs -0 echo rm -rf",
+    "printf '%s\\n' dist | xargs -e END rm -rf",
     "find dist -mindepth 1 -print",
     "find . -name delete -print",
   ];

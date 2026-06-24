@@ -1841,7 +1841,9 @@ function xargsNestedCommandIndex(tokens, start) {
 
     const attached = XARGS_SHORT_OPTIONS_WITH_ATTACHED_VALUE.find((prefix) => token.startsWith(prefix));
     if (attached) {
-      if (token === attached) i += 1;
+      // GNU xargs treats `-e` as an optional-argument flag: bare `-e` does not
+      // consume the next argv, but attached forms such as `-eEND` do.
+      if (token === attached && attached !== "-e") i += 1;
       continue;
     }
   }
