@@ -1806,13 +1806,42 @@ function hasShellFunctionDefinitionHighImpact(command = "", depth = 0) {
   return false;
 }
 
+const XARGS_OPTIONS_WITH_REQUIRED_VALUE = new Set([
+  "-I", "-L", "-n", "-P", "-s", "--max-lines", "--max-args", "--max-procs", "--max-chars", "--arg-file", "-a", "--delimiter", "-d", "-E", "-e",
+]);
+const XARGS_SHORT_OPTIONS_WITH_ATTACHED_VALUE = ["-I", "-L", "-n", "-P", "-s", "-a", "-d", "-E", "-e"];
+
+function xargsReplacementToken(token) {
+  return token !== undefined && String(token).includes("{}");
+}
+
 function xargsNestedCommandIndex(tokens, start) {
   for (let i = start; i < tokens.length; i += 1) {
     const token = tokens[i];
     if (token === "--") return i + 1;
     if (!token.startsWith("-")) return i;
-    if (["-I", "-L", "-n", "-P", "-s", "--replace", "--max-lines", "--max-args", "--max-procs", "--max-chars", "--arg-file", "-a", "--delimiter", "-d"].includes(optionName(token))) {
-      if (!token.includes("=") && token.length === optionName(token).length) i += 1;
+    if (token === "-i") {
+      if (xargsReplacementToken(tokens[i + 1])) i += 1;
+      continue;
+    }
+    if (token.startsWith("-i") && token.length > 2) continue;
+
+    if (token.startsWith("--")) {
+      const option = optionName(token);
+      if (option === "--replace") {
+        if (!token.includes("=") && xargsReplacementToken(tokens[i + 1])) i += 1;
+        continue;
+      }
+      if (XARGS_OPTIONS_WITH_REQUIRED_VALUE.has(option)) {
+        if (!token.includes("=")) i += 1;
+        continue;
+      }
+      continue;
+    }
+
+    const attached = XARGS_SHORT_OPTIONS_WITH_ATTACHED_VALUE.find((prefix) => token.startsWith(prefix));
+    if (attached) {
+      if (token === attached) i += 1;
       continue;
     }
   }

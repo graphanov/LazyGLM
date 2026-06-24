@@ -1206,6 +1206,9 @@ test("passes read-only gh api release inspections", async () => {
 test("blocks nested rm and find delete through common command runners", async () => {
   const commands = [
     "printf '%s\\0' dist | xargs -0 rm -rf",
+    "printf '%s\\n' dist | xargs -E END rm -rf",
+    "printf '%s\\n' dist | xargs -e END rm -rf",
+    "printf '%s\\n' dist | xargs -i {} rm -rf {}",
     "echo path | xargs -I{} sh -c 'rm -rf \"$1\"' sh {}",
     "find dist -mindepth 1 -exec rm -rf {} +",
     "find . -exec sh -c 'rm -rf \"$1\"' sh {} \\;",
