@@ -2,6 +2,7 @@
 import { resolve } from "node:path";
 import { install, uninstall } from "./installer.js";
 import { doctor } from "./doctor.js";
+import { checkUpdate, selfUpdate, describeUpdate } from "./update.js";
 import { runAgent } from "./agent/runtime.js";
 import { runUltrawork } from "./ulw.js";
 import { loadPlugins } from "./plugins/index.js";
@@ -28,6 +29,7 @@ Usage:
   lazyglm install [--force]            Initialize .lazyglm/ + AGENTS.md in this project
   lazyglm uninstall                    Remove .lazyglm/ runtime state
   lazyglm doctor                       Health report (provider, model, plugins, skills)
+  lazyglm update [--check] [--force]   Check for / install a newer LazyGLM release
   lazyglm models                       List available GLM models from the provider
   lazyglm run "<task>" [options]       Run the GLM agent on a task
     --model <name>                     GLM model (default: glm-5.2 via z.ai)
@@ -124,6 +126,16 @@ export async function main(argv) {
       }
       console.log(`\n${res.summary}`);
       return res.checks.some((c) => c.status === "fail") ? 1 : 0;
+    }
+    case "update": {
+      const { flags } = parseFlags(rest);
+      if (flags.check) {
+        const res = await checkUpdate();
+        console.log(describeUpdate(res));
+        return res.exitCode;
+      }
+      const res = await selfUpdate({ force: !!flags.force });
+      return res.exitCode;
     }
     case "models": {
       try {
