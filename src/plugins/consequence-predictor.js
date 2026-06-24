@@ -1073,7 +1073,7 @@ function commandInvocationIndex(tokens, start = 0) {
       i = next;
       continue;
     }
-    if (name === "command") {
+    if (name === "command" || name === "builtin") {
       i = skipWrapperOptions(tokens, i + 1, NO_OPTIONS_WITH_VALUE);
       continue;
     }
@@ -1104,7 +1104,7 @@ function pipelineTargetInvokesShell(tokens) {
     if (name === "env") {
       return envTargetInvokesShell(tokens, i + 1);
     }
-    if (name === "command") {
+    if (name === "command" || name === "builtin") {
       i = skipWrapperOptions(tokens, i + 1, NO_OPTIONS_WITH_VALUE);
       continue;
     }
@@ -1133,7 +1133,7 @@ function pipelineTargetConsumesScript(tokens) {
   while (i < tokens.length) {
     const name = commandName(tokens[i]);
     if (SCRIPT_FILE_CONSUMERS.has(name)) return true;
-    if (name === "command") {
+    if (name === "command" || name === "builtin") {
       i = skipWrapperOptions(tokens, i + 1, NO_OPTIONS_WITH_VALUE);
       continue;
     }
@@ -1578,10 +1578,15 @@ function gitAliasFromConfigEnv(value, assignments) {
   return expansion ? { name: match[1], expansion } : null;
 }
 
-function gitAliasExpansionPushes(expansion, depth) {
+function gitAliasExpansionPushes(expansion, depth, aliasArgs = []) {
   const text = String(expansion || "").trim();
   if (!text) return false;
-  if (text.startsWith("!")) return isHighImpactShell(text.slice(1), depth + 1);
+  if (text.startsWith("!")) {
+    const body = text.slice(1).trim();
+    const appendedArgs = shellCommandFromTokens(aliasArgs).trim();
+    const command = [body, appendedArgs].filter(Boolean).join(" ");
+    return isHighImpactShell(command, depth + 1);
+  }
   return commandName(shellWords(text)[0] || "") === "push";
 }
 
@@ -1598,7 +1603,7 @@ function hasGitPushInvocation(command = "", depth = 0) {
       if (token === "--") break;
       if (!token.startsWith("-")) {
         const expansion = aliases.get(token);
-        if (expansion !== undefined && gitAliasExpansionPushes(expansion, depth)) return true;
+        if (expansion !== undefined && gitAliasExpansionPushes(expansion, depth, tokens.slice(i + 1))) return true;
         break;
       }
 

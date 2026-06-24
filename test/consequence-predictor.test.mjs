@@ -86,6 +86,8 @@ test("blocks high-impact shell commands wrapped in shell command strings without
     "eval 'npm publish'",
     'eval "git push origin main"',
     "bash -lc 'eval \"gh release create v1.0.0\"'",
+    "bash -lc 'builtin eval \"npm publish\"'",
+    "bash -lc 'builtin command git push origin main'",
   ];
 
   for (const command of commands) {
@@ -625,12 +627,19 @@ test("blocks npm publish with publish-scoped options before publish without miti
 });
 
 test("passes non-push git commands with global options", async () => {
-  const res = await pre("run_shell", {
-    command: "git -C . status --short",
-    consequence_prediction:
-      "Reads repository status in the selected checkout and should not mutate files or remote refs; failures only affect this inspection step.",
-  });
-  assert.equal(res, undefined);
+  const commands = [
+    "git -C . status --short",
+    "git -c alias.echo='!printf \"<%s>\\n\"' echo one two",
+  ];
+
+  for (const command of commands) {
+    const res = await pre("run_shell", {
+      command,
+      consequence_prediction:
+        "Reads repository status or runs a non-mutating git alias and should not mutate files or remote refs; failures only affect this inspection step.",
+    });
+    assert.equal(res, undefined, command);
+  }
 });
 
 test("passes high-impact shell commands with scoped mitigation", async () => {
@@ -1137,9 +1146,11 @@ test("blocks git aliases that expand to push", async () => {
     "git -c alias.ship=push ship origin main",
     "git -c alias.ship='push --force origin main' ship",
     "git -c alias.ship='!git push origin main' ship",
+    "git -c alias.g='!git' g push origin main",
     "FOO=push git --config-env=alias.ship=FOO ship origin main",
     "FOO='push --force origin main' git --config-env=alias.ship=FOO ship",
     "FOO='!git push origin main' git --config-env alias.ship=FOO ship",
+    "FOO='!git' git --config-env=alias.g=FOO g push origin main",
   ];
 
   for (const command of commands) {
