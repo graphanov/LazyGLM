@@ -1194,6 +1194,146 @@ function isHereStringRedirectionToken(token) {
   return /^\d*<<<.*$/.test(String(token));
 }
 
+function isHereDocRedirectionToken(token) {
+  const text = String(token).replace(/^\d+/, "");
+  return text.startsWith("<<") && !text.startsWith("<<<");
+}
+
+function parseHereDocDelimiter(line, start) {
+  let i = start;
+  while (i < line.length && /\s/.test(line[i])) i += 1;
+
+  let delimiter = "";
+  let quote = null;
+  let escaped = false;
+
+  for (; i < line.length; i += 1) {
+    const ch = line[i];
+    if (escaped) {
+      delimiter += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) quote = null;
+      else {
+        delimiter += ch;
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (/\s/.test(ch) || ch === ";" || ch === "|" || ch === "&") break;
+    delimiter += ch;
+  }
+
+  if (escaped) delimiter += "\\";
+  return delimiter ? { delimiter } : null;
+}
+
+function hereDocRedirections(line) {
+  const redirections = [];
+  let quote = null;
+  let escaped = false;
+
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (ch !== "<" || line[i + 1] !== "<" || line[i + 2] === "<") continue;
+
+    const stripTabs = line[i + 2] === "-";
+    const parsed = parseHereDocDelimiter(line, i + (stripTabs ? 3 : 2));
+    if (parsed) redirections.push({ ...parsed, stripTabs });
+  }
+
+  return redirections;
+}
+
+function stageHasHereDocRedirection(tokens) {
+  return tokens.some((token) => isHereDocRedirectionToken(token));
+}
+
+function commandLineHasScriptConsumingHereDoc(commandLine) {
+  for (const pipeline of shellPipelines(commandLine)) {
+    for (let i = 0; i < pipeline.length; i += 1) {
+      if (!stageHasHereDocRedirection(pipeline[i])) continue;
+      if (pipelineTargetConsumesScript(pipeline[i])) return true;
+      for (const downstreamStage of pipeline.slice(i + 1)) {
+        if (pipelineTargetConsumesScript(downstreamStage)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function hereDocBody(text, start, delimiter, stripTabs) {
+  let cursor = start;
+  while (cursor < text.length) {
+    const nextNewline = text.indexOf("\n", cursor);
+    const lineEnd = nextNewline === -1 ? text.length : nextNewline;
+    const rawLine = text.slice(cursor, lineEnd).replace(/\r$/, "");
+    const comparisonLine = stripTabs ? rawLine.replace(/^\t+/, "") : rawLine;
+    if (comparisonLine === delimiter) {
+      return {
+        body: text.slice(start, cursor),
+        nextIndex: nextNewline === -1 ? text.length : nextNewline + 1,
+      };
+    }
+    if (nextNewline === -1) break;
+    cursor = nextNewline + 1;
+  }
+  return { body: text.slice(start), nextIndex: text.length };
+}
+
+function hasRemoteInstallerHereDoc(command = "", depth = 0) {
+  if (depth >= SHELL_COMMAND_STRING_DEPTH_LIMIT) return false;
+  const text = String(command);
+  let index = 0;
+
+  while (index < text.length) {
+    const lineEnd = text.indexOf("\n", index);
+    const commandLineEnd = lineEnd === -1 ? text.length : lineEnd;
+    const commandLine = text.slice(index, commandLineEnd);
+    const redirections = hereDocRedirections(commandLine);
+    if (!redirections.length) {
+      index = lineEnd === -1 ? text.length : lineEnd + 1;
+      continue;
+    }
+
+    const consumesScript = commandLineHasScriptConsumingHereDoc(commandLine);
+    let bodyStart = lineEnd === -1 ? text.length : lineEnd + 1;
+    for (const redirection of redirections) {
+      const { body, nextIndex } = hereDocBody(text, bodyStart, redirection.delimiter, redirection.stripTabs);
+      if (consumesScript && isHighImpactShell(body, depth + 1)) return true;
+      bodyStart = nextIndex;
+    }
+    index = bodyStart;
+  }
+
+  return false;
+}
+
 function hasRemoteInstallerHereString(command = "") {
   for (const tokens of shellCommandStages(command)) {
     if (!pipelineTargetConsumesScript(tokens)) continue;
@@ -1799,6 +1939,7 @@ function isHighImpactShell(command = "", depth = 0) {
     hasNpmRegistryMutationInvocation(commandText) ||
     hasGhReleaseInvocation(commandText) ||
     hasRemoteInstallerPipeline(commandText) ||
+    hasRemoteInstallerHereDoc(commandText, depth) ||
     hasRemoteInstallerHereString(commandText) ||
     hasShellCommandStringHighImpact(commandText, depth) ||
     hasShellExpansionHighImpact(commandText, depth) ||
