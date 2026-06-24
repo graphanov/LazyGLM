@@ -95,6 +95,7 @@ const PIPELINE_COMMAND_WRAPPER_OPTIONS_WITH_VALUE = new Map([
 // same parsed stage.
 const SHELL_CONTROL_COMMAND_PREFIXES = new Set(["!", "{", "if", "then", "do", "else", "elif", "while", "until"]);
 const SHELL_CONTROL_STRUCTURE_WORDS = new Set(["}", "for", "select", "in", "fi", "done", "esac"]);
+const SHELL_SUBSHELL_PREFIX_WORDS = new Set(["!", "if", "then", "do", "else", "elif", "while", "until"]);
 
 const GIT_GLOBAL_OPTIONS_WITH_VALUE = new Set([
   "-C",
@@ -140,6 +141,7 @@ const GH_RELEASE_MUTATING_SUBCOMMANDS = new Set([
   "delete-asset",
   "edit",
 ]);
+const GH_API_MUTATING_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
 const NPM_GLOBAL_OPTIONS_WITH_VALUE = new Set([
   "-C",
   "--cache",
@@ -204,13 +206,28 @@ const NPM_GLOBAL_OPTION_FLAGS = new Set([
 const NPM_PUBLISH_OPTIONS_WITH_VALUE = new Set(["--access", "--provenance-file"]);
 const NPM_PUBLISH_OPTION_FLAGS = new Set(["--provenance"]);
 
-// Registry-mutating npm subcommands that must be classified high-impact. `pub`
-// is an alias for `publish`; `unpublish` removes a published package/version.
-const NPM_REGISTRY_MUTATION_SUBCOMMANDS = new Set(["publish", "pub", "unpublish"]);
+// Registry-mutating npm subcommands that must be classified high-impact.
+// Include common npm abbreviations that resolve to the same mutating commands.
+const NPM_REGISTRY_MUTATION_SUBCOMMANDS = new Set([
+  "publish", "pub", "pu", "publ",
+  "unpublish", "unp", "unpub", "unpubl",
+  "deprecate", "dep", "undeprecate", "undep",
+]);
+const NPM_DIST_TAG_SUBCOMMANDS = new Set(["dist-tag", "dist-tags"]);
+const NPM_DIST_TAG_MUTATION_SUBCOMMANDS = new Set(["add", "rm", "remove", "del", "delete"]);
+const NPM_SCOPED_MUTATION_SUBCOMMANDS = new Map([
+  ["owner", new Set(["add", "rm", "remove", "delete", "del"])],
+  ["author", new Set(["add", "rm", "remove", "delete", "del"])],
+  ["access", new Set(["set", "grant", "revoke", "rm", "remove", "delete", "del"])],
+  ["team", new Set(["create", "destroy", "add", "rm", "remove", "delete", "del"])],
+  ["org", new Set(["set", "rm", "remove", "delete", "del"])],
+  ["token", new Set(["create", "revoke", "rm", "remove", "delete", "del"])],
+  ["trust", new Set(["github", "revoke", "rm", "remove", "delete", "del"])],
+]);
 // `npm exec` and the documented `npm x` alias can run a nested `npm publish` /
 // `npm unpublish` command. Treat those nested registry mutations as high-impact
 // without over-blocking local scripts such as `npm exec -- npm run publish`.
-const NPM_EXEC_SUBCOMMANDS = new Set(["exec", "x"]);
+const NPM_EXEC_SUBCOMMANDS = new Set(["exec", "x", "exe"]);
 const NPM_EXEC_CALL_OPTIONS_WITH_VALUE = new Set(["-c", "--call"]);
 const NPM_EXEC_PACKAGE_OPTIONS_WITH_VALUE = new Set(["-p", "--package"]);
 
@@ -222,13 +239,13 @@ const NPM_EXEC_PACKAGE_OPTIONS_WITH_VALUE = new Set(["-p", "--package"]);
 // inspected, so it never reaches the value-consume branch.
 const NPM_SUBCOMMANDS = new Set([
   "access", "add", "audit", "bin", "bugs", "cache", "ci", "config", "create",
-  "dedupe", "deprecate", "diff", "dist-tag", "docs", "doctor", "edit", "exec",
+  "dedupe", "dep", "deprecate", "diff", "dist-tag", "dist-tags", "docs", "doctor", "edit", "exe", "exec",
   "explain", "explore", "find-dupes", "fund", "get", "help", "hook", "i",
   "init", "install", "install-clean", "link", "ln", "login", "logout", "ls",
   "org", "outdated", "owner", "pack", "ping", "pkg", "prefix", "profile",
-  "prune", "pub", "publish", "query", "rebuild", "remove", "restart", "rm", "root",
+  "prune", "pu", "pub", "publ", "publish", "query", "rebuild", "remove", "restart", "rm", "root",
   "run", "run-script", "search", "set", "shrinkwrap", "start", "stop", "t",
-  "team", "test", "token", "uninstall", "unpublish", "unstar", "update",
+  "team", "test", "token", "trust", "undep", "undeprecate", "uninstall", "unp", "unpub", "unpubl", "unpublish", "unstar", "update",
   "upgrade", "version", "view", "whoami", "x",
 ]);
 
@@ -313,6 +330,12 @@ function shellWords(value = "") {
       continue;
     }
 
+    if (!quote && ch === "$" && (text[index + 1] === "'" || text[index + 1] === '"')) {
+      quote = text[index + 1];
+      index += 1;
+      continue;
+    }
+
     if (ch === "\\" && quote !== "'") {
       escaped = true;
       continue;
@@ -392,6 +415,12 @@ function shellPipelines(value = "") {
       }
       current += ch;
       escaped = false;
+      continue;
+    }
+
+    if (!quote && ch === "$" && (text[index + 1] === "'" || text[index + 1] === '"')) {
+      quote = text[index + 1];
+      index += 1;
       continue;
     }
 
@@ -581,9 +610,21 @@ function previousSignificantChar(text, index) {
   return "";
 }
 
+function previousShellWord(text, index) {
+  let end = index - 1;
+  while (end >= 0 && /\s/.test(text[end])) end -= 1;
+  if (end < 0) return "";
+  let start = end;
+  while (start >= 0 && !/[\s;|&(){}]/.test(text[start])) start -= 1;
+  return text.slice(start + 1, end + 1);
+}
+
 function startsShellSubshellGroup(text, index) {
   const previous = previousSignificantChar(text, index);
-  return previous === "" || previous === ";" || previous === "|" || previous === "&" || previous === "(";
+  if (previous === "" || previous === ";" || previous === "|" || previous === "&" || previous === "(" || previous === "!" || previous === ")") {
+    return true;
+  }
+  return SHELL_SUBSHELL_PREFIX_WORDS.has(previousShellWord(text, index));
 }
 
 function startsShellCommandWord(text, index) {
@@ -1088,6 +1129,68 @@ function pipelineTargetConsumesScript(tokens) {
   return false;
 }
 
+function hasRemoteDownloadExpansion(command = "", depth = 0) {
+  if (depth >= SHELL_COMMAND_STRING_DEPTH_LIMIT) return false;
+  const text = String(command);
+  let quote = null;
+  let escaped = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) quote = null;
+      if (quote === "'") continue;
+    } else if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+
+    if (ch === "$" && text[i + 1] === "(") {
+      const close = matchingParenIndex(text, i + 1);
+      if (close !== -1) {
+        const nestedCommand = text.slice(i + 2, close);
+        if (hasRemoteDownloadInvocation(nestedCommand) || hasRemoteDownloadExpansion(nestedCommand, depth + 1)) return true;
+        i = close;
+      }
+      continue;
+    }
+    if (ch === "`") {
+      const close = matchingBacktickIndex(text, i);
+      if (close !== -1) {
+        const nestedCommand = text.slice(i + 1, close);
+        if (hasRemoteDownloadInvocation(nestedCommand) || hasRemoteDownloadExpansion(nestedCommand, depth + 1)) return true;
+        i = close;
+      }
+    }
+  }
+  return false;
+}
+
+function isHereStringRedirectionToken(token) {
+  return /^\d*<<<.*$/.test(String(token));
+}
+
+function hasRemoteInstallerHereString(command = "") {
+  for (const tokens of shellCommandStages(command)) {
+    if (!pipelineTargetConsumesScript(tokens)) continue;
+    for (let i = 0; i < tokens.length; i += 1) {
+      const token = tokens[i];
+      const operand = shellRedirectionOperand(token);
+      if (operand === undefined || !isHereStringRedirectionToken(token)) continue;
+      const payload = operand === "" ? tokens[i + 1] : operand;
+      if (payload && (hasRemoteDownloadInvocation(payload) || hasRemoteDownloadExpansion(payload))) return true;
+    }
+  }
+  return false;
+}
+
 function hasRemoteInstallerPipeline(command = "") {
   for (const pipeline of shellPipelines(command)) {
     for (let sourceIndex = 0; sourceIndex < pipeline.length - 1; sourceIndex += 1) {
@@ -1177,11 +1280,80 @@ function npmExecHasRegistryMutation(tokens, start, depth) {
   return false;
 }
 
+function npmNextActionToken(tokens, start) {
+  for (let i = start; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token === "--") continue;
+    if (isAssignment(token)) continue;
+    if (!token.startsWith("-")) return token;
+
+    const option = npmGlobalOptionName(token);
+    if (
+      NPM_GLOBAL_OPTIONS_WITH_VALUE.has(option) ||
+      NPM_PUBLISH_OPTIONS_WITH_VALUE.has(option) ||
+      NPM_EXEC_PACKAGE_OPTIONS_WITH_VALUE.has(option)
+    ) {
+      if (!token.includes("=")) i += 1;
+      continue;
+    }
+    if ((token.startsWith("-w") || token.startsWith("-C") || token.startsWith("-p")) && token.length > 2) continue;
+    if (NPM_GLOBAL_OPTION_FLAGS.has(option) || NPM_PUBLISH_OPTION_FLAGS.has(option)) continue;
+  }
+  return undefined;
+}
+
+function npmTokenStartsRegistryMutation(tokens, index) {
+  const token = tokens[index];
+  if (NPM_REGISTRY_MUTATION_SUBCOMMANDS.has(token)) return true;
+  if (NPM_DIST_TAG_SUBCOMMANDS.has(token)) {
+    return NPM_DIST_TAG_MUTATION_SUBCOMMANDS.has(npmNextActionToken(tokens, index + 1));
+  }
+  const scopedMutations = NPM_SCOPED_MUTATION_SUBCOMMANDS.get(token);
+  return Boolean(scopedMutations && scopedMutations.has(npmNextActionToken(tokens, index + 1)));
+}
+
+function shellCommandFromTokens(tokens) {
+  return tokens
+    .map((token) => {
+      const text = String(token);
+      return /\s/.test(text) ? `'${text.replace(/'/g, `'\\''`)}'` : text;
+    })
+    .join(" ");
+}
+
+function npmExploreHasHighImpact(tokens, start, depth) {
+  if (depth >= 3) return false;
+  let sawPackage = false;
+  for (let i = start; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token === "--") {
+      if (!sawPackage) continue;
+      const nestedCommand = shellCommandFromTokens(tokens.slice(i + 1)).trim();
+      return nestedCommand ? isHighImpactShell(nestedCommand, depth + 1) : false;
+    }
+    if (isAssignment(token)) continue;
+    if (!token.startsWith("-")) {
+      sawPackage = true;
+      continue;
+    }
+
+    const option = npmGlobalOptionName(token);
+    if (NPM_GLOBAL_OPTIONS_WITH_VALUE.has(option)) {
+      if (!token.includes("=")) i += 1;
+      continue;
+    }
+    if ((token.startsWith("-w") || token.startsWith("-C")) && token.length > 2) continue;
+    if (NPM_GLOBAL_OPTION_FLAGS.has(option)) continue;
+  }
+  return false;
+}
+
 function npmTokensHaveRegistryMutation(tokens, start = 0, depth = 0) {
   for (let i = start; i < tokens.length; i += 1) {
     const token = tokens[i];
-    if (NPM_REGISTRY_MUTATION_SUBCOMMANDS.has(token)) return true;
+    if (npmTokenStartsRegistryMutation(tokens, i)) return true;
     if (NPM_EXEC_SUBCOMMANDS.has(token)) return npmExecHasRegistryMutation(tokens, i + 1, depth);
+    if (token === "explore") return npmExploreHasHighImpact(tokens, i + 1, depth);
     // npm accepts `--` before the subcommand (for example `npm -- publish`),
     // so the option terminator must not mask a following registry mutation.
     if (token === "--") continue;
@@ -1214,7 +1386,7 @@ function npmTokensHaveRegistryMutation(tokens, start = 0, depth = 0) {
       next !== undefined &&
       next !== "--" &&
       !next.startsWith("-") &&
-      !NPM_REGISTRY_MUTATION_SUBCOMMANDS.has(next) &&
+      !npmTokenStartsRegistryMutation(tokens, i + 1) &&
       !NPM_SUBCOMMANDS.has(next)
     ) {
       i += 1;
@@ -1228,22 +1400,47 @@ function hasNpmRegistryMutationInvocation(command = "") {
   return npmShellCommandHasRegistryMutation(command, 0);
 }
 
-function hasGitPushInvocation(command = "") {
+function gitAliasFromConfig(value) {
+  const match = String(value || "").match(/^alias\.([A-Za-z0-9_-]+)=(.*)$/);
+  return match ? { name: match[1], expansion: match[2] } : null;
+}
+
+function gitAliasExpansionPushes(expansion, depth) {
+  const text = String(expansion || "").trim();
+  if (!text) return false;
+  if (text.startsWith("!")) return isHighImpactShell(text.slice(1), depth + 1);
+  return commandName(shellWords(text)[0] || "") === "push";
+}
+
+function hasGitPushInvocation(command = "", depth = 0) {
   for (const tokens of shellCommandStages(command)) {
     const commandIndex = commandInvocationIndex(tokens);
     if (commandIndex === -1 || commandName(tokens[commandIndex]) !== "git") continue;
 
+    const aliases = new Map();
     for (let i = commandIndex + 1; i < tokens.length; i += 1) {
       const token = tokens[i];
       if (token === "push") return true;
-      if (token === "--" || !token.startsWith("-")) break;
+      if (token === "--") break;
+      if (!token.startsWith("-")) {
+        const expansion = aliases.get(token);
+        if (expansion !== undefined && gitAliasExpansionPushes(expansion, depth)) return true;
+        break;
+      }
 
       const option = gitGlobalOptionName(token);
+      if (option === "-c") {
+        const value = token === "-c" ? tokens[i + 1] : token.slice(2);
+        const alias = gitAliasFromConfig(value);
+        if (alias) aliases.set(alias.name, alias.expansion);
+        if (token === "-c") i += 1;
+        continue;
+      }
       if (GIT_GLOBAL_OPTIONS_WITH_VALUE.has(option)) {
         if (!token.includes("=")) i += 1;
         continue;
       }
-      if (token.startsWith("-C") || token.startsWith("-c")) continue;
+      if (token.startsWith("-C")) continue;
       if (GIT_GLOBAL_OPTION_FLAGS.has(option)) continue;
       break;
     }
@@ -1269,6 +1466,61 @@ function ghReleaseSubcommandAfterOptions(tokens, start) {
   return undefined;
 }
 
+function ghApiMutatesReleaseEndpoint(tokens, start) {
+  let method = "GET";
+  let sawRequestFields = false;
+  let endpoint;
+
+  for (let i = start; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token === "--") continue;
+
+    if (token === "-X" || token === "--method") {
+      method = String(tokens[i + 1] || "").toUpperCase();
+      i += 1;
+      continue;
+    }
+    if (token.startsWith("-X") && token.length > 2) {
+      method = token.slice(2).toUpperCase();
+      continue;
+    }
+    if (token.startsWith("--method=")) {
+      method = token.slice(token.indexOf("=") + 1).toUpperCase();
+      continue;
+    }
+
+    if (["-f", "--field", "-F", "--raw-field"].includes(token)) {
+      sawRequestFields = true;
+      i += 1;
+      continue;
+    }
+    if (token.startsWith("-f") && token.length > 2) {
+      sawRequestFields = true;
+      continue;
+    }
+    if (token.startsWith("--field=") || token.startsWith("--raw-field=")) {
+      sawRequestFields = true;
+      continue;
+    }
+    if (["-H", "--header", "--hostname", "--input", "--jq", "-q", "--template", "-t"].includes(token)) {
+      i += 1;
+      continue;
+    }
+    if (token.startsWith("--hostname=") || token.startsWith("--input=") || token.startsWith("--jq=") || token.startsWith("--template=")) {
+      continue;
+    }
+    if (["--cache", "--paginate", "--slurp", "--silent", "--verbose", "--include", "-i"].includes(token)) continue;
+    if (token.startsWith("-")) continue;
+
+    if (!endpoint) endpoint = token;
+  }
+
+  if (!endpoint) return false;
+  const effectiveMethod = method === "GET" && sawRequestFields ? "POST" : method;
+  const normalizedEndpoint = endpoint.replace(/^\/+/, "");
+  return GH_API_MUTATING_METHODS.has(effectiveMethod) && /^repos\/[^/]+\/[^/]+\/releases(?:$|\/)/.test(normalizedEndpoint);
+}
+
 function hasGhReleaseInvocation(command = "") {
   for (const tokens of shellCommandStages(command)) {
     const commandIndex = commandInvocationIndex(tokens);
@@ -1290,6 +1542,10 @@ function hasGhReleaseInvocation(command = "") {
         // this gh invocation so the outer stage scan reaches the next one.
         break;
       }
+      if (token === "api") {
+        if (ghApiMutatesReleaseEndpoint(tokens, i + 1)) return true;
+        break;
+      }
       if (token === "--" || !token.startsWith("-")) break;
 
       const option = optionName(token);
@@ -1300,6 +1556,96 @@ function hasGhReleaseInvocation(command = "") {
       if (token.startsWith("-R") && token.length > 2) continue;
       if (GH_GLOBAL_OPTION_FLAGS.has(option)) continue;
       break;
+    }
+  }
+  return false;
+}
+
+function matchingBraceIndex(text, openIndex) {
+  let depth = 1;
+  let quote = null;
+  let escaped = false;
+
+  for (let i = openIndex + 1; i < text.length; i += 1) {
+    const ch = text[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (ch === "{") depth += 1;
+    else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+function hasShellFunctionDefinitionHighImpact(command = "", depth = 0) {
+  if (depth >= SHELL_COMMAND_STRING_DEPTH_LIMIT) return false;
+  const text = String(command);
+  const functionStart = /(?:^|[;\s])(?:function\s+[A-Za-z_][A-Za-z0-9_]*\s*|[A-Za-z_][A-Za-z0-9_]*\s*\(\)\s*)\{/g;
+  let match;
+  while ((match = functionStart.exec(text)) !== null) {
+    const open = text.indexOf("{", match.index);
+    if (open === -1) continue;
+    const close = matchingBraceIndex(text, open);
+    if (close === -1) continue;
+    const body = text.slice(open + 1, close);
+    if (isHighImpactShell(body, depth + 1)) return true;
+    functionStart.lastIndex = close + 1;
+  }
+  return false;
+}
+
+function xargsNestedCommandIndex(tokens, start) {
+  for (let i = start; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token === "--") return i + 1;
+    if (!token.startsWith("-")) return i;
+    if (["-I", "-L", "-n", "-P", "-s", "--replace", "--max-lines", "--max-args", "--max-procs", "--max-chars", "--arg-file", "-a", "--delimiter", "-d"].includes(optionName(token))) {
+      if (!token.includes("=") && token.length === optionName(token).length) i += 1;
+      continue;
+    }
+  }
+  return -1;
+}
+
+function hasXargsNestedHighImpact(command = "", depth = 0) {
+  if (depth >= SHELL_COMMAND_STRING_DEPTH_LIMIT) return false;
+  for (const tokens of shellCommandStages(command)) {
+    const commandIndex = commandInvocationIndex(tokens);
+    if (commandIndex === -1 || commandName(tokens[commandIndex]) !== "xargs") continue;
+    const nestedIndex = xargsNestedCommandIndex(tokens, commandIndex + 1);
+    if (nestedIndex !== -1 && isHighImpactShell(tokens.slice(nestedIndex).join(" "), depth + 1)) return true;
+  }
+  return false;
+}
+
+function hasFindExecHighImpact(command = "", depth = 0) {
+  if (depth >= SHELL_COMMAND_STRING_DEPTH_LIMIT) return false;
+  for (const tokens of shellCommandStages(command)) {
+    const commandIndex = commandInvocationIndex(tokens);
+    if (commandIndex === -1 || commandName(tokens[commandIndex]) !== "find") continue;
+    for (let i = commandIndex + 1; i < tokens.length; i += 1) {
+      if (tokens[i] !== "-exec" && tokens[i] !== "-execdir") continue;
+      const nested = [];
+      for (let j = i + 1; j < tokens.length && tokens[j] !== ";" && tokens[j] !== "+"; j += 1) {
+        nested.push(tokens[j]);
+      }
+      if (nested.length && isHighImpactShell(nested.join(" "), depth + 1)) return true;
     }
   }
   return false;
@@ -1397,12 +1743,16 @@ function isHighImpactShell(command = "", depth = 0) {
   return (
     hasRecursiveForceRm(commandText) ||
     hasRecursiveMetadataChange(commandText) ||
-    hasGitPushInvocation(commandText) ||
+    hasGitPushInvocation(commandText, depth) ||
     hasNpmRegistryMutationInvocation(commandText) ||
     hasGhReleaseInvocation(commandText) ||
     hasRemoteInstallerPipeline(commandText) ||
+    hasRemoteInstallerHereString(commandText) ||
     hasShellCommandStringHighImpact(commandText, depth) ||
-    hasShellExpansionHighImpact(commandText, depth)
+    hasShellExpansionHighImpact(commandText, depth) ||
+    hasShellFunctionDefinitionHighImpact(commandText, depth) ||
+    hasXargsNestedHighImpact(commandText, depth) ||
+    hasFindExecHighImpact(commandText, depth)
   );
 }
 
