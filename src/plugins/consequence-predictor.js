@@ -296,8 +296,18 @@ function shellWords(value = "") {
   let quote = null;
   let escaped = false;
 
-  for (const ch of text) {
+  for (let index = 0; index < text.length; index += 1) {
+    const ch = text[index];
     if (escaped) {
+      if (ch === "\n") {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\r" && text[index + 1] === "\n") {
+        index += 1;
+        escaped = false;
+        continue;
+      }
       current += ch;
       escaped = false;
       continue;
@@ -371,6 +381,15 @@ function shellPipelines(value = "") {
   for (let index = 0; index < text.length; index += 1) {
     const ch = text[index];
     if (escaped) {
+      if (ch === "\n") {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\r" && text[index + 1] === "\n") {
+        index += 1;
+        escaped = false;
+        continue;
+      }
       current += ch;
       escaped = false;
       continue;

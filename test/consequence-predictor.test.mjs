@@ -99,6 +99,29 @@ test("blocks high-impact shell commands wrapped in shell command strings without
   }
 });
 
+test("blocks high-impact shell commands split by escaped newlines without mitigation", async () => {
+  const commands = [
+    `npm \\
+ publish`,
+    `git \\
+ push origin main`,
+    `rm -r \\
+ -f dist`,
+    `bash -lc 'npm \\
+ publish'`,
+  ];
+
+  for (const command of commands) {
+    const res = await pre("run_shell", {
+      command,
+      consequence_prediction:
+        "Runs a line-continued shell command that may mutate registry, repository, or filesystem state if classification misses the joined tokens.",
+    });
+    assert.equal(res.decision, "block", command);
+    assert.match(res.reason, /High-impact shell commands/i, command);
+  }
+});
+
 test("passes benign shell command strings without high-impact classification", async () => {
   const commands = [
     "bash -lc 'npm test'",
