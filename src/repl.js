@@ -83,8 +83,12 @@ export function turnRule({ isTTY = true } = {}) {
   return isTTY ? `${DIM}${TURN_RULE}${RESET}` : "";
 }
 
+export function stripControlSequences(text = "") {
+  return String(text).replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])|[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+}
+
 export function turnStart(userText, { isTTY = true } = {}) {
-  if (!isTTY) return `> ${truncate(userText ?? "", 100)}\n`;
+  if (!isTTY) return `> ${truncate(stripControlSequences(userText ?? ""), 100)}\n`;
   return `\n${turnRule({ isTTY })}\n`;
 }
 
@@ -693,7 +697,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
     if (closed) return;
     if (process.stdout.isTTY === true) {
       process.stdout.write(`${GREEN}lazyglm>${RESET} `);
-    } else if (process.stdin.isTTY === true) {
+    } else if (process.stdin.isTTY === true && process.stderr.isTTY === true) {
       process.stderr.write(`${GREEN}lazyglm>${RESET} `);
     }
   };
