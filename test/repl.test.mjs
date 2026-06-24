@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { loadUserConfig, saveUserConfig, isOnboarded, resetConfigCache } from "../src/config.js";
 import { needsOnboarding, runOnboarding } from "../src/onboard.js";
 import { createSession, appendEvent, listSessions, loadSessionEvents } from "../src/sessions.js";
-import { replayIntoContext, formatReasoning, formatText, formatToolCall, formatToolResult, turnDivider } from "../src/repl.js";
+import { replayIntoContext, replayTelemetry, formatReasoning, formatText, formatToolCall, formatToolResult, turnDivider } from "../src/repl.js";
 import { Context, assistantMessageFrom } from "../src/agent/context.js";
 import { chat } from "../src/agent/provider.js";
 
@@ -260,6 +260,27 @@ test("replayIntoContext restores reasoning_content from a persisted assistant ev
   replayIntoContext(events, ctx);
   const assistant = ctx.messages.find((m) => m.role === "assistant");
   assert.equal(assistant.reasoning_content, "I weighed options then acted.", "reasoning must be restored on replay");
+});
+
+test("replayTelemetry restores cumulative status counters for resumed sessions", () => {
+  const startedAt = "2026-01-01T00:00:00.000Z";
+  const events = [
+    { type: "session", t: startedAt, id: "sess_resume" },
+    {
+      type: "usage",
+      usage: { prompt_tokens: 10, completion_tokens: 20, completion_tokens_details: { reasoning_tokens: 3 } },
+      cumulative: { prompt: 10, completion: 20, reasoning: 3 },
+    },
+    {
+      type: "usage",
+      usage: { prompt_tokens: 4, completion_tokens: 5, reasoning_tokens: 2 },
+      cumulative: { prompt: 14, completion: 25, reasoning: 5 },
+    },
+  ];
+  const telemetry = replayTelemetry(events);
+  assert.deepEqual(telemetry.cumulative, { prompt: 14, completion: 25, reasoning: 5 });
+  assert.deepEqual(telemetry.lastTurn, { prompt: 4, completion: 5, reasoning: 2 });
+  assert.equal(telemetry.sessionStartMs, Date.parse(startedAt));
 });
 
 test("assistant append→load round-trip preserves reasoning_content (isolated LAZYGLM_HOME)", async () => {

@@ -210,6 +210,39 @@ export function replayIntoContext(events, ctx) {
   }
 }
 
+/**
+ * Reconstruct cumulative usage, last-turn usage, and the original session start
+ * time from a session's persisted event records. Used by --continue and /resume
+ * so /status reflects prior turns rather than a freshly-zeroed process state.
+ *
+ * @returns {{ cumulative: object, lastTurn: object|null, sessionStartMs: number }}
+ */
+export function replayTelemetry(events) {
+  const cumulative = { prompt: 0, completion: 0, reasoning: 0 };
+  let lastTurn = null;
+  let sessionStartMs = Date.now();
+  for (const ev of events || []) {
+    if (ev.type === "session" && ev.t) {
+      const ms = Date.parse(ev.t);
+      if (!Number.isNaN(ms)) sessionStartMs = ms;
+    } else if (ev.type === "usage") {
+      // Persisted usage records carry a cumulative snapshot (see appendEvent
+      // call in handleLine), so the last one wins and reflects the full session.
+      if (ev.cumulative && typeof ev.cumulative === "object") {
+        cumulative.prompt = ev.cumulative.prompt || 0;
+        cumulative.completion = ev.cumulative.completion || 0;
+        cumulative.reasoning = ev.cumulative.reasoning || 0;
+      }
+      const u = ev.usage;
+      if (u && typeof u === "object") {
+        const reasoning = u.completion_tokens_details?.reasoning_tokens || u.reasoning_tokens || 0;
+        lastTurn = { prompt: u.prompt_tokens || 0, completion: u.completion_tokens || 0, reasoning };
+      }
+    }
+  }
+  return { cumulative, lastTurn, sessionStartMs };
+}
+
 /** Render runAgent / runUltrawork events into the REPL (compact). */
 function renderUltraworkEvent(ev) {
   switch (ev.type) {
@@ -332,7 +365,15 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
   // around chat()), so it is a human-facing figure, not a latency benchmark.
   let lastTurn = null;
   let lastTurnMs = 0;
-  const sessionStartMs = Date.now();
+  let sessionStartMs = Date.now();
+  const restoreTelemetry = (events) => {
+    const restored = replayTelemetry(events);
+    cumulative.prompt = restored.cumulative.prompt;
+    cumulative.completion = restored.cumulative.completion;
+    cumulative.reasoning = restored.cumulative.reasoning;
+    lastTurn = restored.lastTurn;
+    sessionStartMs = restored.sessionStartMs;
+  };
 
   // 7. Session (--continue resumes the last session file; otherwise fresh)
   let session;
@@ -342,6 +383,7 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
       const events = await loadSessionEvents(last.id);
       if (events && events.length) {
         replayIntoContext(events, ctx);
+        restoreTelemetry(events);
         session = { id: last.id, path: last.path, model: last.model, provider: last.provider };
         console.log(`${GRAY}   (resumed session ${last.id}: ${events.length} events)${RESET}`);
       }
@@ -495,6 +537,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
         }
         ctx.messages = ctx.messages.filter((m) => m.role === "system");
         replayIntoContext(events, ctx);
+        restoreTelemetry(events);
         session = { id: pick.id, path: pick.path, model: pick.model, provider: pick.provider };
         console.log(`${GREEN}   ✓ resumed ${pick.id} (${events.length} events)${RESET}`);
         return;
