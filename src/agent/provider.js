@@ -227,6 +227,7 @@ async function readResponseText(res, signal) {
     while (true) {
       throwIfAborted(signal);
       const { done, value } = await reader.read();
+      throwIfAborted(signal);
       if (done) break;
       text += decoder.decode(value, { stream: true });
     }
@@ -458,6 +459,7 @@ async function parseSSEStream(res, onDelta, signal) {
     while (true) {
       throwIfAborted(signal);
       const { done, value } = await reader.read();
+      throwIfAborted(signal);
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       let nl;

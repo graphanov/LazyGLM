@@ -291,6 +291,33 @@ test("whole-run timeout interrupts provider retry backoff", async () => {
   });
 });
 
+test("whole-run timeout wins when stream read is canceled", async () => {
+  await withTempCwd(async (cwd) => {
+    const { code, stdout } = await captureMain([
+      "run",
+      "hang in stream",
+      "--cwd",
+      cwd,
+      "--output-format",
+      "json",
+      "--timeout",
+      "0.05",
+      "--max-turns",
+      "1",
+    ], {
+      fetchResponses: [() => new Response(new ReadableStream({}), {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      })],
+    });
+
+    assert.equal(code, 2);
+    const json = parseSingleJson(stdout);
+    assert.equal(json.ok, false);
+    assert.equal(json.finishReason, "timeout");
+  });
+});
+
 test("retry backoff sleep remains referenced while awaited", async () => {
   const deadlineModuleUrl = new URL("../src/agent/deadline.js", import.meta.url).href;
   const script = `import { abortableSleep } from ${JSON.stringify(deadlineModuleUrl)};\nawait abortableSleep(30);\nconsole.log("slept");`;
