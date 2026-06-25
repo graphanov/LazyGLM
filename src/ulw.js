@@ -123,6 +123,14 @@ export async function runUltrawork({
       return { verified: false, iterations: i, verdict: { pass: false, reason: res.errorMessage || "runtime error" }, history, finishReason: "error", errorMessage: res.errorMessage || "runtime error" };
     }
 
+    if (res.finishReason === "reasoning_budget") {
+      const used = Number(res.reasoningTokens || 0);
+      const reason = reasoningBudget > 0
+        ? `reasoning budget exceeded (${used}/${reasoningBudget} tokens)`
+        : "reasoning budget exceeded";
+      return { verified: false, iterations: i, verdict: { pass: false, reason }, history, finishReason: "reasoning_budget" };
+    }
+
     if (!res.finished) {
       currentTask = `[ULTRAWORK iteration ${i + 1}] The previous run stopped without finishing (${res.finishReason}). Continue the task. Completion promise: ${promise}`;
       continue;

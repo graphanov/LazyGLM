@@ -483,6 +483,30 @@ test("ultrawork preserves runtime provider errors", async () => {
   });
 });
 
+test("ultrawork stops when the reasoning budget is exhausted", async () => {
+  await withTempCwd(async (cwd) => {
+    const fetchStub = installFetchSequence([textOnlyResponse("still thinking", usage(1, 1, 5))]);
+    try {
+      const { runUltrawork } = await import("../src/ulw.js");
+      const res = await runUltrawork({
+        task: "budgeted work",
+        cwd,
+        config: makeConfig(),
+        maxTurns: 2,
+        maxIterations: 3,
+        reasoningBudget: 1,
+      });
+      assert.equal(res.verified, false);
+      assert.equal(res.finishReason, "reasoning_budget");
+      assert.equal(res.iterations, 1);
+      assert.equal(fetchStub.calls.length, 1);
+      assert.match(res.verdict.reason, /reasoning budget exceeded/);
+    } finally {
+      fetchStub.restore();
+    }
+  });
+});
+
 test("whole-run deadline timer keeps Node alive when the operation does not", async () => {
   const deadlineModuleUrl = new URL("../src/agent/deadline.js", import.meta.url).href;
   const script = `import { createDeadline } from ${JSON.stringify(deadlineModuleUrl)};\nconst d = createDeadline(50, { message: "fired" });\nd.signal.addEventListener("abort", () => { console.log(d.signal.reason?.message || "aborted"); });\n// No other handles — the only ref'ed timer must keep the process alive.`;
