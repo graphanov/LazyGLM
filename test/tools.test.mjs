@@ -4,7 +4,7 @@ import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TOOL_HANDLERS } from "../src/agent/tools.js";
-import { createDeadline } from "../src/agent/deadline.js";
+import { createDeadline, composeAbortSignals } from "../src/agent/deadline.js";
 
 let cwd;
 test.before(async () => { cwd = await mkdtemp(join(tmpdir(), "lazyglm-tools-")); });
@@ -65,6 +65,25 @@ test("run_shell honors the runtime deadline", async () => {
       /timed out/,
     );
   } finally {
+    deadline.cancel();
+  }
+});
+
+test("run_shell honors composed runtime aborts before the deadline", async () => {
+  const controller = new AbortController();
+  const deadline = createDeadline(1000, { message: "deadline fired" });
+  const composed = composeAbortSignals([deadline.signal, controller.signal]);
+  const abortTimer = setTimeout(() => controller.abort(new Error("caller canceled")), 25);
+  const started = Date.now();
+  try {
+    await assert.rejects(
+      () => TOOL_HANDLERS.run_shell({ command: "node -e \"setTimeout(() => {}, 1000)\"", timeout: 5 }, { cwd, runtime: { deadline, signal: composed.signal } }),
+      /caller canceled/,
+    );
+    assert.ok(Date.now() - started < 500, "caller abort should stop shell command before the deadline");
+  } finally {
+    clearTimeout(abortTimer);
+    composed.cancel();
     deadline.cancel();
   }
 });

@@ -211,7 +211,7 @@ export const TOOL_HANDLERS = {
     const secs = Math.min(Math.max(timeout || 120, 1), 600);
     const deadline = ctx.runtime?.deadline;
     deadline?.throwIfExpired?.();
-    const signal = deadline?.signal || ctx.runtime?.signal;
+    const signal = ctx.runtime?.signal || deadline?.signal;
     const timeoutMs = boundedTimeoutMs(secs * 1000, deadline);
     try {
       const { stdout, stderr } = await execP(command, {
