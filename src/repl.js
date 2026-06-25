@@ -32,6 +32,12 @@ const GREEN = "\x1b[32m";
 const RESET = "\x1b[0m";
 const TOOL_INDENT = "   ";
 const TOOL_DIVIDER_RULE = "─".repeat(18);
+// Fixed-width rule that frames a whole assistant+tool turn. Deliberately NOT
+// derived from process.stdout.columns so render output (and tests) stay
+// deterministic — mirrors the TOOL_DIVIDER_RULE approach. Wide enough to frame
+// the indented `── tools ──` divider, which nests inside a turn untouched.
+const TURN_RULE_WIDTH = 60;
+const TURN_RULE = "─".repeat(TURN_RULE_WIDTH);
 
 function ansi(code, { isTTY = true } = {}) {
   return isTTY ? code : "";
@@ -71,6 +77,36 @@ export function turnDivider(opts = {}) {
 
 export function formatExitMarker(opts = {}) {
   return `${ansi(DIM, opts)}bye.${ansi(RESET, opts)}`;
+}
+
+// Turn-boundary frame helpers (purely additive). Each assistant+tool turn is
+// wrapped so consecutive turns stop blending. TTY: a dim fixed-width rule
+// above and below the turn (symmetric). Non-TTY: a plain `> text` echo with
+// zero ANSI and no rule, so piped output stays clean + parseable. The existing
+// `── tools ──` divider nests inside this frame and is left untouched.
+export function turnRule({ isTTY = true } = {}) {
+  return isTTY ? `${DIM}${TURN_RULE}${RESET}` : "";
+}
+
+export function stripControlSequences(text = "") {
+  return String(text).replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])|[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+}
+
+export function turnStart(userText, { isTTY = true } = {}) {
+  if (!isTTY) {
+    // Single-line truncation: the shared truncate() inserts a newline before
+    // its marker, which would break the "standalone `> text` line" contract
+    // for piped output. Use a flat inline marker instead.
+    const clean = stripControlSequences(userText ?? "");
+    const display = clean.length > 100 ? clean.slice(0, 100) + "…" : clean;
+    return `> ${display}\n`;
+  }
+  return `\n${turnRule({ isTTY })}\n`;
+}
+
+export function turnEnd({ isTTY = true } = {}) {
+  if (!isTTY) return "";
+  return `${turnRule({ isTTY })}\n\n`;
 }
 
 const REPL_PERSONA = `You are LazyGLM, a terminal-based AI coding agent connected directly to the user's file system via a CLI.
@@ -598,12 +634,20 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
   };
 
   // --- one agent turn: stream GLM, execute tools, return control on text-only ---
-  const runAgentTurn = async (userContent) => {
+  // displayText: the raw user input as typed, used ONLY for the non-TTY `> text`
+  // echo so piped output logs the user's command rather than the expanded skill
+  // body. Defaults to userContent for non-skill turns. (PR #26 Codex P2.)
+  const runAgentTurn = async (userContent, displayText = userContent) => {
     const ups = await engine.fire("UserPromptSubmit", { prompt: userContent });
     let content = userContent;
     if (ups.injects.length) content = `${ups.injects.join("\n\n")}\n\n---\n\n${userContent}`;
     ctx.push({ role: "user", content });
     await appendEvent(session, { type: "user", content: userContent });
+
+    // Frame this turn so consecutive turns don't blend (TTY: dim rule above,
+    // matching rule below at every exit; non-TTY: plain `> text` echo). The
+    // `── tools ──` divider nests inside this frame untouched.
+    process.stdout.write(turnStart(displayText, renderOpts()));
 
     const MAX_TURNS = 40;
     for (let turn = 1; turn <= MAX_TURNS; turn++) {
@@ -632,6 +676,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
       } catch (err) {
         closeStream();
         process.stdout.write(`\n${YELLOW}❌ ${err.message}${RESET}\n`);
+        process.stdout.write(turnEnd(renderOpts()));
         return;
       }
       // Per-turn timing: wall-clock around chat() (includes retry backoff).
@@ -661,6 +706,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
       // text-only (no tool call) → end the turn, return control to the user
       if (!resp.tool_calls || resp.tool_calls.length === 0) {
         await engine.fire("Stop", { response: resp.content, finished: false });
+        process.stdout.write(turnEnd(renderOpts()));
         return;
       }
 
@@ -718,12 +764,14 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
       }
       if (finished) {
         await engine.fire("Stop", { response: "(finish)", finished: true });
+        process.stdout.write(turnEnd(renderOpts()));
         return;
       }
       // otherwise loop: the model continues with the tool results
     }
     closeStream();
     process.stdout.write(`\n   ${YELLOW}(turn limit reached — task may be incomplete)${RESET}\n`);
+    process.stdout.write(turnEnd(renderOpts()));
   };
 
   const handleLine = async (raw) => {
@@ -742,15 +790,21 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
       if (skill) userContent = `${skill.body}\n\n---\n\nUSER REQUEST\n${input}`;
       else console.log(`${YELLOW}   (unknown skill: $${skillName})${RESET}`);
     }
-    await runAgentTurn(userContent);
+    await runAgentTurn(userContent, input);
   };
 
   // 10. REPL loop: prompt → read line → handle → repeat (sequential via the queue)
   let closed = false;
   const prompt = () => {
+    // Interactive prompt placement (PR #26 Codex P2):
+    // - stdout TTY: write to stdout as before.
+    // - stdout piped but stdin still a TTY (`lazyglm | tee transcript`):
+    //   route the prompt to stderr so the human sees it while stdout stays a
+    //   clean stream for piped consumers (no ANSI escape glueing).
+    // - both non-TTY (full pipe / CI): no prompt at all.
     if (closed) return;
     const target = replPromptTarget({
-      stdinIsTTY: process.stdin.isTTY === true,
+      stdinIsTTY: process.stdin.isTTY === true && process.stderr.isTTY === true,
       stdoutIsTTY: process.stdout.isTTY === true,
     });
     if (target === "stdout") process.stdout.write(`${GREEN}lazyglm>${RESET} `);
