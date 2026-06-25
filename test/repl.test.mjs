@@ -18,6 +18,7 @@ import {
   formatToolCall,
   formatToolResult,
   turnDivider,
+  formatExitMarker,
 } from "../src/repl.js";
 import { Context, assistantMessageFrom } from "../src/agent/context.js";
 import { chat } from "../src/agent/provider.js";
@@ -74,6 +75,7 @@ test("REPL turn-format helpers can render without ANSI for non-TTY output", () =
   assertNoAnsi(formatToolCall("read_file", { path: "src/repl.js" }, { isTTY: false }));
   assertNoAnsi(formatToolResult("ok", { isTTY: false }));
   assertNoAnsi(turnDivider({ isTTY: false }));
+  assertNoAnsi(formatExitMarker({ isTTY: false }));
 });
 
 test("REPL prompt routing keeps piped stdout clean", () => {

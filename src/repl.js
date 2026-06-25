@@ -69,6 +69,10 @@ export function turnDivider(opts = {}) {
   return `${TOOL_INDENT}${ansi(DIM, opts)}${TOOL_DIVIDER_RULE} tools ${TOOL_DIVIDER_RULE}${ansi(RESET, opts)}`;
 }
 
+export function formatExitMarker(opts = {}) {
+  return `${ansi(DIM, opts)}bye.${ansi(RESET, opts)}`;
+}
+
 const REPL_PERSONA = `You are LazyGLM, a terminal-based AI coding agent connected directly to the user's file system via a CLI.
 
 PERSONALITY:
@@ -766,7 +770,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
     }
   }
   closeStream();
-  process.stdout.write(`${DIM}bye.${RESET}\n`);
+  process.stdout.write(`${formatExitMarker(renderOpts())}\n`);
   process.exit(0);
   return 0;
 }
