@@ -23,7 +23,8 @@
   ],
   "scripts": {
     "test": "node --test test/*.test.mjs",
-    "smoke": "node bin/lazyglm.js doctor"
+    "smoke": "node bin/lazyglm.js doctor",
+    "typecheck": "tsc --noEmit"
   },
   "keywords": [
     "glm",
@@ -38,5 +39,9 @@
   "license": "MIT",
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "typescript": "^5.9.3"
   }
 }

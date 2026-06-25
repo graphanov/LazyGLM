@@ -31,6 +31,12 @@ jobs:
           node --version
           npm --version
 
+      - name: Install development dependencies
+        run: npm install
+
+      - name: Typecheck TypeScript contracts
+        run: npm run typecheck
+
       - name: Run test suite
         run: npm test
 
