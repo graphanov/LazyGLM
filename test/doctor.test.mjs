@@ -109,6 +109,23 @@ test("doctor reports a valid remote MCP declaration as ok", async () => {
   });
 });
 
+test("doctor warns on malformed remote MCP URLs", async () => {
+  await withIsolatedHome(async (home) => {
+    await writeUserConfig(home, {
+      provider: "ollama",
+      mcpServers: {
+        api: { url: "localhost:3000/mcp", transport: "sse" },
+      },
+    });
+    const res = await doctor({ cwd: tmpdir() });
+    const mcp = findCheck(res, "mcp");
+    assert.equal(mcp.status, "warn");
+    assert.match(mcp.detail, /1 invalid declaration\(s\)/);
+    assert.match(mcp.detail, /api/);
+    assert.doesNotMatch(mcp.detail, /localhost:3000/);
+  });
+});
+
 test("doctor warns on invalid MCP declarations with redacted reasons", async () => {
   await withIsolatedHome(async (home) => {
     await writeUserConfig(home, {

@@ -144,6 +144,25 @@ test("empty-string url fails", () => {
   assert.match(r.errors[0].error, /'url' must be a non-empty string/);
 });
 
+test("relative or scheme-less remote url fails", () => {
+  const r = parseMcpServers({ mcpServers: { api: { url: "localhost:3000/mcp" } } });
+  assert.equal(r.count, 0);
+  assert.match(r.errors[0].error, /'url' must use http or https|'url' must be an absolute HTTP\(S\) URL/);
+});
+
+test("unsupported remote url scheme fails", () => {
+  const r = parseMcpServers({ mcpServers: { api: { url: "file:///tmp/mcp.sock" } } });
+  assert.equal(r.count, 0);
+  assert.match(r.errors[0].error, /'url' must use http or https/);
+});
+
+test("remote url is trimmed after validation", () => {
+  const r = parseMcpServers({ mcpServers: { api: { url: "  https://example.com/mcp  " } } });
+  assert.equal(r.count, 1);
+  assert.equal(r.errors.length, 0);
+  assert.equal(r.servers[0].entry.url, "https://example.com/mcp");
+});
+
 test("non-array args fails", () => {
   const r = parseMcpServers({ mcpServers: { e: { command: "x", args: "not-array" } } });
   assert.equal(r.count, 0);

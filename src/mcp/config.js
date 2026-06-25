@@ -21,6 +21,7 @@
 //   - exactly one of `command` (stdio) or `url` (remote) must be present;
 //   - `args` must be an array when present;
 //   - `env` / `headers` must be plain objects when present;
+//   - remote `url` must be an absolute HTTP(S) URL;
 //   - `transport` is preserved but NOT enum-validated (left for a future phase).
 // Unknown fields are preserved for forward compatibility.
 
@@ -39,6 +40,20 @@ function isPlainObject(v) {
  */
 function classifyEntry(entry) {
   return entry.url ? "remote" : "stdio";
+}
+
+function normalizeRemoteUrl(rawUrl) {
+  const url = rawUrl.trim();
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { ok: false, error: "'url' must be an absolute HTTP(S) URL" };
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return { ok: false, error: "'url' must use http or https" };
+  }
+  return { ok: true, url };
 }
 
 /**
@@ -76,7 +91,11 @@ function normalizeEntry(name, raw) {
     if (typeof raw.url !== "string" || raw.url.trim() === "") {
       return { ok: false, name, error: "'url' must be a non-empty string" };
     }
-    entry.url = raw.url;
+    const remoteUrl = normalizeRemoteUrl(raw.url);
+    if (!remoteUrl.ok) {
+      return { ok: false, name, error: remoteUrl.error };
+    }
+    entry.url = remoteUrl.url;
   }
 
   if (Object.prototype.hasOwnProperty.call(raw, "args")) {
