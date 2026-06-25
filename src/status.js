@@ -30,8 +30,11 @@ function humanizeMs(ms) {
   if (n < 1000) return `${Math.max(0, Math.round(n))}ms`;
   const s = n / 1000;
   if (s < 60) return `${s.toFixed(s < 10 ? 1 : 0)}s`;
-  const m = Math.floor(s / 60);
-  const rem = Math.round(s % 60);
+  // Round total seconds before splitting so the remainder can never reach 60
+  // (e.g. 119600ms => 2m0s, not "1m60s").
+  const totalSec = Math.round(s);
+  const m = Math.floor(totalSec / 60);
+  const rem = totalSec % 60;
   return `${m}m${rem}s`;
 }
 

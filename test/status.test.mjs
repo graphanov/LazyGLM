@@ -89,6 +89,31 @@ test("timing humanizes for TTY and is raw ms for non-TTY", () => {
   assert.ok(/session_ms=133000/.test(nontty), "non-TTY session_ms is raw ms");
 });
 
+test("minute boundary rounding never renders 60s (e.g. 119600ms => 2m0s)", () => {
+  // Durations in the upper half of the last second before a minute boundary must
+  // round up into the minute, not render an impossible "1m60s".
+  const cases = [
+    { ms: 119600, expect: "2m0s" },
+    { ms: 119900, expect: "2m0s" },
+    { ms: 120000, expect: "2m0s" },
+    { ms: 179500, expect: "3m0s" },
+    { ms: 3599500, expect: "60m0s" },
+  ];
+  for (const { ms, expect } of cases) {
+    const tty = renderStatus({ ...base, sessionElapsedMs: ms, lastTurnMs: ms, isTTY: true });
+    const plain = stripAnsi(tty);
+    assert.ok(
+      plain.includes(`turn ${expect}`),
+      `${ms}ms should render turn as ${expect}, got: ${plain}`,
+    );
+    assert.ok(
+      plain.includes(`session ${expect}`),
+      `${ms}ms should render session as ${expect}, got: ${plain}`,
+    );
+    assert.doesNotMatch(plain, /\dm60s/, "no impossible 60s remainder");
+  }
+});
+
 test("lastTurn omitted (no turn completed yet) degrades cleanly", () => {
   const tty = renderStatus({ ...base, lastTurn: null, isTTY: true });
   assert.ok(stripAnsi(tty).includes("sess_abc123"), "still renders");
