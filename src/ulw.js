@@ -7,7 +7,7 @@ import { existsSync } from "node:fs";
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import { resolvePath } from "./util.js";
-import { abortReason, boundedTimeoutMs, isDeadlineError } from "./agent/deadline.js";
+import { abortReason, boundedTimeoutMs, composeAbortSignals, isDeadlineError } from "./agent/deadline.js";
 import { runAgent } from "./agent/runtime.js";
 import { loadPlugins } from "./plugins/index.js";
 
@@ -21,7 +21,8 @@ const execP = promisify(exec);
 export async function verifyFinish({ summary, cwd, verifyCommand, filesWritten, deadline, signal }) {
   const evidence = [];
   deadline?.throwIfExpired?.();
-  const runSignal = deadline?.signal || signal;
+  const runAbort = composeAbortSignals([deadline?.signal, signal]);
+  const runSignal = runAbort.signal;
 
   // 1. files the agent wrote via tools must still exist (robust: tracked, not
   //    regex-extracted from prose, which would false-match CDN specifiers).
@@ -33,6 +34,7 @@ export async function verifyFinish({ summary, cwd, verifyCommand, filesWritten, 
     } catch {}
   }
   if (missingWritten.length) {
+    runAbort.cancel();
     return { pass: false, reason: `files written during the run are now missing: ${missingWritten.join(", ")}`, evidence: "written-file check" };
   }
   if (written.length) evidence.push(`${written.length} written file(s) all exist.`);
@@ -53,8 +55,12 @@ export async function verifyFinish({ summary, cwd, verifyCommand, filesWritten, 
       if (isDeadlineError(err) || runSignal?.aborted) throw abortReason(runSignal, err);
       const out = [err.stdout, err.stderr, err.message].filter(Boolean).join("\n").trim().slice(-600);
       return { pass: false, reason: `verify command failed (exit ${err.code ?? "?"}):\n${out}`, evidence: evidence.join("\n") };
+    } finally {
+      runAbort.cancel();
     }
   }
+
+  runAbort.cancel();
 
   // 3. no verify command and no written files: nothing to check, pass optimistically
   return { pass: true, reason: written.length ? "written-file check passed (no verify command configured)" : "no files tracked and no verify command configured", evidence: evidence.join("\n") };

@@ -73,3 +73,25 @@ test("verifyFinish honors the whole-run deadline", async () => {
     deadline.cancel();
   }
 });
+
+test("verifyFinish composes caller abort signal with the whole-run deadline", async () => {
+  const controller = new AbortController();
+  const deadline = createDeadline(500);
+  const abortTimer = setTimeout(() => controller.abort(new Error("caller canceled")), 25);
+  try {
+    await assert.rejects(
+      () => verifyFinish({
+        summary: "slow verify",
+        cwd,
+        filesWritten: [],
+        verifyCommand: "node -e \"setTimeout(() => {}, 1000)\"",
+        deadline,
+        signal: controller.signal,
+      }),
+      /caller canceled/,
+    );
+  } finally {
+    clearTimeout(abortTimer);
+    deadline.cancel();
+  }
+});
