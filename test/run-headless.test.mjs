@@ -332,16 +332,25 @@ test("runAgent composes caller abort signal with deadline", async () => {
     const controller = new AbortController();
     const deadline = createDeadline(1000, { message: "deadline fired" });
     let providerSignal;
+    let providerStartedTimer;
+    let resolveProviderStarted;
+    const providerStarted = new Promise((resolve, reject) => {
+      resolveProviderStarted = () => {
+        clearTimeout(providerStartedTimer);
+        resolve();
+      };
+      providerStartedTimer = setTimeout(() => reject(new Error("provider fetch did not start")), 500);
+    });
     const fetchStub = installFetchSequence([(_url, init) => {
       providerSignal = init.signal;
+      resolveProviderStarted();
       return new Promise((_resolve, reject) => {
         init.signal?.addEventListener("abort", () => reject(init.signal.reason), { once: true });
       });
     }]);
     const started = Date.now();
     try {
-      setTimeout(() => controller.abort(new Error("caller canceled")), 30);
-      const res = await runAgent({
+      const runPromise = runAgent({
         task: "cancel before deadline",
         cwd,
         config: makeConfig(),
@@ -349,6 +358,9 @@ test("runAgent composes caller abort signal with deadline", async () => {
         deadline,
         signal: controller.signal,
       });
+      await providerStarted;
+      controller.abort(new Error("caller canceled"));
+      const res = await runPromise;
 
       assert.equal(res.finished, false);
       assert.equal(res.finishReason, "timeout");
