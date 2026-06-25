@@ -4,6 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { verifyFinish } from "../src/ulw.js";
+import { createDeadline } from "../src/agent/deadline.js";
 
 let cwd;
 test.before(async () => { cwd = await mkdtemp(join(tmpdir(), "lazyglm-ulw-")); });
@@ -53,4 +54,22 @@ test("verifyFinish FAILS when verify command exits non-zero", async () => {
   });
   assert.equal(v.pass, false);
   assert.match(v.reason, /verify command failed/);
+});
+
+test("verifyFinish honors the whole-run deadline", async () => {
+  const deadline = createDeadline(30);
+  try {
+    await assert.rejects(
+      () => verifyFinish({
+        summary: "slow verify",
+        cwd,
+        filesWritten: [],
+        verifyCommand: "node -e \"setTimeout(() => {}, 1000)\"",
+        deadline,
+      }),
+      /timed out/,
+    );
+  } finally {
+    deadline.cancel();
+  }
 });

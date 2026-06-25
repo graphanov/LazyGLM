@@ -6,6 +6,7 @@ import { join, relative, isAbsolute, resolve } from "node:path";
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import { readLines, listDirEntries, resolvePath, ensureDir, truncate } from "../util.js";
+import { abortReason, boundedTimeoutMs, isDeadlineError } from "./deadline.js";
 
 const execP = promisify(exec);
 
@@ -208,15 +209,21 @@ export const TOOL_HANDLERS = {
 
   async run_shell({ command, timeout }, ctx) {
     const secs = Math.min(Math.max(timeout || 120, 1), 600);
+    const deadline = ctx.runtime?.deadline;
+    deadline?.throwIfExpired?.();
+    const signal = deadline?.signal || ctx.runtime?.signal;
+    const timeoutMs = boundedTimeoutMs(secs * 1000, deadline);
     try {
       const { stdout, stderr } = await execP(command, {
         cwd: ctx.cwd,
-        timeout: secs * 1000,
+        timeout: timeoutMs,
+        signal,
         maxBuffer: 8 * 1024 * 1024,
       });
       const out = [stdout, stderr].filter(Boolean).join("\n");
       return truncate(out || "(no output)", 12000);
     } catch (err) {
+      if (isDeadlineError(err) || signal?.aborted) throw abortReason(signal, err);
       const out = [err.stdout, err.stderr, err.message].filter(Boolean).join("\n");
       return `Command exited ${err.code ?? "?"}:\n${truncate(out, 12000)}`;
     }

@@ -4,6 +4,7 @@ import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TOOL_HANDLERS } from "../src/agent/tools.js";
+import { createDeadline } from "../src/agent/deadline.js";
 
 let cwd;
 test.before(async () => { cwd = await mkdtemp(join(tmpdir(), "lazyglm-tools-")); });
@@ -54,6 +55,18 @@ test("grep finds a pattern", async () => {
 test("run_shell runs a command and captures output", async () => {
   const res = await TOOL_HANDLERS.run_shell({ command: "echo hello-shell" }, { cwd });
   assert.match(res, /hello-shell/);
+});
+
+test("run_shell honors the runtime deadline", async () => {
+  const deadline = createDeadline(30);
+  try {
+    await assert.rejects(
+      () => TOOL_HANDLERS.run_shell({ command: "node -e \"setTimeout(() => {}, 1000)\"", timeout: 5 }, { cwd, runtime: { deadline } }),
+      /timed out/,
+    );
+  } finally {
+    deadline.cancel();
+  }
 });
 
 test("read_file refuses path escapes", async () => {

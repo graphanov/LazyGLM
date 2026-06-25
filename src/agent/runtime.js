@@ -9,6 +9,7 @@ import { TOOL_SPECS, TOOL_HANDLERS } from "./tools.js";
 import { Context, assistantMessageFrom } from "./context.js";
 import { HookEngine } from "../hooks/engine.js";
 import { gitInfo, truncate, ensureDir, nowIso } from "../util.js";
+import { abortReason, isDeadlineError, throwIfAborted } from "./deadline.js";
 
 const BASE_SYSTEM_PROMPT = `You are LazyGLM, an autonomous software engineering agent driven by a GLM model. You operate inside a real project directory on the user's machine via tools.
 
@@ -37,7 +38,7 @@ function buildSystemPrompt({ cwd, git, model, injects, extra }) {
 /**
  * Run the GLM agent on a task.
  * @param {object} opts
- * @returns {Promise<{sessionId, turns, tokensIn, tokensOut, compactions, transcriptPath, finished}>}
+ * @returns {Promise<{sessionId, turns, tokensIn, tokensOut, compactions, transcriptPath, finished, finishReason, toolCalls}>}
  */
 export async function runAgent(opts) {
   const {
@@ -54,8 +55,18 @@ export async function runAgent(opts) {
     role,
     reasoningBudget = 0, // 0 = unlimited; soft cap on cumulative reasoning tokens
     onEvent = () => {},
+    permissionMode = "auto",
+    failOnToolBlock = false,
+    deadline,
+    signal,
   } = opts;
+  const runSignal = deadline?.signal || signal;
+  const checkAbort = () => {
+    deadline?.throwIfExpired?.();
+    throwIfAborted(runSignal);
+  };
 
+  checkAbort();
   // Route to the right model: auto-detect role from the task unless given.
   const detectedRole = role || detectRole(task);
   const providerConfig = config || await resolveProviderConfig({ model, role: detectedRole });
@@ -70,13 +81,21 @@ export async function runAgent(opts) {
   const sessionId = engine.sessionId;
   const transcriptPath = join(cwd, ".lazyglm", "sessions", `${sessionId}.jsonl`);
   await ensureDir(dirname(transcriptPath));
-  engine.setMeta({ model: resolvedModel, transcriptPath, permissionMode: "auto" });
+  engine.setMeta({ model: resolvedModel, transcriptPath, permissionMode });
 
   const ctx = new Context({ model: resolvedModel, budget, preserveThinking: shouldPreserveThinking(providerConfig.provider) });
   const filesWritten = new Set();
+  const toolCalls = [];
   let totalReasoningTokens = 0;
   let totalPromptTokens = 0;
   let totalCompletionTokens = 0;
+  let agentTurns = 0;
+  let finished = false;
+  let finishSummary = null;
+  let finishReason = null;
+  let errorMessage = null;
+  let lastNoToolNudge = false;
+
   const log = async (obj) => {
     onEvent(obj);
     try {
@@ -84,169 +103,9 @@ export async function runAgent(opts) {
     } catch {}
   };
 
-  onEvent({ type: "start", sessionId, model: resolvedModel, provider: providerConfig.provider, role: detectedRole, cwd, task });
-
-  // 1. SessionStart
-  const startRes = await engine.fire("SessionStart", {});
-  const gi = gitInfo(cwd);
-  const system = buildSystemPrompt({ cwd, git: gi, model: resolvedModel, injects: startRes.injects, extra: systemPromptExtra });
-  ctx.setSystem(system);
-  await log({ type: "system_prompt_chars", chars: system.length });
-
-  // 2. UserPromptSubmit
-  const upsRes = await engine.fire("UserPromptSubmit", { prompt: task });
-  let userContent = task;
-  if (upsRes.injects.length) userContent = `${upsRes.injects.join("\n\n")}\n\n---\n\nTASK\n${task}`;
-  ctx.push({ role: "user", content: userContent });
-  await log({ type: "user", content: task });
-
-  let finished = false;
-  let finishSummary = null;
-  let lastNoToolNudge = false;
-
-  // 3. main loop
-  for (let turn = 1; turn <= maxTurns; turn++) {
-    const compacted = await ctx.maybeCompact({
-      onCompact: async ({ compactionCount }) => {
-        await engine.fire("PostCompact", { compactionCount });
-        await log({ type: "compact", compactionCount });
-      },
-    });
-
-    let resp;
-    try {
-      resp = await chat({
-        model: resolvedModel,
-        messages: ctx.messages,
-        tools: TOOL_SPECS,
-        temperature,
-        config: providerConfig,
-        onDelta: (d) => {
-          if (d.type === "text") {
-            onEvent({ type: "assistant_delta", text: d.text, turn });
-          } else if (d.type === "reasoning") {
-            onEvent({ type: "reasoning_delta", text: d.text, turn });
-          } else if (d.type === "tool_call_start") {
-            onEvent({ type: "tool_call_start", name: d.name, id: d.id, turn });
-          }
-        },
-        onRetry: (r) => {
-          onEvent({ type: "retry", attempt: r.attempt, reason: r.reason, delay: r.delay, turn });
-        },
-      });
-    } catch (err) {
-      await log({ type: "error", message: err.message, turn });
-      throw err;
-    }
-    ctx.recordUsage(resp.usage);
-    const u = resp.usage || {};
-    const reasoningTokens = u.completion_tokens_details?.reasoning_tokens || u.reasoning_tokens || 0;
-    totalReasoningTokens += reasoningTokens;
-    totalPromptTokens += u.prompt_tokens || 0;
-    totalCompletionTokens += u.completion_tokens || 0;
-    await log({ type: "usage", usage: resp.usage, turn, cumulative: { prompt: totalPromptTokens, completion: totalCompletionTokens, reasoning: totalReasoningTokens } });
-
-    // Soft reasoning budget: warn, then stop if exceeded.
-    if (reasoningBudget > 0 && totalReasoningTokens > reasoningBudget) {
-      onEvent({ type: "reasoning_budget_exceeded", budget: reasoningBudget, used: totalReasoningTokens, turn });
-      await log({ type: "stop", reason: "reasoning_budget", turn, used: totalReasoningTokens, budget: reasoningBudget });
-      await engine.fire("Stop", { response: "(reasoning budget exceeded)", finished: false, files_written: [...filesWritten] });
-      break;
-    }
-
-    ctx.push(assistantMessageFrom(resp));
-    if (resp.content) await log({ type: "assistant_text", content: truncate(resp.content, 1500), turn });
-    for (const tc of resp.tool_calls || []) {
-      await log({ type: "tool_call", name: tc.name, input: truncate(JSON.stringify(tc.arguments), 800), turn });
-    }
-
-    // No tool call: model produced a textual response.
-    if (!resp.tool_calls || resp.tool_calls.length === 0) {
-      if (lastNoToolNudge) {
-        // Second consecutive text-only response -> treat as natural stop.
-        await engine.fire("Stop", { response: resp.content, finished: false, files_written: [...filesWritten] });
-        await log({ type: "stop", reason: "text-only-no-finish", turn });
-        break;
-      }
-      lastNoToolNudge = true;
-      ctx.push({
-        role: "user",
-        content:
-          "You responded without using a tool. If the task is complete, call the finish tool with a summary and verification steps. Otherwise, continue working with tools. Do not just describe what you would do — do it.",
-      });
-      continue;
-    }
-    lastNoToolNudge = false;
-
-    // Execute each tool call in order, firing Pre/PostToolUse hooks.
-    for (const tc of resp.tool_calls) {
-      const handler = TOOL_HANDLERS[tc.name];
-      if (!handler) {
-        ctx.push({ role: "tool", tool_call_id: tc.id, content: `Error: unknown tool '${tc.name}'. Available: read_file, write_file, patch_file, list_dir, grep, run_shell, finish.` });
-        continue;
-      }
-
-      const pre = await engine.fire("PreToolUse", {
-        tool_name: tc.name,
-        tool_input: tc.arguments,
-        tool_use_id: tc.id,
-      });
-
-      let resultStr;
-      if (pre.blocks.length) {
-        resultStr = `Blocked by hook:\n${pre.blocks.join("\n")}\nDo not retry the same action without addressing the blocker.`;
-        await log({ type: "blocked", tool: tc.name, reasons: pre.blocks, turn });
-      } else {
-        let result;
-        try {
-          result = await handler(tc.arguments, { cwd, runtime: { engine, ctx, log } });
-        } catch (err) {
-          result = `Error executing ${tc.name}: ${err?.message || err}`;
-        }
-        if ((tc.name === "write_file" || tc.name === "patch_file") && typeof tc.arguments?.path === "string") {
-          filesWritten.add(tc.arguments.path);
-        }
-        if (result && result.__finish) {
-          finished = true;
-          finishSummary = result.summary;
-          resultStr = `finish acknowledged: ${result.summary}`;
-        } else {
-          resultStr = typeof result === "string" ? result : JSON.stringify(result);
-        }
-        const post = await engine.fire("PostToolUse", {
-          tool_name: tc.name,
-          tool_input: tc.arguments,
-          tool_response: resultStr,
-          tool_use_id: tc.id,
-        });
-        if (post.blocks.length) {
-          resultStr += `\n\n[hook feedback — address this] ${post.blocks.join(" | ")}`;
-        }
-        if (post.feedbacks.length) {
-          resultStr += `\n\n[hook note] ${post.feedbacks.join(" | ")}`;
-        }
-        await log({ type: "tool_result", name: tc.name, result: truncate(resultStr, 1200), turn });
-      }
-
-      ctx.push({ role: "tool", tool_call_id: tc.id, content: resultStr });
-      if (finished) break;
-    }
-
-    if (finished) {
-      await engine.fire("Stop", { response: finishSummary, finished: true, files_written: [...filesWritten] });
-      await log({ type: "finish", summary: truncate(finishSummary, 1500), turn });
-      break;
-    }
-  }
-
-  if (!finished) {
-    await engine.fire("Stop", { response: "(max turns reached)", finished: false, files_written: [...filesWritten] });
-    await log({ type: "stop", reason: "max_turns", turn: maxTurns });
-  }
-
-  return {
+  const buildResult = () => ({
     sessionId,
-    turns: engine.turnId,
+    turns: agentTurns,
     tokensIn: ctx.totalTokensIn,
     tokensOut: ctx.totalTokensOut,
     reasoningTokens: totalReasoningTokens,
@@ -255,7 +114,232 @@ export async function runAgent(opts) {
     compactions: ctx.compactionCount,
     transcriptPath,
     finished,
+    finishReason: finished ? "finished" : (finishReason || "max_turns"),
     finishSummary,
+    result: finishSummary,
+    toolCalls,
     filesWritten: [...filesWritten],
-  };
+    errorMessage,
+  });
+
+  onEvent({ type: "start", sessionId, model: resolvedModel, provider: providerConfig.provider, role: detectedRole, cwd, task });
+
+  try {
+    checkAbort();
+    // 1. SessionStart
+    const startRes = await engine.fire("SessionStart", {});
+    const gi = gitInfo(cwd);
+    const system = buildSystemPrompt({ cwd, git: gi, model: resolvedModel, injects: startRes.injects, extra: systemPromptExtra });
+    ctx.setSystem(system);
+    await log({ type: "system_prompt_chars", chars: system.length });
+
+    checkAbort();
+    // 2. UserPromptSubmit
+    const upsRes = await engine.fire("UserPromptSubmit", { prompt: task });
+    let userContent = task;
+    if (upsRes.injects.length) userContent = `${upsRes.injects.join("\n\n")}\n\n---\n\nTASK\n${task}`;
+    ctx.push({ role: "user", content: userContent });
+    await log({ type: "user", content: task });
+
+    // 3. main loop
+    for (let turn = 1; turn <= maxTurns; turn++) {
+      checkAbort();
+      agentTurns = turn;
+      const compacted = await ctx.maybeCompact({
+        onCompact: async ({ compactionCount }) => {
+          await engine.fire("PostCompact", { compactionCount });
+          await log({ type: "compact", compactionCount });
+        },
+      });
+      void compacted;
+
+      let resp;
+      try {
+        resp = await chat({
+          model: resolvedModel,
+          messages: ctx.messages,
+          tools: TOOL_SPECS,
+          temperature,
+          config: providerConfig,
+          signal: runSignal,
+          onDelta: (d) => {
+            if (d.type === "text") {
+              onEvent({ type: "assistant_delta", text: d.text, turn });
+            } else if (d.type === "reasoning") {
+              onEvent({ type: "reasoning_delta", text: d.text, turn });
+            } else if (d.type === "tool_call_start") {
+              onEvent({ type: "tool_call_start", name: d.name, id: d.id, turn });
+            }
+          },
+          onRetry: (r) => {
+            onEvent({ type: "retry", attempt: r.attempt, reason: r.reason, delay: r.delay, turn });
+          },
+        });
+      } catch (err) {
+        if (isDeadlineError(err) || runSignal?.aborted) {
+          finishReason = "timeout";
+          errorMessage = abortReason(runSignal, err).message;
+        } else {
+          finishReason = "error";
+          errorMessage = err?.message || String(err);
+        }
+        await log({ type: "error", message: errorMessage, turn });
+        break;
+      }
+      ctx.recordUsage(resp.usage);
+      const u = resp.usage || {};
+      const reasoningTokens = u.completion_tokens_details?.reasoning_tokens || u.reasoning_tokens || 0;
+      totalReasoningTokens += reasoningTokens;
+      totalPromptTokens += u.prompt_tokens || 0;
+      totalCompletionTokens += u.completion_tokens || 0;
+      await log({ type: "usage", usage: resp.usage, turn, cumulative: { prompt: totalPromptTokens, completion: totalCompletionTokens, reasoning: totalReasoningTokens } });
+
+      // Soft reasoning budget: warn, then stop if exceeded.
+      if (reasoningBudget > 0 && totalReasoningTokens > reasoningBudget) {
+        finishReason = "reasoning_budget";
+        onEvent({ type: "reasoning_budget_exceeded", budget: reasoningBudget, used: totalReasoningTokens, turn });
+        break;
+      }
+
+      ctx.push(assistantMessageFrom(resp));
+      if (resp.content) await log({ type: "assistant_text", content: truncate(resp.content, 1500), turn });
+      for (const tc of resp.tool_calls || []) {
+        await log({ type: "tool_call", name: tc.name, input: truncate(JSON.stringify(tc.arguments), 800), turn });
+      }
+
+      // No tool call: model produced a textual response.
+      if (!resp.tool_calls || resp.tool_calls.length === 0) {
+        if (lastNoToolNudge) {
+          // Second consecutive text-only response -> deterministic non-success stop.
+          finishReason = "text_only_no_finish";
+          await log({ type: "stop", reason: "text_only_no_finish", turn });
+          break;
+        }
+        lastNoToolNudge = true;
+        ctx.push({
+          role: "user",
+          content:
+            "You responded without using a tool. If the task is complete, call the finish tool with a summary and verification steps. Otherwise, continue working with tools. Do not just describe what you would do — do it.",
+        });
+        continue;
+      }
+      lastNoToolNudge = false;
+
+      // Execute each tool call in order, firing Pre/PostToolUse hooks.
+      let stopToolLoop = false;
+      for (const tc of resp.tool_calls) {
+        checkAbort();
+        const record = { name: tc.name || "unknown", turn, status: "ok" };
+        toolCalls.push(record);
+        const handler = TOOL_HANDLERS[tc.name];
+        if (!handler) {
+          record.status = "error";
+          ctx.push({ role: "tool", tool_call_id: tc.id, content: `Error: unknown tool '${tc.name}'. Available: read_file, write_file, patch_file, list_dir, grep, run_shell, finish.` });
+          continue;
+        }
+
+        const pre = await engine.fire("PreToolUse", {
+          tool_name: tc.name,
+          tool_input: tc.arguments,
+          tool_use_id: tc.id,
+        });
+
+        let resultStr;
+        if (pre.blocks.length) {
+          record.status = "denied";
+          resultStr = `Blocked by hook:\n${pre.blocks.join("\n")}\nDo not retry the same action without addressing the blocker.`;
+          await log({ type: "blocked", tool: tc.name, reasons: pre.blocks, turn });
+          ctx.push({ role: "tool", tool_call_id: tc.id, content: resultStr });
+          if (failOnToolBlock) {
+            finishReason = "tool_denied";
+            stopToolLoop = true;
+            break;
+          }
+          continue;
+        }
+
+        let result;
+        let handlerThrew = false;
+        try {
+          result = await handler(tc.arguments, { cwd, runtime: { engine, ctx, log, deadline, signal: runSignal } });
+        } catch (err) {
+          if (isDeadlineError(err) || runSignal?.aborted) throw abortReason(runSignal, err);
+          handlerThrew = true;
+          result = `Error executing ${tc.name}: ${err?.message || err}`;
+        }
+        if ((tc.name === "write_file" || tc.name === "patch_file") && typeof tc.arguments?.path === "string") {
+          filesWritten.add(tc.arguments.path);
+        }
+
+        const finishCandidate = !!(result && result.__finish);
+        const candidateSummary = finishCandidate ? result.summary : null;
+        if (finishCandidate) {
+          resultStr = `finish acknowledged: ${candidateSummary}`;
+        } else {
+          resultStr = typeof result === "string" ? result : JSON.stringify(result);
+        }
+
+        const post = await engine.fire("PostToolUse", {
+          tool_name: tc.name,
+          tool_input: tc.arguments,
+          tool_response: resultStr,
+          tool_use_id: tc.id,
+        });
+        if (post.blocks.length) {
+          record.status = "denied";
+          resultStr += `\n\n[hook feedback — address this] ${post.blocks.join(" | ")}`;
+          await log({ type: "blocked", tool: tc.name, reasons: post.blocks, turn });
+        }
+        if (post.feedbacks.length) {
+          resultStr += `\n\n[hook note] ${post.feedbacks.join(" | ")}`;
+        }
+        if (!post.blocks.length && finishCandidate) {
+          record.status = "finish";
+          finished = true;
+          finishSummary = candidateSummary;
+        } else if (!post.blocks.length && (handlerThrew || isToolErrorResult(resultStr))) {
+          record.status = "error";
+        }
+        await log({ type: "tool_result", name: tc.name, result: truncate(resultStr, 1200), turn });
+
+        ctx.push({ role: "tool", tool_call_id: tc.id, content: resultStr });
+        if (post.blocks.length && failOnToolBlock) {
+          finishReason = "tool_denied";
+          stopToolLoop = true;
+          break;
+        }
+        if (finished) {
+          stopToolLoop = true;
+          break;
+        }
+      }
+
+      if (stopToolLoop) break;
+    }
+  } catch (err) {
+    if (isDeadlineError(err) || runSignal?.aborted) {
+      finishReason = "timeout";
+      errorMessage = abortReason(runSignal, err).message;
+    } else {
+      finishReason = "error";
+      errorMessage = err?.message || String(err);
+    }
+    await log({ type: "error", message: errorMessage });
+  }
+
+  if (finished) {
+    await engine.fire("Stop", { response: finishSummary, finished: true, files_written: [...filesWritten] });
+    await log({ type: "finish", summary: truncate(finishSummary, 1500), turn: agentTurns });
+  } else {
+    if (!finishReason) finishReason = agentTurns >= maxTurns ? "max_turns" : "error";
+    const response = finishReason === "timeout" ? "(timeout)" : finishReason === "max_turns" ? "(max turns reached)" : `(${finishReason})`;
+    await engine.fire("Stop", { response, finished: false, files_written: [...filesWritten] });
+    await log({ type: "stop", reason: finishReason, turn: agentTurns || maxTurns });
+  }
+
+  return buildResult();
+}
+
+function isToolErrorResult(resultStr) {
+  return /^Error(?::| executing\b)/i.test(resultStr || "") || /^Command exited\b/i.test(resultStr || "");
 }

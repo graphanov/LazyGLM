@@ -22,6 +22,16 @@
 
 import { pickModel, getProviderConfig, resolveProvider } from "./router.js";
 import { SUPPORTED_PROVIDERS } from "../config.js";
+import {
+  abortableSleep,
+  abortReason,
+  composeAbortSignals,
+  isDeadlineError,
+  isRequestTimeoutError,
+  requestTimeoutError,
+  throwIfAborted,
+  withAbort,
+} from "./deadline.js";
 
 const DEFAULT_TIMEOUT = 600_000;
 const DEFAULT_MAX_RETRIES = 4;
@@ -104,48 +114,55 @@ export async function resolveProviderConfig(options = {}) {
  *
  * @param {string} url
  * @param {object} init  - fetch init (headers, body, signal)
- * @param {object} opts  - { timeout, maxRetries, onRetry }
+ * @param {object} opts  - { timeout, maxRetries, onRetry, signal }
  * @returns {Promise<Response>}
  */
-async function fetchWithRetry(url, init, { timeout, maxRetries, onRetry }) {
+async function fetchWithRetry(url, init, { timeout, maxRetries, onRetry, signal }) {
   const baseDelay = 1000;
   const maxDelay = 30_000;
+  const requestTimeoutMs = Math.max(1, Number(timeout) || DEFAULT_TIMEOUT);
   let attempt = 0;
   // We create a fresh AbortController per attempt so a timeout on attempt N
   // doesn't poison attempt N+1.
   // eslint-disable-next-line no-constant-condition
   while (true) {
+    throwIfAborted(signal);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeout);
+    const timer = setTimeout(() => controller.abort(requestTimeoutError(requestTimeoutMs)), requestTimeoutMs);
+    timer.unref?.();
+    const combined = composeAbortSignals([init?.signal, signal, controller.signal]);
     let res;
     try {
-      res = await fetch(url, { ...init, signal: controller.signal });
+      res = await fetch(url, { ...init, signal: combined.signal });
     } catch (err) {
       clearTimeout(timer);
-      const name = err?.name;
-      if (name === "AbortError") {
-        // Timeouts are retryable (the server may just be slow / queueing).
+      combined.cancel();
+      if (isDeadlineError(err) || signal?.aborted) throw abortReason(signal, err);
+      if (isRequestTimeoutError(err) || err?.name === "AbortError") {
+        // Per-request timeouts are retryable; the outer run deadline is not.
         if (attempt < maxRetries) {
           const delay = backoffDelay(baseDelay, maxDelay, attempt);
-          onRetry?.({ attempt: attempt + 1, reason: `timeout after ${timeout}ms`, delay });
-          await sleep(delay);
+          onRetry?.({ attempt: attempt + 1, reason: `timeout after ${requestTimeoutMs}ms`, delay });
+          await abortableSleep(delay, signal);
           attempt++;
           continue;
         }
-        throw new Error(`GLM request timed out after ${timeout}ms. Is the model loaded / endpoint reachable?`);
+        throw new Error(`GLM request timed out after ${requestTimeoutMs}ms. Is the model loaded / endpoint reachable?`);
       }
       // Network error (DNS, connection refused, ECONNRESET, etc.) — retryable.
       if (attempt < maxRetries) {
         const delay = backoffDelay(baseDelay, maxDelay, attempt);
         onRetry?.({ attempt: attempt + 1, reason: `network error: ${err?.message || err}`, delay });
-        await sleep(delay);
+        await abortableSleep(delay, signal);
         attempt++;
         continue;
       }
       const hint = /localhost|11434/.test(url) ? "Is Ollama running? Try: ollama serve" : `Is ${new URL(url).origin} reachable?`;
       throw new Error(`GLM request failed: ${err?.message || err}. ${hint}`);
+    } finally {
+      clearTimeout(timer);
+      combined.cancel();
     }
-    clearTimeout(timer);
 
     if (res.ok) return res;
 
@@ -154,15 +171,21 @@ async function fetchWithRetry(url, init, { timeout, maxRetries, onRetry }) {
       const retryAfter = parseRetryAfter(res.headers.get("retry-after"));
       const delay = retryAfter != null ? Math.min(retryAfter, maxDelay) : backoffDelay(baseDelay, maxDelay, attempt);
       onRetry?.({ attempt: attempt + 1, reason: `HTTP ${res.status}`, delay });
-      // Drain the body so the connection can be reused.
-      await res.text().catch(() => {});
-      await sleep(delay);
+      // Drain the body so the connection can be reused, but do not outlive the run deadline.
+      await readResponseText(res, signal).catch((err) => {
+        if (isDeadlineError(err)) throw err;
+        return "";
+      });
+      await abortableSleep(delay, signal);
       attempt++;
       continue;
     }
 
     // Non-retryable: surface a clear, actionable error.
-    const text = await res.text().catch(() => "");
+    const text = await readResponseText(res, signal).catch((err) => {
+      if (isDeadlineError(err)) throw err;
+      return "";
+    });
     if (res.status === 401 || res.status === 403) {
       throw new Error(`GLM auth error ${res.status}: ${truncateBody(text, 400)}\nYour LAZYGLM_API_KEY may be invalid, blocked, or out of funds. Check https://portal.nousresearch.com (Nous) or https://z.ai (Zhipu).`);
     }
@@ -185,8 +208,37 @@ function parseRetryAfter(header) {
   return null;
 }
 
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
+async function readResponseText(res, signal) {
+  throwIfAborted(signal);
+  if (!res.body || typeof res.body.getReader !== "function") {
+    if (typeof res.text === "function") return withAbort(res.text(), signal);
+    return "";
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  const onAbort = () => {
+    try { reader.cancel(abortReason(signal)); } catch {}
+  };
+  if (signal) signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      throwIfAborted(signal);
+      const { done, value } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value, { stream: true });
+    }
+    text += decoder.decode();
+    return text;
+  } catch (err) {
+    if (signal?.aborted) throw abortReason(signal, err);
+    throw err;
+  } finally {
+    if (signal) signal.removeEventListener("abort", onAbort);
+    try { reader.releaseLock(); } catch {}
+  }
 }
 
 /**
@@ -252,9 +304,10 @@ function messagesForProvider(messages, preserveThinking) {
  * @param {object} [opts.config]   provider config (from resolveProviderConfig)
  * @param {function} [opts.onDelta] streaming callback
  * @param {function} [opts.onRetry] retry callback
+ * @param {AbortSignal} [opts.signal] whole-run abort signal
  * @returns {Promise<{content: string|null, reasoning: string|null, tool_calls: Array|null, raw: object, usage: object|null}>}
  */
-export async function chat({ model, messages, tools, temperature, config, onDelta, onRetry }) {
+export async function chat({ model, messages, tools, temperature, config, onDelta, onRetry, signal }) {
   const cfg = config || await resolveProviderConfig();
   const url = `${cfg.baseURL}/chat/completions`;
   const wantStream = typeof onDelta === "function";
@@ -287,15 +340,17 @@ export async function chat({ model, messages, tools, temperature, config, onDelt
     body: JSON.stringify(body),
   };
 
-  const res = await fetchWithRetry(url, init, { timeout: cfg.timeout, maxRetries: cfg.maxRetries, onRetry });
+  const res = await fetchWithRetry(url, init, { timeout: cfg.timeout, maxRetries: cfg.maxRetries, onRetry, signal });
 
   if (!wantStream) {
-    const data = await res.json();
+    const data = (!res.body && typeof res.json === "function")
+      ? await withAbort(res.json(), signal)
+      : JSON.parse(await readResponseText(res, signal));
     return parseCompletion(data);
   }
 
   // ---- Streaming path: parse SSE ----
-  return parseSSEStream(res, onDelta);
+  return parseSSEStream(res, onDelta, signal);
 }
 
 /**
@@ -339,10 +394,14 @@ function normalizeToolCalls(rawToolCalls) {
  * Parse an SSE streaming response from an OpenAI-compatible endpoint.
  * Emits delta events via onDelta and returns the unified completion shape.
  */
-async function parseSSEStream(res, onDelta) {
+async function parseSSEStream(res, onDelta, signal) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  const onAbort = () => {
+    try { reader.cancel(abortReason(signal)); } catch {}
+  };
+  if (signal) signal.addEventListener("abort", onAbort, { once: true });
 
   let content = "";
   let reasoning = "";
@@ -397,6 +456,7 @@ async function parseSSEStream(res, onDelta) {
   try {
     // eslint-disable-next-line no-constant-condition
     while (true) {
+      throwIfAborted(signal);
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
@@ -410,8 +470,10 @@ async function parseSSEStream(res, onDelta) {
     // Flush any trailing line.
     if (buffer.trim()) handleLine(buffer.replace(/\r$/, ""));
   } catch (err) {
+    if (signal?.aborted) throw abortReason(signal, err);
     throw new Error(`GLM stream interrupted: ${err?.message || err}. Partial content may have been received (${content.length} chars).`);
   } finally {
+    if (signal) signal.removeEventListener("abort", onAbort);
     try { reader.releaseLock(); } catch {}
   }
 

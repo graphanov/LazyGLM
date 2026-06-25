@@ -283,6 +283,66 @@ lazyglm run "build a Minecraft clone in Three.js" \
 lazyglm run "refactor the parser" --max-reasoning-tokens 20000
 ```
 
+## Headless / CI mode
+
+`lazyglm run` has a subprocess contract for unattended use:
+
+- Exit `0` only when the agent calls `finish()` and any requested `--verify` command passes.
+- Exit `1` for CLI/config/startup errors (bad flags, missing task, invalid provider config).
+- Exit `2` for runtime non-success (`timeout`, `max_turns`, `max_iterations`, `verify_failed`, `tool_denied`, `reasoning_budget`, `text_only_no_finish`, or provider/runtime `error`).
+- `--output-format json` writes exactly one JSON object to stdout at completion. Human streaming output is disabled in this mode.
+- Text output automatically omits ANSI color when stdout is not a TTY; use `--no-color` to force clean text.
+- `--timeout <seconds>` is a whole-run deadline (default `600`). `--timeout 0` disables the deadline and is not recommended for CI.
+- In one-shot JSON headless mode, hook-denied tools fail closed instead of prompting. Use `--yolo` only when the job is intentionally allowed to bypass permission gates.
+
+Structured JSON includes:
+
+```json
+{
+  "ok": true,
+  "result": "summary from finish()",
+  "finishReason": "finished",
+  "toolCalls": [{ "name": "finish", "turn": 3, "status": "finish" }],
+  "cost": { "tokens": 1200, "promptTokens": 900, "completionTokens": 300, "reasoningTokens": 42 },
+  "session": { "id": "sess_...", "transcriptPath": ".lazyglm/sessions/sess_....jsonl", "turns": 3, "compactions": 0 }
+}
+```
+
+The JSON intentionally excludes raw tool arguments, tool outputs, provider responses, environment dumps, and stacks. It does not perform full secret redaction on the model's final summary, so do not place secrets in prompts or ask the model to echo them in `finish()`.
+
+GitHub Actions example:
+
+```yaml
+name: LazyGLM headless
+on: [pull_request]
+jobs:
+  agent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - name: Run LazyGLM task
+        env:
+          LAZYGLM_API_KEY: ${{ secrets.LAZYGLM_API_KEY }}
+        run: |
+          npx lazyglm run "review this PR and update tests if needed" \
+            --output-format json \
+            --timeout 900 \
+            --max-turns 40 \
+            --verify "npm test" \
+            > lazyglm-result.json
+          node -e "const r=require('./lazyglm-result.json'); if(!r.ok) process.exit(1)"
+```
+
+Cron/batch one-liner:
+
+```bash
+lazyglm run "summarize failing jobs and open a fix branch" --output-format json --timeout 900 --max-turns 40 > /var/log/lazyglm-nightly.json
+```
+
 ## What you get
 
 | Feature | Description |

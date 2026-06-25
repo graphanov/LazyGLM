@@ -4,13 +4,14 @@ import { install, uninstall } from "./installer.js";
 import { doctor } from "./doctor.js";
 import { checkUpdate, selfUpdate, describeUpdate } from "./update.js";
 import { runAgent } from "./agent/runtime.js";
-import { runUltrawork } from "./ulw.js";
+import { runUltrawork, verifyFinish } from "./ulw.js";
 import { loadPlugins } from "./plugins/index.js";
 import { loadSkills, listSkillNames, getSkill, detectSkillInvocation } from "./skills/index.js";
 import { resolveProviderConfig, listModels } from "./agent/provider.js";
 import { readJson } from "./util.js";
 import { HookEngine } from "./hooks/engine.js";
 import { createRunEventPrinter } from "./cli-output.js";
+import { createDeadline, isDeadlineError } from "./agent/deadline.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -36,11 +37,16 @@ Usage:
     --provider <zai|nous|ollama>       Backend (default: zai; ollama=keyless local)
     --role <role>                      Force a routing role (default|quick|planner|verifier|ultrabrain)
     --cwd <path>                       Working directory (default: .)
+    --output-format <text|json>        text (default) or one JSON object on stdout
+    --no-color                         Disable ANSI styling in text output
+    --yolo                             Bypass all permission gates (auto everywhere)
     --max-turns <n>                    Max agent turns (default 80)
+    --timeout <seconds>                Whole-run deadline (default 600; 0 disables)
     --max-reasoning-tokens <n>         Soft cap on cumulative reasoning tokens (0=unlimited)
     --ultrawork                        Verified-completion loop mode ($ulw-loop)
+    --max-iterations <n>               Max Ultrawork iterations (default 3)
     --completion-promise "<text>"      What 'done' means (ultrawork)
-    --verify "<command>"               Shell command that must exit 0 (ultrawork verify)
+    --verify "<command>"               Shell command that must exit 0 after finish
   lazyglm skills                       List installed skills
   lazyglm skill <name>                 Print a skill's content
   lazyglm hook <event>                 Fire a hook event from stdin JSON (bridge)
@@ -198,37 +204,242 @@ export async function main(argv) {
     }
     case "run": {
       const { flags, positional } = parseFlags(rest);
+      const outputFormat = String(flags["output-format"] || "text").toLowerCase();
+      const jsonMode = outputFormat === "json";
+      if (!new Set(["text", "json"]).has(outputFormat)) {
+        console.error(outputFormat === "stream-json" ? "--output-format stream-json is not supported in this release; use --output-format json." : "--output-format must be one of: text, json");
+        return 1;
+      }
+
       const task = positional.join(" ").trim() || flags.task;
-      if (!task) { console.error("usage: lazyglm run \"<task>\""); return 1; }
+      if (!task) return runUsageError("usage: lazyglm run \"<task>\"", jsonMode);
+
+      const maxTurns = parsePositiveIntegerFlag(flags["max-turns"], 80, "--max-turns");
+      if (maxTurns.error) return runUsageError(maxTurns.error, jsonMode);
+      const reasoningBudget = parseNonnegativeIntegerFlag(flags["max-reasoning-tokens"], 0, "--max-reasoning-tokens");
+      if (reasoningBudget.error) return runUsageError(reasoningBudget.error, jsonMode);
+      const timeoutSeconds = parseNonnegativeNumberFlag(flags.timeout, 600, "--timeout");
+      if (timeoutSeconds.error) return runUsageError(timeoutSeconds.error, jsonMode);
+
       const cwd = flags.cwd ? resolve(flags.cwd) : process.cwd();
       const model = flags.model;
       const role = flags.role;
-      const maxTurns = Number(flags["max-turns"] || 80);
-      const reasoningBudget = Number(flags["max-reasoning-tokens"] || 0);
       const ultrawork = !!flags.ultrawork || /\$ulw-loop\b/i.test(task);
-      const printEvent = createRunEventPrinter({ stdout: process.stdout, stderr: process.stderr, isTTY: process.stdout.isTTY === true });
+      const permissionMode = flags.yolo ? "yolo" : "auto";
+      const printEvent = jsonMode
+        ? () => {}
+        : createRunEventPrinter({ stdout: process.stdout, stderr: process.stderr, isTTY: process.stdout.isTTY === true && !flags["no-color"] });
+      const deadline = createDeadline(timeoutSeconds.value * 1000, { message: `LazyGLM run timed out after ${formatSeconds(timeoutSeconds.value)}.` });
 
-      if (ultrawork) {
-        const completionPromise = flags["completion-promise"] || "the task is fully implemented, builds cleanly, and passes verification.";
-        const verifyCommand = flags.verify;
-        const maxIterations = Number(flags["max-iterations"] || 3);
-        const res = await runUltrawork({ task, cwd, model, role, completionPromise, verifyCommand, maxIterations, maxTurns, reasoningBudget, onEvent: printEvent });
-        console.log(`\n--- Ultrawork result ---`);
-        console.log(`verified: ${res.verified ? "YES ✅" : "NO ❌"} | iterations: ${res.iterations}`);
-        if (res.verdict) console.log(`verdict: ${res.verdict.reason}`);
-        return res.verified ? 0 : 2;
+      try {
+        if (ultrawork) {
+          const completionPromise = flags["completion-promise"] || "the task is fully implemented, builds cleanly, and passes verification.";
+          const verifyCommand = flags.verify;
+          const maxIterations = parsePositiveIntegerFlag(flags["max-iterations"], 3, "--max-iterations");
+          if (maxIterations.error) return runUsageError(maxIterations.error, jsonMode);
+          const res = await runUltrawork({
+            task,
+            cwd,
+            model,
+            role,
+            completionPromise,
+            verifyCommand,
+            maxIterations: maxIterations.value,
+            maxTurns: maxTurns.value,
+            reasoningBudget: reasoningBudget.value,
+            permissionMode,
+            deadline,
+            onEvent: printEvent,
+          });
+          const structured = structuredUltraworkResult(res);
+          if (jsonMode) {
+            writeJson(structured);
+          } else {
+            console.log(`\n--- Ultrawork result ---`);
+            console.log(`verified: ${res.verified ? "YES ✅" : "NO ❌"} | iterations: ${res.iterations} | finishReason: ${structured.finishReason}`);
+            if (res.verdict) console.log(`verdict: ${res.verdict.reason}`);
+          }
+          return structured.ok ? 0 : 2;
+        }
+
+        const res = await runAgent({
+          task,
+          cwd,
+          model,
+          role,
+          plugins: loadPlugins(),
+          maxTurns: maxTurns.value,
+          reasoningBudget: reasoningBudget.value,
+          permissionMode,
+          failOnToolBlock: jsonMode,
+          deadline,
+          onEvent: printEvent,
+        });
+
+        let verification;
+        let finishReason = res.finishReason;
+        let errorMessage = res.errorMessage;
+        if (res.finished && flags.verify) {
+          try {
+            const verdict = await verifyFinish({ summary: res.finishSummary, cwd, verifyCommand: flags.verify, filesWritten: res.filesWritten, deadline });
+            verification = { pass: verdict.pass, reason: verdict.reason };
+            if (!verdict.pass) finishReason = "verify_failed";
+          } catch (err) {
+            if (isDeadlineError(err) || deadline.signal?.aborted) {
+              finishReason = "timeout";
+              errorMessage = err?.message || "timeout";
+              verification = { pass: false, reason: errorMessage };
+            } else {
+              throw err;
+            }
+          }
+        }
+        const structured = structuredRunResult(res, { finishReason, verification, errorMessage });
+        if (jsonMode) {
+          writeJson(structured);
+        } else {
+          console.log(`\n--- Run result ---`);
+          console.log(`finished: ${structured.ok ? "YES ✅" : "NO (stopped)"} | finishReason: ${structured.finishReason} | turns: ${res.turns} | tokens in/out: ${res.promptTokens || res.tokensIn}/${res.completionTokens || res.tokensOut}${res.reasoningTokens ? ` | 🧠 reasoning: ${res.reasoningTokens}` : ""} | compactions: ${res.compactions}`);
+          if (verification) console.log(`verify: ${verification.pass ? "PASS ✅" : "FAIL ❌"} — ${verification.reason}`);
+          console.log(`transcript: ${res.transcriptPath}`);
+        }
+        return structured.ok ? 0 : 2;
+      } catch (err) {
+        const timeout = isDeadlineError(err) || deadline.signal?.aborted;
+        const message = err?.message || String(err);
+        const structured = structuredError(message, { finishReason: timeout ? "timeout" : "error" });
+        if (jsonMode) writeJson(structured);
+        else console.error(`lazyglm run failed: ${message}`);
+        return timeout ? 2 : 1;
+      } finally {
+        deadline.cancel();
       }
-
-      const res = await runAgent({ task, cwd, model, role, plugins: loadPlugins(), maxTurns, reasoningBudget, onEvent: printEvent });
-      console.log(`\n--- Run result ---`);
-      console.log(`finished: ${res.finished ? "YES ✅" : "NO (stopped)"} | turns: ${res.turns} | tokens in/out: ${res.promptTokens || res.tokensIn}/${res.completionTokens || res.tokensOut}${res.reasoningTokens ? ` | 🧠 reasoning: ${res.reasoningTokens}` : ""} | compactions: ${res.compactions}`);
-      console.log(`transcript: ${res.transcriptPath}`);
-      return res.finished ? 0 : 2;
     }
     default:
       console.error(`unknown command: ${cmd}\n\n${usage()}`);
       return 1;
   }
+}
+
+function parsePositiveIntegerFlag(value, defaultValue, name) {
+  if (value === undefined) return { value: defaultValue };
+  if (value === true) return { error: `${name} requires a value` };
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1) return { error: `${name} must be a positive integer` };
+  return { value: n };
+}
+
+function parseNonnegativeIntegerFlag(value, defaultValue, name) {
+  if (value === undefined) return { value: defaultValue };
+  if (value === true) return { error: `${name} requires a value` };
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 0) return { error: `${name} must be a non-negative integer` };
+  return { value: n };
+}
+
+function parseNonnegativeNumberFlag(value, defaultValue, name) {
+  if (value === undefined) return { value: defaultValue };
+  if (value === true) return { error: `${name} requires a value` };
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return { error: `${name} must be a finite non-negative number of seconds` };
+  return { value: n };
+}
+
+function runUsageError(message, jsonMode) {
+  if (jsonMode) writeJson(structuredError(message, { finishReason: "error" }));
+  else console.error(message);
+  return 1;
+}
+
+function structuredError(message, { finishReason = "error" } = {}) {
+  return {
+    ok: false,
+    result: null,
+    finishReason,
+    toolCalls: [],
+    cost: { tokens: 0, promptTokens: 0, completionTokens: 0, reasoningTokens: 0 },
+    session: null,
+    error: { message: String(message || "error") },
+  };
+}
+
+function structuredRunResult(res, { finishReason = res.finishReason, verification, errorMessage } = {}) {
+  const promptTokens = Number(res.promptTokens ?? res.tokensIn ?? 0) || 0;
+  const completionTokens = Number(res.completionTokens ?? res.tokensOut ?? 0) || 0;
+  const reasoningTokens = Number(res.reasoningTokens ?? 0) || 0;
+  const ok = res.finished === true && finishReason === "finished" && (!verification || verification.pass === true);
+  const out = {
+    ok,
+    result: res.finishSummary || res.result || null,
+    finishReason: ok ? "finished" : finishReason || "error",
+    toolCalls: sanitizeToolCalls(res.toolCalls),
+    cost: {
+      tokens: promptTokens + completionTokens,
+      promptTokens,
+      completionTokens,
+      reasoningTokens,
+    },
+    session: res.sessionId ? {
+      id: res.sessionId,
+      transcriptPath: res.transcriptPath,
+      turns: Number(res.turns || 0),
+      compactions: Number(res.compactions || 0),
+    } : null,
+  };
+  if (verification) out.verification = { pass: !!verification.pass, reason: String(verification.reason || "") };
+  if (errorMessage) out.error = { message: String(errorMessage) };
+  return out;
+}
+
+function structuredUltraworkResult(res) {
+  const history = Array.isArray(res.history) ? res.history : [];
+  const last = history[history.length - 1];
+  const totals = history.reduce((acc, item) => {
+    acc.promptTokens += Number(item.promptTokens ?? item.tokensIn ?? 0) || 0;
+    acc.completionTokens += Number(item.completionTokens ?? item.tokensOut ?? 0) || 0;
+    acc.reasoningTokens += Number(item.reasoningTokens ?? 0) || 0;
+    acc.toolCalls.push(...sanitizeToolCalls(item.toolCalls));
+    return acc;
+  }, { promptTokens: 0, completionTokens: 0, reasoningTokens: 0, toolCalls: [] });
+  const finishReason = res.finishReason || (res.verified ? "finished" : "max_iterations");
+  const out = {
+    ok: res.verified === true,
+    result: res.finishSummary || last?.finishSummary || last?.result || null,
+    finishReason,
+    toolCalls: totals.toolCalls,
+    cost: {
+      tokens: totals.promptTokens + totals.completionTokens,
+      promptTokens: totals.promptTokens,
+      completionTokens: totals.completionTokens,
+      reasoningTokens: totals.reasoningTokens,
+    },
+    session: last?.sessionId ? {
+      id: last.sessionId,
+      transcriptPath: last.transcriptPath,
+      turns: Number(last.turns || 0),
+      compactions: Number(last.compactions || 0),
+    } : null,
+  };
+  if (res.verdict) out.verification = { pass: !!res.verdict.pass, reason: String(res.verdict.reason || "") };
+  if (res.errorMessage) out.error = { message: String(res.errorMessage) };
+  return out;
+}
+
+function sanitizeToolCalls(toolCalls) {
+  return (Array.isArray(toolCalls) ? toolCalls : []).map((tc) => ({
+    name: String(tc.name || "unknown"),
+    turn: Number(tc.turn || 0),
+    status: ["ok", "denied", "error", "finish"].includes(tc.status) ? tc.status : "ok",
+  }));
+}
+
+function writeJson(obj) {
+  process.stdout.write(`${JSON.stringify(obj)}\n`);
+}
+
+function formatSeconds(seconds) {
+  const n = Number(seconds);
+  return Number.isInteger(n) ? `${n}s` : `${n.toFixed(3).replace(/0+$/, "").replace(/\.$/, "")}s`;
 }
 
 function readStdin() {
