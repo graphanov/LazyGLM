@@ -90,9 +90,9 @@ export interface ChatUsage extends ReasoningUsage {
 export type StreamDelta =
   | { type: "text"; text: string }
   | { type: "reasoning"; text: string }
-  | { type: "tool_call_start"; id: string; name: string }
-  | { type: "tool_call_args"; id: string; arguments: string }
-  | { type: "done"; usage?: ChatUsage };
+  | { type: "tool_call_start"; index: number; id?: string | null; name?: string | null }
+  | { type: "tool_call_args"; index: number; fragment: string }
+  | { type: "done"; finish_reason: string | null };
 
 export interface ToolCall {
   id: string;
@@ -107,10 +107,11 @@ export interface ToolResult {
 }
 
 export interface ChatCompletion {
-  content: string;
-  reasoning?: string;
-  tool_calls: ToolCall[];
-  usage?: ChatUsage;
+  content: string | null;
+  reasoning?: string | null;
+  tool_calls: ToolCall[] | null;
+  raw?: unknown;
+  usage?: ChatUsage | null;
 }
 
 export interface JsonSchema {
