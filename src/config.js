@@ -39,9 +39,11 @@ export function isSupportedProvider(provider) {
  * Load the persisted user config. Cached after first read; pass {force:true}
  * to re-read from disk (e.g. after onboarding writes a new file in-process).
  * Returns {} when no config exists yet (fresh machine). LAZYGLM_HOME is read
- * live so tests can point it at a temp dir.
+ * live so tests can point it at a temp dir. By default, malformed/unreadable
+ * config degrades to {}; pass {throwOnError:true} when callers need to surface
+ * the config-file problem to the user.
  */
-export async function loadUserConfig({ force = false } = {}) {
+export async function loadUserConfig({ force = false, throwOnError = false } = {}) {
   if (_cache !== undefined && !force) return _cache;
   const path = configPath();
   if (!existsSync(path)) {
@@ -51,8 +53,9 @@ export async function loadUserConfig({ force = false } = {}) {
   try {
     const raw = await readFile(path, "utf8");
     _cache = raw.trim() ? JSON.parse(raw) : {};
-  } catch {
+  } catch (e) {
     _cache = {};
+    if (throwOnError) throw e;
   }
   return _cache;
 }
