@@ -1,12 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { main } from "../src/cli.js";
 import { runAgent } from "../src/agent/runtime.js";
 
 const ANSI_RE = /\x1b\[/;
+const execFileAsync = promisify(execFile);
 
 function makeConfig() {
   return {
@@ -286,6 +289,14 @@ test("whole-run timeout interrupts provider retry backoff", async () => {
     assert.equal(json.ok, false);
     assert.equal(json.finishReason, "timeout");
   });
+});
+
+test("retry backoff sleep remains referenced while awaited", async () => {
+  const deadlineModuleUrl = new URL("../src/agent/deadline.js", import.meta.url).href;
+  const script = `import { abortableSleep } from ${JSON.stringify(deadlineModuleUrl)};\nawait abortableSleep(30);\nconsole.log("slept");`;
+  const { stdout } = await execFileAsync(process.execPath, ["--input-type=module", "-e", script], { timeout: 1000 });
+
+  assert.equal(stdout.trim(), "slept");
 });
 
 test("text output is ANSI-free when stdout is not a TTY", async () => {

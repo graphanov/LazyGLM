@@ -122,7 +122,6 @@ export function abortableSleep(ms, signal) {
   throwIfAborted(signal);
   return new Promise((resolve, reject) => {
     const timer = setTimeout(done, delay);
-    timer.unref?.();
     const onAbort = () => done(abortReason(signal));
     if (signal) signal.addEventListener("abort", onAbort, { once: true });
 
