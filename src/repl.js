@@ -18,6 +18,7 @@ import { install } from "./installer.js";
 import { runUltrawork } from "./ulw.js";
 import { readJson, gitInfo, truncate, nowIso } from "./util.js";
 import { renderBanner } from "./banner.js";
+import { renderStatus } from "./status.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join as pjoin } from "node:path";
 
@@ -72,6 +73,10 @@ export function formatToolResult(result = "", opts = {}) {
 
 export function turnDivider(opts = {}) {
   return `${TOOL_INDENT}${ansi(DIM, opts)}${TOOL_DIVIDER_RULE} tools ${TOOL_DIVIDER_RULE}${ansi(RESET, opts)}`;
+}
+
+export function formatExitMarker(opts = {}) {
+  return `${ansi(DIM, opts)}bye.${ansi(RESET, opts)}`;
 }
 
 // Turn-boundary frame helpers (purely additive). Each assistant+tool turn is
@@ -220,6 +225,12 @@ function extractFlag(s, flag) {
   return m ? m[1] : null;
 }
 
+export function replPromptTarget({ stdinIsTTY, stdoutIsTTY } = {}) {
+  if (stdoutIsTTY) return "stdout";
+  if (stdinIsTTY) return "stderr";
+  return null;
+}
+
 /** Rebuild a Context's messages from a session's event records. */
 export function replayIntoContext(events, ctx) {
   for (const ev of events) {
@@ -243,6 +254,41 @@ export function replayIntoContext(events, ctx) {
     }
     // session / usage / compact / log records are not part of the message history
   }
+}
+
+/**
+ * Reconstruct cumulative usage, last-turn usage, and the original session start
+ * time from a session's persisted event records. Used by --continue and /resume
+ * so /status reflects prior turns rather than a freshly-zeroed process state.
+ *
+ * @returns {{ cumulative: object, lastTurn: object|null, sessionStartMs: number }}
+ */
+export function replayTelemetry(events) {
+  const cumulative = { prompt: 0, completion: 0, reasoning: 0 };
+  let lastTurn = null;
+  let sessionStartMs = Date.now();
+  for (const ev of events || []) {
+    if (ev.type === "session" && ev.t) {
+      const ms = Date.parse(ev.t);
+      if (!Number.isNaN(ms)) sessionStartMs = ms;
+    } else if (ev.type === "usage") {
+      // Sum per-turn usage fields to rebuild the cumulative total. This matches
+      // the live REPL's own accounting (see the handleLine usage append) and is
+      // robust against non-monotonic cumulative snapshots: sessions that were
+      // resumed before the telemetry-restore patch persisted cumulative
+      // snapshots that restarted from zero, so last-one-wins would under-report
+      // the true session total for those legacy histories.
+      const u = ev.usage;
+      if (u && typeof u === "object") {
+        const reasoning = u.completion_tokens_details?.reasoning_tokens || u.reasoning_tokens || 0;
+        cumulative.prompt += u.prompt_tokens || 0;
+        cumulative.completion += u.completion_tokens || 0;
+        cumulative.reasoning += reasoning;
+        lastTurn = { prompt: u.prompt_tokens || 0, completion: u.completion_tokens || 0, reasoning };
+      }
+    }
+  }
+  return { cumulative, lastTurn, sessionStartMs };
 }
 
 /** Render runAgent / runUltrawork events into the REPL (compact). */
@@ -362,6 +408,24 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
 
   // 6. Cost tracking
   const cumulative = { prompt: 0, completion: 0, reasoning: 0 };
+  // Last-turn usage + timing snapshot, surfaced by /status. lastTurn is null
+  // until the first turn completes; lastTurnMs includes retry backoff (wall-clock
+  // around chat()), so it is a human-facing figure, not a latency benchmark.
+  let lastTurn = null;
+  let lastTurnMs = null;
+  let sessionStartMs = Date.now();
+  const restoreTelemetry = (events) => {
+    const restored = replayTelemetry(events);
+    cumulative.prompt = restored.cumulative.prompt;
+    cumulative.completion = restored.cumulative.completion;
+    cumulative.reasoning = restored.cumulative.reasoning;
+    lastTurn = restored.lastTurn;
+    sessionStartMs = restored.sessionStartMs;
+    // Persisted usage events do not carry a turn duration; clear the stale
+    // pre-resume lastTurnMs so /status does not pair resumed tokens with an
+    // unrelated wall-clock figure. It repopulates after the next turn.
+    lastTurnMs = null;
+  };
 
   // 7. Session (--continue resumes the last session file; otherwise fresh)
   let session;
@@ -371,6 +435,7 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
       const events = await loadSessionEvents(last.id);
       if (events && events.length) {
         replayIntoContext(events, ctx);
+        restoreTelemetry(events);
         session = { id: last.id, path: last.path, model: last.model, provider: last.provider };
         console.log(`${GRAY}   (resumed session ${last.id}: ${events.length} events)${RESET}`);
       }
@@ -412,6 +477,7 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
   /exit                 quit
   /clear                clear conversation (keep system prompt)
   /model <name>         switch model (e.g. glm-4.7-flash, glm-4.7, glm-5.2)
+  /status               show session, model, role/effort, timing, and token totals
   /cost                 show cumulative token spend (incl. reasoning)
   /compact              compact the context now
   /resume [n]           list past sessions, or resume the nth
@@ -453,6 +519,36 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
       case "cost":
         console.log(`   tokens in/out: ${cumulative.prompt}/${cumulative.completion} | ${GRAY}🧠 reasoning: ${cumulative.reasoning}${RESET}`);
         return;
+      case "status": {
+        // Derive reasoningEffort at /status time from the live role + catalog
+        // (mirrors router.js pickModel: roleEntry.reasoning_effort ||
+        // catalog.current.model_reasoning_effort). Done here so a /model switch
+        // is reflected without threading effort through providerConfig's return.
+        let effort = "high";
+        let role = providerConfig.role || "default";
+        try {
+          const cat = await readJson(pjoin(ROOT, "config", "model-catalog.json"), {});
+          const roleEntry = cat.roles?.[role] || cat.roles?.default || {};
+          effort = roleEntry.reasoning_effort || cat.current?.model_reasoning_effort || "high";
+        } catch {
+          // catalog read failure is non-fatal for a status line
+        }
+        console.log(
+          renderStatus({
+            sessionId: session?.id,
+            model: currentModel,
+            provider: providerConfig.provider,
+            role,
+            reasoningEffort: effort,
+            cumulative,
+            lastTurn,
+            sessionElapsedMs: Date.now() - sessionStartMs,
+            lastTurnMs,
+            isTTY: process.stdout.isTTY === true,
+          }),
+        );
+        return;
+      }
       case "compact": {
         const before = ctx.estimateTokens();
         const did = await ctx.maybeCompact({
@@ -493,6 +589,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
         }
         ctx.messages = ctx.messages.filter((m) => m.role === "system");
         replayIntoContext(events, ctx);
+        restoreTelemetry(events);
         session = { id: pick.id, path: pick.path, model: pick.model, provider: pick.provider };
         console.log(`${GREEN}   ✓ resumed ${pick.id} (${events.length} events)${RESET}`);
         return;
@@ -563,6 +660,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
       });
 
       let resp;
+      const turnStartMs = Date.now();
       try {
         resp = await chat({
           model: currentModel,
@@ -581,6 +679,8 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
         process.stdout.write(turnEnd(renderOpts()));
         return;
       }
+      // Per-turn timing: wall-clock around chat() (includes retry backoff).
+      lastTurnMs = Date.now() - turnStartMs;
 
       ctx.recordUsage(resp.usage);
       const u = resp.usage || {};
@@ -588,6 +688,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
       cumulative.prompt += u.prompt_tokens || 0;
       cumulative.completion += u.completion_tokens || 0;
       cumulative.reasoning += reasoning;
+      lastTurn = { prompt: u.prompt_tokens || 0, completion: u.completion_tokens || 0, reasoning };
       await appendEvent(session, { type: "usage", usage: u, cumulative: { ...cumulative } });
 
       closeStream();
@@ -702,11 +803,12 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
     //   clean stream for piped consumers (no ANSI escape glueing).
     // - both non-TTY (full pipe / CI): no prompt at all.
     if (closed) return;
-    if (process.stdout.isTTY === true) {
-      process.stdout.write(`${GREEN}lazyglm>${RESET} `);
-    } else if (process.stdin.isTTY === true && process.stderr.isTTY === true) {
-      process.stderr.write(`${GREEN}lazyglm>${RESET} `);
-    }
+    const target = replPromptTarget({
+      stdinIsTTY: process.stdin.isTTY === true && process.stderr.isTTY === true,
+      stdoutIsTTY: process.stdout.isTTY === true,
+    });
+    if (target === "stdout") process.stdout.write(`${GREEN}lazyglm>${RESET} `);
+    else if (target === "stderr") process.stderr.write(`${GREEN}lazyglm>${RESET} `);
   };
 
   while (!closed) {
@@ -722,7 +824,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
     }
   }
   closeStream();
-  process.stdout.write(`${DIM}bye.${RESET}\n`);
+  process.stdout.write(`${formatExitMarker(renderOpts())}\n`);
   process.exit(0);
   return 0;
 }

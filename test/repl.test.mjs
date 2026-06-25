@@ -9,7 +9,20 @@ import { join } from "node:path";
 import { loadUserConfig, saveUserConfig, isOnboarded, resetConfigCache } from "../src/config.js";
 import { needsOnboarding, runOnboarding } from "../src/onboard.js";
 import { createSession, appendEvent, listSessions, loadSessionEvents } from "../src/sessions.js";
-import { replayIntoContext, formatReasoning, formatText, formatToolCall, formatToolResult, turnDivider, turnRule, turnStart, turnEnd } from "../src/repl.js";
+import {
+  replayIntoContext,
+  replayTelemetry,
+  replPromptTarget,
+  formatReasoning,
+  formatText,
+  formatToolCall,
+  formatToolResult,
+  turnDivider,
+  formatExitMarker,
+  turnRule,
+  turnStart,
+  turnEnd,
+} from "../src/repl.js";
 import { Context, assistantMessageFrom } from "../src/agent/context.js";
 import { chat } from "../src/agent/provider.js";
 
@@ -65,6 +78,13 @@ test("REPL turn-format helpers can render without ANSI for non-TTY output", () =
   assertNoAnsi(formatToolCall("read_file", { path: "src/repl.js" }, { isTTY: false }));
   assertNoAnsi(formatToolResult("ok", { isTTY: false }));
   assertNoAnsi(turnDivider({ isTTY: false }));
+  assertNoAnsi(formatExitMarker({ isTTY: false }));
+});
+
+test("REPL prompt routing keeps piped stdout clean", () => {
+  assert.equal(replPromptTarget({ stdinIsTTY: false, stdoutIsTTY: false }), null, "fully piped REPL emits no prompt");
+  assert.equal(replPromptTarget({ stdinIsTTY: true, stdoutIsTTY: false }), "stderr", "human stdin with piped stdout prompts on stderr");
+  assert.equal(replPromptTarget({ stdinIsTTY: false, stdoutIsTTY: true }), "stdout", "TTY stdout keeps the normal prompt");
 });
 
 test("REPL turn-frame helpers render a symmetric dim rule on TTY", () => {
@@ -390,6 +410,51 @@ test("replayIntoContext restores reasoning_content from a persisted assistant ev
   replayIntoContext(events, ctx);
   const assistant = ctx.messages.find((m) => m.role === "assistant");
   assert.equal(assistant.reasoning_content, "I weighed options then acted.", "reasoning must be restored on replay");
+});
+
+test("replayTelemetry restores cumulative status counters for resumed sessions", () => {
+  const startedAt = "2026-01-01T00:00:00.000Z";
+  const events = [
+    { type: "session", t: startedAt, id: "sess_resume" },
+    {
+      type: "usage",
+      usage: { prompt_tokens: 10, completion_tokens: 20, completion_tokens_details: { reasoning_tokens: 3 } },
+      cumulative: { prompt: 10, completion: 20, reasoning: 3 },
+    },
+    {
+      type: "usage",
+      usage: { prompt_tokens: 4, completion_tokens: 5, reasoning_tokens: 2 },
+      cumulative: { prompt: 14, completion: 25, reasoning: 5 },
+    },
+  ];
+  const telemetry = replayTelemetry(events);
+  assert.deepEqual(telemetry.cumulative, { prompt: 14, completion: 25, reasoning: 5 });
+  assert.deepEqual(telemetry.lastTurn, { prompt: 4, completion: 5, reasoning: 2 });
+  assert.equal(telemetry.sessionStartMs, Date.parse(startedAt));
+});
+
+test("replayTelemetry sums per-turn usage for non-monotonic legacy cumulative snapshots", () => {
+  // Legacy sessions resumed before the telemetry-restore patch persisted
+  // cumulative snapshots that restarted from zero on resume. Last-one-wins
+  // would under-report; the replay must sum per-turn usage fields instead.
+  const events = [
+    { type: "session", t: "2026-01-01T00:00:00.000Z", id: "sess_legacy" },
+    {
+      type: "usage",
+      usage: { prompt_tokens: 100, completion_tokens: 200, reasoning_tokens: 30 },
+      cumulative: { prompt: 100, completion: 200, reasoning: 30 },
+    },
+    {
+      type: "usage",
+      usage: { prompt_tokens: 50, completion_tokens: 60, reasoning_tokens: 10 },
+      // Legacy snapshot restarted from zero — non-monotonic, smaller than prior.
+      cumulative: { prompt: 50, completion: 60, reasoning: 10 },
+    },
+  ];
+  const telemetry = replayTelemetry(events);
+  // Sum of per-turn fields: 100+50=150, 200+60=260, 30+10=40 — NOT last-snapshot (50/60/10).
+  assert.deepEqual(telemetry.cumulative, { prompt: 150, completion: 260, reasoning: 40 });
+  assert.deepEqual(telemetry.lastTurn, { prompt: 50, completion: 60, reasoning: 10 });
 });
 
 test("assistant append→load round-trip preserves reasoning_content (isolated LAZYGLM_HOME)", async () => {
