@@ -170,6 +170,24 @@ test("force install keeps ownership of lazyglm-created .gitignore entry", async 
   }
 });
 
+test("malformed config does not block force install or uninstall", async () => {
+  const d = await mkdtemp(join(tmpdir(), "lazyglm-malformed-config-"));
+  try {
+    await install({ cwd: d });
+    await writeFile(join(d, ".lazyglm", "config.json"), "{not json", "utf8");
+    await install({ cwd: d, force: true });
+    const cfg = JSON.parse(await readFile(join(d, ".lazyglm", "config.json"), "utf8"));
+    assert.equal(cfg.model, "glm-5.2", "force install should repair malformed config");
+
+    await writeFile(join(d, ".lazyglm", "config.json"), "{not json", "utf8");
+    const res = await uninstall({ cwd: d });
+    assert.ok(!existsSync(join(d, ".lazyglm")), "malformed config must not block removing .lazyglm/");
+    assert.ok(res.preserved.some((c) => c.includes("user-owned")), "corrupt ownership marker should fail closed and preserve gitignore entry");
+  } finally {
+    await rm(d, { recursive: true, force: true });
+  }
+});
+
 test("uninstall preserves pre-existing .lazyglm/ gitignore entry and reports it", async () => {
   const d = await mkdtemp(join(tmpdir(), "lazyglm-uninstall-preexist-"));
   try {

@@ -47,7 +47,7 @@ export async function install({ cwd, force = false } = {}) {
 
   // per-project config (model from catalog default)
   const configPath = join(lazyDir, "config.json");
-  const previousConfig = existsSync(configPath) ? await readJson(configPath).catch(() => ({})) : {};
+  const previousConfig = existsSync(configPath) ? await readJson(configPath, {}) : {};
   if (force || !existsSync(configPath)) {
     await writeJson(configPath, {
       installedAt: new Date().toISOString(),
@@ -58,7 +58,7 @@ export async function install({ cwd, force = false } = {}) {
     });
     created.push(".lazyglm/config.json");
   }
-  const existingConfig = existsSync(configPath) ? await readJson(configPath).catch(() => ({})) : previousConfig;
+  const existingConfig = existsSync(configPath) ? await readJson(configPath, {}) : previousConfig;
 
   // AGENTS.md template
   const agentsPath = join(dir, "AGENTS.md");
@@ -110,7 +110,7 @@ export async function uninstall({ cwd } = {}) {
   let ownsGitignoreEntry = false;
   const configPath = join(lazyDir, "config.json");
   if (existsSync(configPath)) {
-    const cfg = await readJson(configPath).catch(() => ({}));
+    const cfg = await readJson(configPath, {});
     ownsGitignoreEntry = cfg.gitignoreOwnedByLazyglm === true;
   }
 
