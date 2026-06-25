@@ -222,12 +222,18 @@ test("malformed config does not block force install or uninstall", async () => {
     assert.equal(cfg.model, "glm-5.2", "plain install should not turn malformed config into partial ownership-only config");
     assert.ok(cfg.provider?.base_url, "plain install should retain provider defaults when repairing malformed config");
 
-    await writeFile(join(d, ".lazyglm", "config.json"), "{not json", "utf8");
+    await writeFile(join(d, ".lazyglm", "config.json"), "null", "utf8");
+    await install({ cwd: d });
+    cfg = JSON.parse(await readFile(join(d, ".lazyglm", "config.json"), "utf8"));
+    assert.equal(cfg.model, "glm-5.2", "plain install should repair non-object JSON config");
+    assert.ok(cfg.provider?.base_url, "plain install should retain provider defaults for non-object JSON config");
+
+    await writeFile(join(d, ".lazyglm", "config.json"), "[1,2,3]", "utf8");
     await install({ cwd: d, force: true });
     cfg = JSON.parse(await readFile(join(d, ".lazyglm", "config.json"), "utf8"));
     assert.equal(cfg.model, "glm-5.2", "force install should repair malformed config");
 
-    await writeFile(join(d, ".lazyglm", "config.json"), "{not json", "utf8");
+    await writeFile(join(d, ".lazyglm", "config.json"), "null", "utf8");
     const res = await uninstall({ cwd: d });
     assert.ok(!existsSync(join(d, ".lazyglm")), "malformed config must not block removing .lazyglm/");
     assert.ok(res.preserved.some((c) => c.includes("user-owned")), "corrupt ownership marker should fail closed and preserve gitignore entry");

@@ -41,7 +41,12 @@ function gitignoreHasEntry(text, entry) {
   return text.split("\n").some((line) => isGitignoreEntry(line, entry));
 }
 
+function asConfig(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
 async function configWithDefaults(config = {}) {
+  config = asConfig(config);
   return {
     installedAt: config.installedAt || new Date().toISOString(),
     version: config.version || await readVersion(),
@@ -65,7 +70,7 @@ export async function install({ cwd, force = false } = {}) {
 
   // per-project config (model from catalog default)
   const configPath = join(lazyDir, "config.json");
-  const previousConfig = existsSync(configPath) ? await readJson(configPath, {}) : {};
+  const previousConfig = existsSync(configPath) ? asConfig(await readJson(configPath, {})) : {};
   if (force || !existsSync(configPath)) {
     await writeJson(configPath, await configWithDefaults({
       ...(previousConfig.gitignoreOwnedByLazyglm === true ? { gitignoreOwnedByLazyglm: true } : {}),
@@ -74,7 +79,7 @@ export async function install({ cwd, force = false } = {}) {
     }));
     created.push(".lazyglm/config.json");
   }
-  const existingConfig = existsSync(configPath) ? await readJson(configPath, {}) : previousConfig;
+  const existingConfig = existsSync(configPath) ? asConfig(await readJson(configPath, {})) : previousConfig;
 
   // AGENTS.md template. Track whether install wrote it so uninstall never
   // deletes a user-owned file that merely happens to equal the default template.
@@ -138,7 +143,7 @@ export async function uninstall({ cwd } = {}) {
   let ownsGitignoreEntry = false;
   const configPath = join(lazyDir, "config.json");
   if (existsSync(configPath)) {
-    const cfg = await readJson(configPath, {});
+    const cfg = asConfig(await readJson(configPath, {}));
     ownsAgentsFile = cfg.agentsOwnedByLazyglm === true;
     ownsGitignoreFile = cfg.gitignoreFileOwnedByLazyglm === true;
     ownsGitignoreEntry = cfg.gitignoreOwnedByLazyglm === true;
