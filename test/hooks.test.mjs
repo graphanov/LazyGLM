@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HookEngine } from "../src/hooks/engine.js";
+import { createDeadline } from "../src/agent/deadline.js";
 
 let cwd;
 test.before(async () => { cwd = await mkdtemp(join(tmpdir(), "lazyglm-hooks-")); });
@@ -64,4 +65,31 @@ test("hook input has canonical shape", async () => {
   assert.equal(seen.model, "glm-4.7-flash");
   assert.equal(seen.tool_name, "write_file");
   assert.equal(typeof seen.session_id, "string");
+});
+
+test("engine passes AbortSignal to hooks and aborts a pending handler", async () => {
+  const engine = new HookEngine({ cwd });
+  const deadline = createDeadline(25, { message: "hook deadline" });
+  let seenSignal;
+  engine.register({
+    name: "slow",
+    hooks: {
+      PreToolUse: async (_input, api) => {
+        seenSignal = api.signal;
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, 1000);
+          timer.unref?.();
+        });
+      },
+    },
+  });
+  try {
+    await assert.rejects(
+      engine.fire("PreToolUse", { tool_name: "read_file", tool_input: { path: "x" } }, { signal: deadline.signal }),
+      /hook deadline/,
+    );
+    assert.equal(seenSignal?.aborted, true);
+  } finally {
+    deadline.cancel();
+  }
 });

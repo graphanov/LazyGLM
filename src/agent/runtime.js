@@ -103,6 +103,11 @@ export async function runAgent(opts) {
       await appendFile(transcriptPath, JSON.stringify({ t: nowIso(), ...obj }) + "\n", "utf8");
     } catch {}
   };
+  const fireRunHook = (event, fields = {}) => engine.fire(event, fields, { signal: runSignal });
+  const fireStopHook = (fields) => {
+    if (runSignal?.aborted) return { blocks: [], injects: [], feedbacks: [], results: [] };
+    return fireRunHook("Stop", fields);
+  };
 
   const buildResult = () => ({
     sessionId,
@@ -128,7 +133,7 @@ export async function runAgent(opts) {
   try {
     checkAbort();
     // 1. SessionStart
-    const startRes = await engine.fire("SessionStart", {});
+    const startRes = await fireRunHook("SessionStart", {});
     const gi = gitInfo(cwd);
     const system = buildSystemPrompt({ cwd, git: gi, model: resolvedModel, injects: startRes.injects, extra: systemPromptExtra });
     ctx.setSystem(system);
@@ -136,7 +141,7 @@ export async function runAgent(opts) {
 
     checkAbort();
     // 2. UserPromptSubmit
-    const upsRes = await engine.fire("UserPromptSubmit", { prompt: task });
+    const upsRes = await fireRunHook("UserPromptSubmit", { prompt: task });
     let userContent = task;
     if (upsRes.injects.length) userContent = `${upsRes.injects.join("\n\n")}\n\n---\n\nTASK\n${task}`;
     ctx.push({ role: "user", content: userContent });
@@ -148,7 +153,7 @@ export async function runAgent(opts) {
       agentTurns = turn;
       const compacted = await ctx.maybeCompact({
         onCompact: async ({ compactionCount }) => {
-          await engine.fire("PostCompact", { compactionCount });
+          await fireRunHook("PostCompact", { compactionCount });
           await log({ type: "compact", compactionCount });
         },
       });
@@ -239,11 +244,17 @@ export async function runAgent(opts) {
           continue;
         }
 
-        const pre = await engine.fire("PreToolUse", {
-          tool_name: tc.name,
-          tool_input: tc.arguments,
-          tool_use_id: tc.id,
-        });
+        let pre;
+        try {
+          pre = await fireRunHook("PreToolUse", {
+            tool_name: tc.name,
+            tool_input: tc.arguments,
+            tool_use_id: tc.id,
+          });
+        } catch (err) {
+          if (isDeadlineError(err) || runSignal?.aborted) record.status = "timeout";
+          throw err;
+        }
 
         let resultStr;
         if (pre.blocks.length) {
@@ -283,12 +294,18 @@ export async function runAgent(opts) {
           resultStr = typeof result === "string" ? result : JSON.stringify(result);
         }
 
-        const post = await engine.fire("PostToolUse", {
-          tool_name: tc.name,
-          tool_input: tc.arguments,
-          tool_response: resultStr,
-          tool_use_id: tc.id,
-        });
+        let post;
+        try {
+          post = await fireRunHook("PostToolUse", {
+            tool_name: tc.name,
+            tool_input: tc.arguments,
+            tool_response: resultStr,
+            tool_use_id: tc.id,
+          });
+        } catch (err) {
+          if (isDeadlineError(err) || runSignal?.aborted) record.status = "timeout";
+          throw err;
+        }
         if (post.blocks.length) {
           record.status = "denied";
           resultStr += `\n\n[hook feedback — address this] ${post.blocks.join(" | ")}`;
@@ -332,12 +349,12 @@ export async function runAgent(opts) {
   }
 
   if (finished) {
-    await engine.fire("Stop", { response: finishSummary, finished: true, files_written: [...filesWritten] });
+    await fireStopHook({ response: finishSummary, finished: true, files_written: [...filesWritten] });
     await log({ type: "finish", summary: truncate(finishSummary, 1500), turn: agentTurns });
   } else {
     if (!finishReason) finishReason = agentTurns >= maxTurns ? "max_turns" : "error";
     const response = finishReason === "timeout" ? "(timeout)" : finishReason === "max_turns" ? "(max turns reached)" : `(${finishReason})`;
-    await engine.fire("Stop", { response, finished: false, files_written: [...filesWritten] });
+    await fireStopHook({ response, finished: false, files_written: [...filesWritten] });
     await log({ type: "stop", reason: finishReason, turn: agentTurns || maxTurns });
   }
 

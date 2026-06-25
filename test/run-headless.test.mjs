@@ -405,6 +405,46 @@ test("whole-run timeout interrupts a non-abort-aware tool handler", async () => 
   });
 });
 
+test("whole-run timeout interrupts a non-abort-aware PreToolUse hook", async () => {
+  await withTempCwd(async (cwd) => {
+    const fetchStub = installFetchSequence([toolResponse("read_file", { path: "missing.txt" })]);
+    const deadline = createDeadline(50, { message: "deadline fired" });
+    let hookSignal;
+    const started = Date.now();
+    try {
+      const res = await runAgent({
+        task: "trigger a slow pre hook",
+        cwd,
+        config: makeConfig(),
+        maxTurns: 2,
+        deadline,
+        plugins: [{
+          name: "slow-pre",
+          hooks: {
+            PreToolUse: async (_input, api) => {
+              hookSignal = api.signal;
+              await new Promise((resolve) => {
+                const timer = setTimeout(resolve, 1000);
+                timer.unref?.();
+              });
+            },
+          },
+        }],
+      });
+
+      assert.equal(res.finished, false);
+      assert.equal(res.finishReason, "timeout");
+      assert.match(res.errorMessage, /deadline fired/);
+      assert.ok(Date.now() - started < 500, "deadline should interrupt the awaited PreToolUse hook promptly");
+      assert.equal(hookSignal?.aborted, true);
+      assert.deepEqual(res.toolCalls, [{ name: "read_file", turn: 1, status: "timeout" }]);
+    } finally {
+      deadline.cancel();
+      fetchStub.restore();
+    }
+  });
+});
+
 test("JSON output preserves timed-out tool status", async () => {
   await withTempCwd(async (cwd) => {
     const originalGrep = TOOL_HANDLERS.grep;
