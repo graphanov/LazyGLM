@@ -25,7 +25,7 @@ export interface ProviderCatalogConfig {
 }
 
 export interface ModelCatalogEntry {
-  aliases?: Record<Provider, string>;
+  aliases?: Partial<Record<Provider, string>>;
   context?: number;
   notes?: string;
 }
@@ -43,7 +43,7 @@ export interface ModelCatalog {
   };
   models?: Record<string, ModelCatalogEntry>;
   roles?: Record<RoleName, RoleModelConfig>;
-  providers?: Record<Provider, ProviderCatalogConfig>;
+  providers?: Partial<Record<Provider, ProviderCatalogConfig>>;
 }
 
 export interface ModelRouteOptions {
