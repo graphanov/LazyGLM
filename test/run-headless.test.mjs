@@ -405,6 +405,32 @@ test("whole-run timeout interrupts a non-abort-aware tool handler", async () => 
   });
 });
 
+test("JSON output preserves timed-out tool status", async () => {
+  await withTempCwd(async (cwd) => {
+    const originalGrep = TOOL_HANDLERS.grep;
+    try {
+      TOOL_HANDLERS.grep = async () => new Promise((resolve) => setTimeout(() => resolve("late grep result"), 1000));
+      const { code, stdout } = await captureMain([
+        "run",
+        "search slowly",
+        "--cwd",
+        cwd,
+        "--output-format",
+        "json",
+        "--timeout",
+        "0.05",
+      ], { fetchResponses: [toolResponse("grep", { pattern: "needle", path: "." })] });
+
+      assert.equal(code, 2);
+      const json = parseSingleJson(stdout);
+      assert.equal(json.finishReason, "timeout");
+      assert.deepEqual(json.toolCalls, [{ name: "grep", turn: 1, status: "timeout" }]);
+    } finally {
+      TOOL_HANDLERS.grep = originalGrep;
+    }
+  });
+});
+
 test("text output is ANSI-free when stdout is not a TTY", async () => {
   await withTempCwd(async (cwd) => {
     const { code, stdout } = await captureMain([

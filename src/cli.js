@@ -430,7 +430,7 @@ function sanitizeToolCalls(toolCalls) {
   return (Array.isArray(toolCalls) ? toolCalls : []).map((tc) => ({
     name: String(tc.name || "unknown"),
     turn: Number(tc.turn || 0),
-    status: ["ok", "denied", "error", "finish"].includes(tc.status) ? tc.status : "ok",
+    status: ["ok", "denied", "error", "finish", "timeout"].includes(tc.status) ? tc.status : "ok",
   }));
 }
 
