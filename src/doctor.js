@@ -113,7 +113,7 @@ export async function doctor({ cwd } = {}) {
   // MCP server declarations (preflight: validated, NOT connected).
   // Tools/calls are not counted here — this only reports declaration health.
   try {
-    const userCfg = await loadUserConfig();
+    const userCfg = await loadUserConfig({ force: true, throwOnError: true });
     const mcp = parseMcpServers(userCfg);
     const summary = mcpServersSummary(mcp);
     if (mcp.errors.length) {

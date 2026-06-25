@@ -64,6 +64,17 @@ test("doctor returns an mcp check when no MCP servers are declared", async () =>
   });
 });
 
+test("doctor warns when user config JSON is malformed before declaring MCP healthy", async () => {
+  await withIsolatedHome(async (home) => {
+    await writeFile(join(home, "config.json"), "{ bad json", "utf8");
+    const res = await doctor({ cwd: tmpdir() });
+    const mcp = findCheck(res, "mcp");
+    assert.equal(mcp.status, "warn");
+    assert.match(mcp.detail, /could not read MCP server declarations/);
+    assert.doesNotMatch(mcp.detail, /no MCP servers declared/);
+  });
+});
+
 test("doctor reports a valid stdio MCP declaration as ok", async () => {
   await withIsolatedHome(async (home) => {
     await writeUserConfig(home, {
