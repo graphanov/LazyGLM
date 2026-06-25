@@ -119,6 +119,10 @@ export async function runUltrawork({
       return { verified: false, iterations: i, verdict: { pass: false, reason: "tool denied by policy hook" }, history, finishReason: "tool_denied" };
     }
 
+    if (res.finishReason === "error") {
+      return { verified: false, iterations: i, verdict: { pass: false, reason: res.errorMessage || "runtime error" }, history, finishReason: "error", errorMessage: res.errorMessage || "runtime error" };
+    }
+
     if (!res.finished) {
       currentTask = `[ULTRAWORK iteration ${i + 1}] The previous run stopped without finishing (${res.finishReason}). Continue the task. Completion promise: ${promise}`;
       continue;
