@@ -188,6 +188,35 @@ test("malformed config does not block force install or uninstall", async () => {
   }
 });
 
+test("install recognizes pre-existing CRLF .lazyglm/ gitignore entry", async () => {
+  const d = await mkdtemp(join(tmpdir(), "lazyglm-crlf-preexist-"));
+  try {
+    await writeFile(join(d, ".gitignore"), "node_modules/\r\n.lazyglm/\r\n", "utf8");
+    const res = await install({ cwd: d });
+    assert.ok(!res.created.some((c) => c.includes(".gitignore")), "CRLF entry must not be duplicated or claimed");
+    const gi = await readFile(join(d, ".gitignore"), "utf8");
+    assert.equal((gi.match(/\.lazyglm\//g) || []).length, 1, "CRLF .lazyglm/ entry should appear exactly once");
+  } finally {
+    await rm(d, { recursive: true, force: true });
+  }
+});
+
+test("uninstall removes owned CRLF .lazyglm/ gitignore entry", async () => {
+  const d = await mkdtemp(join(tmpdir(), "lazyglm-crlf-owned-"));
+  try {
+    await install({ cwd: d });
+    await writeFile(join(d, ".gitignore"), "node_modules/\r\n.lazyglm/\r\ndist/\r\n", "utf8");
+    const res = await uninstall({ cwd: d });
+    const gi = await readFile(join(d, ".gitignore"), "utf8");
+    assert.ok(!gi.includes(".lazyglm/"), "owned CRLF .lazyglm/ entry must be removed");
+    assert.ok(gi.includes("node_modules/"), "other entries must survive");
+    assert.ok(gi.includes("dist/"), "other entries must survive");
+    assert.ok(res.removed.includes(".gitignore (-.lazyglm/)"), "removed should list the owned CRLF gitignore edit");
+  } finally {
+    await rm(d, { recursive: true, force: true });
+  }
+});
+
 test("uninstall preserves pre-existing .lazyglm/ gitignore entry and reports it", async () => {
   const d = await mkdtemp(join(tmpdir(), "lazyglm-uninstall-preexist-"));
   try {

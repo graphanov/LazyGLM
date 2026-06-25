@@ -33,6 +33,14 @@ this repo should follow the rules below.
 Add project-specific guidance below as the codebase grows.
 `;
 
+function isGitignoreEntry(line, entry) {
+  return line.replace(/\r$/, "") === entry;
+}
+
+function gitignoreHasEntry(text, entry) {
+  return text.split("\n").some((line) => isGitignoreEntry(line, entry));
+}
+
 export async function install({ cwd, force = false } = {}) {
   const dir = cwd || process.cwd();
   const created = [];
@@ -75,7 +83,7 @@ export async function install({ cwd, force = false } = {}) {
   const entry = ".lazyglm/";
   let gi = "";
   if (existsSync(giPath)) gi = await readFile(giPath, "utf8");
-  const alreadyIgnored = gi.split("\n").includes(entry);
+  const alreadyIgnored = gitignoreHasEntry(gi, entry);
   let gitignoreOwnedByLazyglm = existingConfig.gitignoreOwnedByLazyglm === true;
   if (!alreadyIgnored) {
     await writeFile(giPath, (gi ? gi.replace(/\n?$/, "\n") : "") + entry + "\n", "utf8");
@@ -142,8 +150,9 @@ export async function uninstall({ cwd } = {}) {
   if (existsSync(giPath)) {
     const gi = await readFile(giPath, "utf8");
     const lines = gi.split("\n");
-    if (ownsGitignoreEntry && lines.includes(entry)) {
-      const filtered = lines.filter((l) => l !== entry);
+    const hasEntry = lines.some((line) => isGitignoreEntry(line, entry));
+    if (ownsGitignoreEntry && hasEntry) {
+      const filtered = lines.filter((l) => !isGitignoreEntry(l, entry));
       const result = filtered.join("\n");
       if (result.trim() === "") {
         await unlink(giPath);
@@ -151,7 +160,7 @@ export async function uninstall({ cwd } = {}) {
         await writeFile(giPath, result, "utf8");
       }
       removed.push(".gitignore (-.lazyglm/)");
-    } else if (lines.includes(entry)) {
+    } else if (hasEntry) {
       preserved.push(".gitignore (user-owned .lazyglm/ entry preserved)");
     }
   }
