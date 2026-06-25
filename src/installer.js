@@ -47,16 +47,18 @@ export async function install({ cwd, force = false } = {}) {
 
   // per-project config (model from catalog default)
   const configPath = join(lazyDir, "config.json");
+  const previousConfig = existsSync(configPath) ? await readJson(configPath).catch(() => ({})) : {};
   if (force || !existsSync(configPath)) {
     await writeJson(configPath, {
       installedAt: new Date().toISOString(),
       version: await readVersion(),
       provider: { base_url: "https://api.z.ai/api/coding/paas/v4" },
       model: "glm-5.2",
+      ...(previousConfig.gitignoreOwnedByLazyglm === true ? { gitignoreOwnedByLazyglm: true } : {}),
     });
     created.push(".lazyglm/config.json");
   }
-  const existingConfig = existsSync(configPath) ? await readJson(configPath).catch(() => ({})) : {};
+  const existingConfig = existsSync(configPath) ? await readJson(configPath).catch(() => ({})) : previousConfig;
 
   // AGENTS.md template
   const agentsPath = join(dir, "AGENTS.md");
