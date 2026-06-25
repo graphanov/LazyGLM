@@ -113,3 +113,55 @@ test("uninstall removes only the .lazyglm/ gitignore line, preserves other entri
     await rm(d, { recursive: true, force: true });
   }
 });
+
+// --- Codex P2 review thread on PR #36: preserve pre-existing .gitignore ignores ---
+// If a project already had `.lazyglm/` in .gitignore before install ran, install
+// must not treat that entry as its own; uninstall must leave it in place so
+// install/uninstall is a safe round trip for user-owned ignore configuration.
+
+test("install does not claim ownership of pre-existing .lazyglm/ gitignore entry", async () => {
+  const d = await mkdtemp(join(tmpdir(), "lazyglm-preexist-gitignore-"));
+  try {
+    // project already ignored .lazyglm/ before lazyglm was installed
+    await writeFile(join(d, ".gitignore"), "node_modules/\n.lazyglm/\n", "utf8");
+    const res = await install({ cwd: d });
+    // install should not report adding the entry
+    assert.ok(
+      !res.created.some((c) => c.includes(".gitignore")),
+      "install must not report adding a pre-existing gitignore entry",
+    );
+    // config must record that lazyglm does NOT own the entry
+    const cfg = JSON.parse(await readFile(join(d, ".lazyglm", "config.json"), "utf8"));
+    assert.equal(cfg.gitignoreOwnedByLazyglm, false, "config must mark entry as not owned");
+  } finally {
+    await rm(d, { recursive: true, force: true });
+  }
+});
+
+test("uninstall preserves pre-existing .lazyglm/ gitignore entry and reports it", async () => {
+  const d = await mkdtemp(join(tmpdir(), "lazyglm-uninstall-preexist-"));
+  try {
+    // project already ignored .lazyglm/ before install
+    await writeFile(join(d, ".gitignore"), "node_modules/\n.lazyglm/\ndist/\n", "utf8");
+    await install({ cwd: d });
+
+    const res = await uninstall({ cwd: d });
+
+    assert.ok(existsSync(join(d, ".gitignore")), ".gitignore must survive");
+    const gi = await readFile(join(d, ".gitignore"), "utf8");
+    const lines = gi.split("\n");
+    assert.ok(lines.includes(".lazyglm/"), "user-owned .lazyglm/ entry must be preserved");
+    assert.ok(lines.includes("node_modules/"), "node_modules/ must survive");
+    assert.ok(lines.includes("dist/"), "dist/ must survive");
+    assert.ok(
+      !res.removed.includes(".gitignore (-.lazyglm/)"),
+      "removed must NOT list the gitignore edit for user-owned entry",
+    );
+    assert.ok(
+      res.preserved.some((c) => c.includes("user-owned")),
+      "preserved must report the user-owned .lazyglm/ entry",
+    );
+  } finally {
+    await rm(d, { recursive: true, force: true });
+  }
+});
