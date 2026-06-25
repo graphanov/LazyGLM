@@ -21,7 +21,7 @@ export type ReasoningEffort = "low" | "medium" | "high" | "max" | (string & {});
 export interface ProviderCatalogConfig {
   base_url?: string;
   requires_key?: boolean;
-  env_key?: string;
+  env_key?: string | null;
 }
 
 export interface ModelCatalogEntry {
