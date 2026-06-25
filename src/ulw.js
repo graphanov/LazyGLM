@@ -78,6 +78,7 @@ export async function runUltrawork({
   onEvent = () => {},
   permissionMode = "auto",
   failOnToolBlock = false,
+  plugins,
   deadline,
   signal,
 }) {
@@ -98,7 +99,7 @@ export async function runUltrawork({
       model,
       role: role || "ultrabrain",
       config,
-      plugins: loadPlugins(),
+      plugins: plugins || loadPlugins(),
       maxTurns,
       reasoningBudget,
       systemPromptExtra: `ULTRAWORK iteration ${i}/${maxIterations}. Completion promise: "${promise}". Do not call finish until you have concrete evidence (passing build/test output, existing files).`,

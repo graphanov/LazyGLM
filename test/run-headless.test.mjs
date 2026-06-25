@@ -453,6 +453,7 @@ test("ultrawork failOnToolBlock fails closed with tool_denied", async () => {
       assert.equal(res.verified, false);
       assert.equal(res.finishReason, "tool_denied");
       assert.equal(res.iterations, 1);
+      assert.deepEqual(res.history[0].toolCalls, [{ name: "run_shell", turn: 1, status: "denied" }]);
     } finally {
       fetchStub.restore();
     }
