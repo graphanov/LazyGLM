@@ -119,6 +119,10 @@ export async function main(argv) {
       const res = await uninstall({ cwd: flags.cwd ? resolve(flags.cwd) : process.cwd() });
       console.log(`Removed from ${res.cwd}:`);
       for (const r of res.removed) console.log(`  - ${r}`);
+      if (res.preserved?.length) {
+        console.log("Preserved (user-owned/customized):");
+        for (const p of res.preserved) console.log(`  ! ${p}`);
+      }
       return 0;
     }
     case "doctor": {
