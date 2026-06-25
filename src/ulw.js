@@ -77,6 +77,7 @@ export async function runUltrawork({
   reasoningBudget = 0,
   onEvent = () => {},
   permissionMode = "auto",
+  failOnToolBlock = false,
   deadline,
   signal,
 }) {
@@ -102,6 +103,7 @@ export async function runUltrawork({
       reasoningBudget,
       systemPromptExtra: `ULTRAWORK iteration ${i}/${maxIterations}. Completion promise: "${promise}". Do not call finish until you have concrete evidence (passing build/test output, existing files).`,
       permissionMode,
+      failOnToolBlock,
       deadline,
       signal,
       onEvent,
@@ -110,6 +112,10 @@ export async function runUltrawork({
 
     if (res.finishReason === "timeout") {
       return { verified: false, iterations: i, verdict: { pass: false, reason: res.errorMessage || "timeout" }, history, finishReason: "timeout", errorMessage: res.errorMessage || "timeout" };
+    }
+
+    if (res.finishReason === "tool_denied") {
+      return { verified: false, iterations: i, verdict: { pass: false, reason: "tool denied by policy hook" }, history, finishReason: "tool_denied" };
     }
 
     if (!res.finished) {

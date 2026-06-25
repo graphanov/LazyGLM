@@ -248,6 +248,7 @@ export async function main(argv) {
             maxTurns: maxTurns.value,
             reasoningBudget: reasoningBudget.value,
             permissionMode,
+            failOnToolBlock: jsonMode,
             deadline,
             onEvent: printEvent,
           });

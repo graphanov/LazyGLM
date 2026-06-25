@@ -435,3 +435,33 @@ test("permissionMode yolo reaches hooks and can bypass a guard", async () => {
     }
   });
 });
+
+test("ultrawork failOnToolBlock fails closed with tool_denied", async () => {
+  await withTempCwd(async (cwd) => {
+    const fetchStub = installFetchSequence([toolResponse("run_shell", { command: "echo should-not-run" })]);
+    try {
+      const { runUltrawork } = await import("../src/ulw.js");
+      const res = await runUltrawork({
+        task: "run a denied command",
+        cwd,
+        config: makeConfig(),
+        maxTurns: 2,
+        maxIterations: 3,
+        failOnToolBlock: true,
+        plugins: [{ name: "deny", hooks: { PreToolUse: async () => ({ decision: "block", reason: "not allowed" }) } }],
+      });
+      assert.equal(res.verified, false);
+      assert.equal(res.finishReason, "tool_denied");
+      assert.equal(res.iterations, 1);
+    } finally {
+      fetchStub.restore();
+    }
+  });
+});
+
+test("whole-run deadline timer keeps Node alive when the operation does not", async () => {
+  const deadlineModuleUrl = new URL("../src/agent/deadline.js", import.meta.url).href;
+  const script = `import { createDeadline } from ${JSON.stringify(deadlineModuleUrl)};\nconst d = createDeadline(50, { message: "fired" });\nd.signal.addEventListener("abort", () => { console.log(d.signal.reason?.message || "aborted"); });\n// No other handles — the only ref'ed timer must keep the process alive.`;
+  const { stdout } = await execFileAsync(process.execPath, ["--input-type=module", "-e", script], { timeout: 2000 });
+  assert.equal(stdout.trim(), "fired");
+});

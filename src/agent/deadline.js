@@ -83,7 +83,6 @@ export function createDeadline(timeoutMs, { signal, message } = {}) {
   const timer = setTimeout(() => {
     controller.abort(new DeadlineExceededError(message || `LazyGLM run timed out after ${formatDuration(ms)}.`));
   }, ms);
-  timer.unref?.();
   const composed = composeAbortSignals([signal, controller.signal]);
 
   return {
