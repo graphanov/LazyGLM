@@ -232,16 +232,18 @@ export function replayTelemetry(events) {
       const ms = Date.parse(ev.t);
       if (!Number.isNaN(ms)) sessionStartMs = ms;
     } else if (ev.type === "usage") {
-      // Persisted usage records carry a cumulative snapshot (see appendEvent
-      // call in handleLine), so the last one wins and reflects the full session.
-      if (ev.cumulative && typeof ev.cumulative === "object") {
-        cumulative.prompt = ev.cumulative.prompt || 0;
-        cumulative.completion = ev.cumulative.completion || 0;
-        cumulative.reasoning = ev.cumulative.reasoning || 0;
-      }
+      // Sum per-turn usage fields to rebuild the cumulative total. This matches
+      // the live REPL's own accounting (see the handleLine usage append) and is
+      // robust against non-monotonic cumulative snapshots: sessions that were
+      // resumed before the telemetry-restore patch persisted cumulative
+      // snapshots that restarted from zero, so last-one-wins would under-report
+      // the true session total for those legacy histories.
       const u = ev.usage;
       if (u && typeof u === "object") {
         const reasoning = u.completion_tokens_details?.reasoning_tokens || u.reasoning_tokens || 0;
+        cumulative.prompt += u.prompt_tokens || 0;
+        cumulative.completion += u.completion_tokens || 0;
+        cumulative.reasoning += reasoning;
         lastTurn = { prompt: u.prompt_tokens || 0, completion: u.completion_tokens || 0, reasoning };
       }
     }

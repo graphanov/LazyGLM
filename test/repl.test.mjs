@@ -298,6 +298,30 @@ test("replayTelemetry restores cumulative status counters for resumed sessions",
   assert.equal(telemetry.sessionStartMs, Date.parse(startedAt));
 });
 
+test("replayTelemetry sums per-turn usage for non-monotonic legacy cumulative snapshots", () => {
+  // Legacy sessions resumed before the telemetry-restore patch persisted
+  // cumulative snapshots that restarted from zero on resume. Last-one-wins
+  // would under-report; the replay must sum per-turn usage fields instead.
+  const events = [
+    { type: "session", t: "2026-01-01T00:00:00.000Z", id: "sess_legacy" },
+    {
+      type: "usage",
+      usage: { prompt_tokens: 100, completion_tokens: 200, reasoning_tokens: 30 },
+      cumulative: { prompt: 100, completion: 200, reasoning: 30 },
+    },
+    {
+      type: "usage",
+      usage: { prompt_tokens: 50, completion_tokens: 60, reasoning_tokens: 10 },
+      // Legacy snapshot restarted from zero — non-monotonic, smaller than prior.
+      cumulative: { prompt: 50, completion: 60, reasoning: 10 },
+    },
+  ];
+  const telemetry = replayTelemetry(events);
+  // Sum of per-turn fields: 100+50=150, 200+60=260, 30+10=40 — NOT last-snapshot (50/60/10).
+  assert.deepEqual(telemetry.cumulative, { prompt: 150, completion: 260, reasoning: 40 });
+  assert.deepEqual(telemetry.lastTurn, { prompt: 50, completion: 60, reasoning: 10 });
+});
+
 test("assistant append→load round-trip preserves reasoning_content (isolated LAZYGLM_HOME)", async () => {
   await freshHome();
   const s = await createSession({ model: "glm-5.2", provider: "zai" });
