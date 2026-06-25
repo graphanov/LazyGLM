@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { resolveProviderConfig, listModels } from "./agent/provider.js";
 import { loadPlugins } from "./plugins/index.js";
 import { loadSkills, listSkillNames } from "./skills/index.js";
+import { loadUserConfig } from "./config.js";
+import { parseMcpServers, mcpServersSummary } from "./mcp/config.js";
 import { readJson } from "./util.js";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
@@ -106,6 +108,23 @@ export async function doctor({ cwd } = {}) {
     }
     if (unresolved.length) warn("routing", `roles pointing to unknown models: ${unresolved.join(", ")}`);
     else ok("routing", `all ${Object.keys(catalog.roles).length} roles resolve to catalog models`);
+  }
+
+  // MCP server declarations (preflight: validated, NOT connected).
+  // Tools/calls are not counted here — this only reports declaration health.
+  try {
+    const userCfg = await loadUserConfig();
+    const mcp = parseMcpServers(userCfg);
+    const summary = mcpServersSummary(mcp);
+    if (mcp.errors.length) {
+      warn("mcp", `${summary} — declarations validated, not connected`);
+    } else if (mcp.count) {
+      ok("mcp", `${summary} — declarations validated, not connected`);
+    } else {
+      ok("mcp", "no MCP servers declared");
+    }
+  } catch {
+    warn("mcp", "could not read MCP server declarations");
   }
 
   return {
