@@ -9,7 +9,7 @@ import { TOOL_SPECS, TOOL_HANDLERS } from "./tools.js";
 import { Context, assistantMessageFrom } from "./context.js";
 import { HookEngine } from "../hooks/engine.js";
 import { gitInfo, truncate, ensureDir, nowIso } from "../util.js";
-import { abortReason, isDeadlineError, throwIfAborted } from "./deadline.js";
+import { abortReason, composeAbortSignals, isDeadlineError, throwIfAborted } from "./deadline.js";
 
 const BASE_SYSTEM_PROMPT = `You are LazyGLM, an autonomous software engineering agent driven by a GLM model. You operate inside a real project directory on the user's machine via tools.
 
@@ -60,7 +60,8 @@ export async function runAgent(opts) {
     deadline,
     signal,
   } = opts;
-  const runSignal = deadline?.signal || signal;
+  const composedRunSignal = composeAbortSignals([deadline?.signal, signal]);
+  const runSignal = composedRunSignal.signal;
   const checkAbort = () => {
     deadline?.throwIfExpired?.();
     throwIfAborted(runSignal);
@@ -337,6 +338,7 @@ export async function runAgent(opts) {
     await log({ type: "stop", reason: finishReason, turn: agentTurns || maxTurns });
   }
 
+  composedRunSignal.cancel();
   return buildResult();
 }
 

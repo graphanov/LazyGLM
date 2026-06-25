@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { main } from "../src/cli.js";
+import { createDeadline } from "../src/agent/deadline.js";
 import { runAgent } from "../src/agent/runtime.js";
 
 const ANSI_RE = /\x1b\[/;
@@ -324,6 +325,42 @@ test("retry backoff sleep remains referenced while awaited", async () => {
   const { stdout } = await execFileAsync(process.execPath, ["--input-type=module", "-e", script], { timeout: 1000 });
 
   assert.equal(stdout.trim(), "slept");
+});
+
+test("runAgent composes caller abort signal with deadline", async () => {
+  await withTempCwd(async (cwd) => {
+    const controller = new AbortController();
+    const deadline = createDeadline(1000, { message: "deadline fired" });
+    let providerSignal;
+    const fetchStub = installFetchSequence([(_url, init) => {
+      providerSignal = init.signal;
+      return new Promise((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+      });
+    }]);
+    const started = Date.now();
+    try {
+      setTimeout(() => controller.abort(new Error("caller canceled")), 30);
+      const res = await runAgent({
+        task: "cancel before deadline",
+        cwd,
+        config: makeConfig(),
+        maxTurns: 2,
+        deadline,
+        signal: controller.signal,
+      });
+
+      assert.equal(res.finished, false);
+      assert.equal(res.finishReason, "timeout");
+      assert.match(res.errorMessage, /caller canceled/);
+      assert.ok(Date.now() - started < 500, "caller abort should win before the deadline");
+      assert.equal(fetchStub.calls.length, 1);
+      assert.equal(providerSignal?.aborted, true);
+    } finally {
+      deadline.cancel();
+      fetchStub.restore();
+    }
+  });
 });
 
 test("text output is ANSI-free when stdout is not a TTY", async () => {
