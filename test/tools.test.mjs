@@ -52,6 +52,15 @@ test("grep finds a pattern", async () => {
   assert.match(res, /g\.js:\d+:function hello/);
 });
 
+test("grep honors a pre-aborted runtime signal", async () => {
+  const controller = new AbortController();
+  controller.abort(new Error("grep canceled"));
+  await assert.rejects(
+    () => TOOL_HANDLERS.grep({ pattern: "hello", path: "." }, { cwd, runtime: { signal: controller.signal } }),
+    /grep canceled/,
+  );
+});
+
 test("run_shell runs a command and captures output", async () => {
   const res = await TOOL_HANDLERS.run_shell({ command: "echo hello-shell" }, { cwd });
   assert.match(res, /hello-shell/);

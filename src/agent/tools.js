@@ -6,7 +6,7 @@ import { join, relative, isAbsolute, resolve } from "node:path";
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import { readLines, listDirEntries, resolvePath, ensureDir, truncate } from "../util.js";
-import { abortReason, boundedTimeoutMs, isDeadlineError } from "./deadline.js";
+import { abortReason, boundedTimeoutMs, isDeadlineError, throwIfAborted } from "./deadline.js";
 
 const execP = promisify(exec);
 
@@ -189,22 +189,29 @@ export const TOOL_HANDLERS = {
 
   async grep({ pattern, path, glob }, ctx) {
     const root = resolvePath(path || ".", ctx.cwd);
+    const deadline = ctx.runtime?.deadline;
+    deadline?.throwIfExpired?.();
+    const signal = ctx.runtime?.signal || deadline?.signal;
+    throwIfAborted(signal);
     // prefer ripgrep for speed; fall back to JS walk
     try {
       const args = ["-n", "-H"];
       if (glob) args.push("-g", glob);
       args.push("--", pattern, root);
-      const { stdout } = await execP(`rg ${args.map(shellQuote).join(" ")}`, {
-        maxBuffer: 4 * 1024 * 1024,
-      });
+      const execOptions = { maxBuffer: 4 * 1024 * 1024 };
+      if (signal) execOptions.signal = signal;
+      const remaining = deadline?.remainingMs?.();
+      if (Number.isFinite(remaining)) execOptions.timeout = Math.max(1, remaining);
+      const { stdout } = await execP(`rg ${args.map(shellQuote).join(" ")}`, execOptions);
       return truncate(stdout || "(no matches)", 8000);
     } catch (err) {
+      if (isDeadlineError(err) || signal?.aborted) throw abortReason(signal, err);
       if (err.stdout !== undefined) {
         // rg returns exit 1 on no matches — that's fine
         if (err.code === 1 || err.code === 2) return truncate(err.stdout || "(no matches)", 8000);
       }
     }
-    return jsGrep(pattern, root, glob);
+    return jsGrep(pattern, root, glob, signal, deadline);
   },
 
   async run_shell({ command, timeout }, ctx) {
@@ -238,11 +245,16 @@ function shellQuote(s) {
   return `'${String(s).replace(/'/g, "'\\''")}'`;
 }
 
-async function jsGrep(pattern, root, glob) {
+async function jsGrep(pattern, root, glob, signal, deadline) {
   const re = new RegExp(pattern);
   const results = [];
   const seen = new Set();
+  const checkAbort = () => {
+    deadline?.throwIfExpired?.();
+    throwIfAborted(signal);
+  };
   async function walk(dir) {
+    checkAbort();
     let entries;
     try {
       entries = await readdir(dir, { withFileTypes: true });
@@ -250,6 +262,7 @@ async function jsGrep(pattern, root, glob) {
       return;
     }
     for (const e of entries) {
+      checkAbort();
       if (e.name.startsWith(".git") || e.name === "node_modules") continue;
       const full = join(dir, e.name);
       if (e.isDirectory()) {

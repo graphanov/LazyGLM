@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import { main } from "../src/cli.js";
 import { createDeadline } from "../src/agent/deadline.js";
 import { runAgent } from "../src/agent/runtime.js";
+import { TOOL_HANDLERS } from "../src/agent/tools.js";
 
 const ANSI_RE = /\x1b\[/;
 const execFileAsync = promisify(execFile);
@@ -370,6 +371,35 @@ test("runAgent composes caller abort signal with deadline", async () => {
       assert.equal(providerSignal?.aborted, true);
     } finally {
       deadline.cancel();
+      fetchStub.restore();
+    }
+  });
+});
+
+test("whole-run timeout interrupts a non-abort-aware tool handler", async () => {
+  await withTempCwd(async (cwd) => {
+    const originalGrep = TOOL_HANDLERS.grep;
+    const fetchStub = installFetchSequence([toolResponse("grep", { pattern: "needle", path: "." })]);
+    const deadline = createDeadline(50, { message: "deadline fired" });
+    const started = Date.now();
+    try {
+      TOOL_HANDLERS.grep = async () => new Promise((resolve) => setTimeout(() => resolve("late grep result"), 1000));
+      const res = await runAgent({
+        task: "search slowly",
+        cwd,
+        config: makeConfig(),
+        maxTurns: 2,
+        deadline,
+      });
+
+      assert.equal(res.finished, false);
+      assert.equal(res.finishReason, "timeout");
+      assert.match(res.errorMessage, /deadline fired/);
+      assert.ok(Date.now() - started < 500, "deadline should interrupt the awaited tool handler promptly");
+      assert.deepEqual(res.toolCalls, [{ name: "grep", turn: 1, status: "timeout" }]);
+    } finally {
+      deadline.cancel();
+      TOOL_HANDLERS.grep = originalGrep;
       fetchStub.restore();
     }
   });

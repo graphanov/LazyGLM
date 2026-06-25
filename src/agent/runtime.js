@@ -9,7 +9,7 @@ import { TOOL_SPECS, TOOL_HANDLERS } from "./tools.js";
 import { Context, assistantMessageFrom } from "./context.js";
 import { HookEngine } from "../hooks/engine.js";
 import { gitInfo, truncate, ensureDir, nowIso } from "../util.js";
-import { abortReason, composeAbortSignals, isDeadlineError, throwIfAborted } from "./deadline.js";
+import { abortReason, composeAbortSignals, isDeadlineError, throwIfAborted, withAbort } from "./deadline.js";
 
 const BASE_SYSTEM_PROMPT = `You are LazyGLM, an autonomous software engineering agent driven by a GLM model. You operate inside a real project directory on the user's machine via tools.
 
@@ -262,9 +262,12 @@ export async function runAgent(opts) {
         let result;
         let handlerThrew = false;
         try {
-          result = await handler(tc.arguments, { cwd, runtime: { engine, ctx, log, deadline, signal: runSignal } });
+          result = await withAbort(handler(tc.arguments, { cwd, runtime: { engine, ctx, log, deadline, signal: runSignal } }), runSignal);
         } catch (err) {
-          if (isDeadlineError(err) || runSignal?.aborted) throw abortReason(runSignal, err);
+          if (isDeadlineError(err) || runSignal?.aborted) {
+            record.status = "timeout";
+            throw abortReason(runSignal, err);
+          }
           handlerThrew = true;
           result = `Error executing ${tc.name}: ${err?.message || err}`;
         }
