@@ -41,6 +41,16 @@ function gitignoreHasEntry(text, entry) {
   return text.split("\n").some((line) => isGitignoreEntry(line, entry));
 }
 
+async function configWithDefaults(config = {}) {
+  return {
+    installedAt: config.installedAt || new Date().toISOString(),
+    version: config.version || await readVersion(),
+    provider: config.provider || { base_url: "https://api.z.ai/api/coding/paas/v4" },
+    model: config.model || "glm-5.2",
+    ...config,
+  };
+}
+
 export async function install({ cwd, force = false } = {}) {
   const dir = cwd || process.cwd();
   const created = [];
@@ -57,22 +67,22 @@ export async function install({ cwd, force = false } = {}) {
   const configPath = join(lazyDir, "config.json");
   const previousConfig = existsSync(configPath) ? await readJson(configPath, {}) : {};
   if (force || !existsSync(configPath)) {
-    await writeJson(configPath, {
-      installedAt: new Date().toISOString(),
-      version: await readVersion(),
-      provider: { base_url: "https://api.z.ai/api/coding/paas/v4" },
-      model: "glm-5.2",
+    await writeJson(configPath, await configWithDefaults({
       ...(previousConfig.gitignoreOwnedByLazyglm === true ? { gitignoreOwnedByLazyglm: true } : {}),
-    });
+      ...(previousConfig.agentsOwnedByLazyglm === true ? { agentsOwnedByLazyglm: true } : {}),
+    }));
     created.push(".lazyglm/config.json");
   }
   const existingConfig = existsSync(configPath) ? await readJson(configPath, {}) : previousConfig;
 
-  // AGENTS.md template
+  // AGENTS.md template. Track whether install wrote it so uninstall never
+  // deletes a user-owned file that merely happens to equal the default template.
   const agentsPath = join(dir, "AGENTS.md");
+  let agentsOwnedByLazyglm = existingConfig.agentsOwnedByLazyglm === true;
   if (force || !existsSync(agentsPath)) {
     await writeFile(agentsPath, AGENTS_TEMPLATE, "utf8");
     created.push("AGENTS.md");
+    agentsOwnedByLazyglm = true;
   }
 
   // gitignore for runtime state. Track whether WE added the `.lazyglm/` entry
@@ -91,15 +101,18 @@ export async function install({ cwd, force = false } = {}) {
     gitignoreOwnedByLazyglm = true;
   }
 
-  // Persist ownership marker into config so uninstall knows whether it owns the
-  // `.lazyglm/` gitignore line. Preserve a previous true marker across repeat
-  // installs; once LazyGLM owns the entry, a later idempotent install must not
-  // demote it to user-owned merely because the line is already present.
+  // Persist ownership markers into config so uninstall knows whether it owns
+  // files/entries. Preserve previous true markers across repeat installs; once
+  // LazyGLM owns an artifact, a later idempotent install must not demote it to
+  // user-owned merely because the file/line is already present. Always write a
+  // full config shape so malformed existing config is repaired instead of
+  // becoming a partial ownership-only file.
   if (existsSync(configPath)) {
-    await writeJson(configPath, {
+    await writeJson(configPath, await configWithDefaults({
       ...existingConfig,
+      agentsOwnedByLazyglm,
       gitignoreOwnedByLazyglm,
-    });
+    }));
   }
 
   return { cwd: dir, created, git: gitInfo(dir), isProject: looksLikeProject(dir) };
@@ -111,14 +124,16 @@ export async function uninstall({ cwd } = {}) {
   const removed = [];
   const preserved = [];
 
-  // Capture gitignore ownership BEFORE removing .lazyglm/, since config.json
-  // lives inside that directory. install() records whether it added the
-  // `.lazyglm/` gitignore entry; if the marker is absent (older install or the
-  // entry pre-existed), treat the entry as user-owned and preserve it.
+  // Capture ownership BEFORE removing .lazyglm/, since config.json lives inside
+  // that directory. install() records which artifacts it created; if a marker is
+  // absent (older install, malformed config, or pre-existing user file), fail
+  // closed and preserve user-facing files/entries.
+  let ownsAgentsFile = false;
   let ownsGitignoreEntry = false;
   const configPath = join(lazyDir, "config.json");
   if (existsSync(configPath)) {
     const cfg = await readJson(configPath, {});
+    ownsAgentsFile = cfg.agentsOwnedByLazyglm === true;
     ownsGitignoreEntry = cfg.gitignoreOwnedByLazyglm === true;
   }
 
@@ -133,7 +148,7 @@ export async function uninstall({ cwd } = {}) {
   const agentsPath = join(dir, "AGENTS.md");
   if (existsSync(agentsPath)) {
     const content = await readFile(agentsPath, "utf8");
-    if (content === AGENTS_TEMPLATE) {
+    if (ownsAgentsFile && content === AGENTS_TEMPLATE) {
       await unlink(agentsPath);
       removed.push("AGENTS.md");
     } else {

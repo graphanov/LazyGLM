@@ -91,6 +91,29 @@ test("uninstall preserves customized AGENTS.md and reports it", async () => {
   }
 });
 
+test("uninstall preserves pre-existing template AGENTS.md and reports it", async () => {
+  const seed = await mkdtemp(join(tmpdir(), "lazyglm-agents-template-seed-"));
+  const d = await mkdtemp(join(tmpdir(), "lazyglm-preexisting-agents-template-"));
+  try {
+    await install({ cwd: seed });
+    const template = await readFile(join(seed, "AGENTS.md"), "utf8");
+    await writeFile(join(d, "AGENTS.md"), template, "utf8");
+
+    const installRes = await install({ cwd: d });
+    assert.ok(!installRes.created.includes("AGENTS.md"), "install must not claim a pre-existing AGENTS.md");
+    const cfg = JSON.parse(await readFile(join(d, ".lazyglm", "config.json"), "utf8"));
+    assert.equal(cfg.agentsOwnedByLazyglm, false, "config must mark pre-existing AGENTS.md as not owned");
+
+    const res = await uninstall({ cwd: d });
+    assert.ok(existsSync(join(d, "AGENTS.md")), "pre-existing template AGENTS.md should be preserved");
+    assert.ok(res.preserved.includes("AGENTS.md"), "preserved should list user-owned AGENTS.md");
+    assert.ok(!res.removed.includes("AGENTS.md"), "removed should NOT list user-owned AGENTS.md");
+  } finally {
+    await rm(seed, { recursive: true, force: true });
+    await rm(d, { recursive: true, force: true });
+  }
+});
+
 test("uninstall removes only the .lazyglm/ gitignore line, preserves other entries", async () => {
   const d = await mkdtemp(join(tmpdir(), "lazyglm-uninstall-gitignore-"));
   try {
@@ -175,8 +198,14 @@ test("malformed config does not block force install or uninstall", async () => {
   try {
     await install({ cwd: d });
     await writeFile(join(d, ".lazyglm", "config.json"), "{not json", "utf8");
+    await install({ cwd: d });
+    let cfg = JSON.parse(await readFile(join(d, ".lazyglm", "config.json"), "utf8"));
+    assert.equal(cfg.model, "glm-5.2", "plain install should not turn malformed config into partial ownership-only config");
+    assert.ok(cfg.provider?.base_url, "plain install should retain provider defaults when repairing malformed config");
+
+    await writeFile(join(d, ".lazyglm", "config.json"), "{not json", "utf8");
     await install({ cwd: d, force: true });
-    const cfg = JSON.parse(await readFile(join(d, ".lazyglm", "config.json"), "utf8"));
+    cfg = JSON.parse(await readFile(join(d, ".lazyglm", "config.json"), "utf8"));
     assert.equal(cfg.model, "glm-5.2", "force install should repair malformed config");
 
     await writeFile(join(d, ".lazyglm", "config.json"), "{not json", "utf8");
