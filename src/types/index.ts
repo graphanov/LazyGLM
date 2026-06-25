@@ -222,6 +222,20 @@ export interface RunAgentOptions {
   signal?: AbortSignal;
 }
 
+export type ToolCallStatus =
+  | "ok"
+  | "denied"
+  | "error"
+  | "finish"
+  | "timeout"
+  | (string & {});
+
+export interface ToolExecutionRecord {
+  name: string;
+  turn: number;
+  status: ToolCallStatus;
+}
+
 export interface RunAgentResult {
   sessionId: string;
   turns: number;
@@ -236,7 +250,7 @@ export interface RunAgentResult {
   finishReason: string;
   finishSummary?: string | null;
   result?: string | null;
-  toolCalls: ToolCall[];
+  toolCalls: ToolExecutionRecord[];
   filesWritten: string[];
   errorMessage?: string | null;
 }
