@@ -69,6 +69,7 @@ export async function install({ cwd, force = false } = {}) {
   if (force || !existsSync(configPath)) {
     await writeJson(configPath, await configWithDefaults({
       ...(previousConfig.gitignoreOwnedByLazyglm === true ? { gitignoreOwnedByLazyglm: true } : {}),
+      ...(previousConfig.gitignoreFileOwnedByLazyglm === true ? { gitignoreFileOwnedByLazyglm: true } : {}),
       ...(previousConfig.agentsOwnedByLazyglm === true ? { agentsOwnedByLazyglm: true } : {}),
     }));
     created.push(".lazyglm/config.json");
@@ -92,13 +93,16 @@ export async function install({ cwd, force = false } = {}) {
   const giPath = join(dir, ".gitignore");
   const entry = ".lazyglm/";
   let gi = "";
-  if (existsSync(giPath)) gi = await readFile(giPath, "utf8");
+  const gitignoreFileExisted = existsSync(giPath);
+  if (gitignoreFileExisted) gi = await readFile(giPath, "utf8");
   const alreadyIgnored = gitignoreHasEntry(gi, entry);
   let gitignoreOwnedByLazyglm = existingConfig.gitignoreOwnedByLazyglm === true;
+  let gitignoreFileOwnedByLazyglm = existingConfig.gitignoreFileOwnedByLazyglm === true;
   if (!alreadyIgnored) {
     await writeFile(giPath, (gi ? gi.replace(/\n?$/, "\n") : "") + entry + "\n", "utf8");
     created.push(".gitignore (+.lazyglm/)");
     gitignoreOwnedByLazyglm = true;
+    if (!gitignoreFileExisted) gitignoreFileOwnedByLazyglm = true;
   }
 
   // Persist ownership markers into config so uninstall knows whether it owns
@@ -112,6 +116,7 @@ export async function install({ cwd, force = false } = {}) {
       ...existingConfig,
       agentsOwnedByLazyglm,
       gitignoreOwnedByLazyglm,
+      gitignoreFileOwnedByLazyglm,
     }));
   }
 
@@ -129,11 +134,13 @@ export async function uninstall({ cwd } = {}) {
   // absent (older install, malformed config, or pre-existing user file), fail
   // closed and preserve user-facing files/entries.
   let ownsAgentsFile = false;
+  let ownsGitignoreFile = false;
   let ownsGitignoreEntry = false;
   const configPath = join(lazyDir, "config.json");
   if (existsSync(configPath)) {
     const cfg = await readJson(configPath, {});
     ownsAgentsFile = cfg.agentsOwnedByLazyglm === true;
+    ownsGitignoreFile = cfg.gitignoreFileOwnedByLazyglm === true;
     ownsGitignoreEntry = cfg.gitignoreOwnedByLazyglm === true;
   }
 
@@ -157,9 +164,8 @@ export async function uninstall({ cwd } = {}) {
   }
 
   // .gitignore: remove the `.lazyglm/` entry ONLY if lazyglm install owned it.
-  // If we own it and the file becomes empty/whitespace-only after removal,
-  // delete the file too (install created it, so removing it is true round-trip
-  // honesty). Otherwise preserve the entry and report it.
+  // Delete the .gitignore file itself only if LazyGLM also created the file;
+  // otherwise preserve user-owned empty/placeholder .gitignore files.
   const giPath = join(dir, ".gitignore");
   const entry = ".lazyglm/";
   if (existsSync(giPath)) {
@@ -169,7 +175,7 @@ export async function uninstall({ cwd } = {}) {
     if (ownsGitignoreEntry && hasEntry) {
       const filtered = lines.filter((l) => !isGitignoreEntry(l, entry));
       const result = filtered.join("\n");
-      if (result.trim() === "") {
+      if (result.trim() === "" && ownsGitignoreFile) {
         await unlink(giPath);
       } else {
         await writeFile(giPath, result, "utf8");

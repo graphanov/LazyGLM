@@ -71,6 +71,25 @@ test("uninstall on pristine install removes AGENTS.md, .gitignore entry, reports
   }
 });
 
+test("uninstall preserves pre-existing empty .gitignore file", async () => {
+  const d = await mkdtemp(join(tmpdir(), "lazyglm-preexisting-empty-gitignore-"));
+  try {
+    await writeFile(join(d, ".gitignore"), "", "utf8");
+    await install({ cwd: d });
+    const cfg = JSON.parse(await readFile(join(d, ".lazyglm", "config.json"), "utf8"));
+    assert.equal(cfg.gitignoreOwnedByLazyglm, true, "lazyglm owns the entry it added");
+    assert.equal(cfg.gitignoreFileOwnedByLazyglm, false, "lazyglm must not claim a pre-existing empty .gitignore file");
+
+    const res = await uninstall({ cwd: d });
+    assert.ok(existsSync(join(d, ".gitignore")), "pre-existing empty .gitignore should survive");
+    const gi = await readFile(join(d, ".gitignore"), "utf8");
+    assert.equal(gi.trim(), "", "only the lazyglm entry should be removed from the placeholder file");
+    assert.ok(res.removed.includes(".gitignore (-.lazyglm/)"), "removed should list the owned gitignore entry edit");
+  } finally {
+    await rm(d, { recursive: true, force: true });
+  }
+});
+
 test("uninstall preserves customized AGENTS.md and reports it", async () => {
   const d = await mkdtemp(join(tmpdir(), "lazyglm-uninstall-custom-"));
   try {
