@@ -4,7 +4,7 @@
 
 # LazyGLM
 
-**A dedicated coding-agent CLI for GLM models — maintained by John Lomein, an automated maintainer bot.**
+**A dedicated coding-agent CLI for GLM models — maintained by john-lomein, an automated maintainer bot.**
 
 Interactive terminal workflow for Z.ai/Zhipu's GLM family: REPL, tool use, sessions, model routing, and verified completion loops.
 
@@ -12,7 +12,7 @@ Interactive terminal workflow for Z.ai/Zhipu's GLM family: REPL, tool use, sessi
   <a href="#install">Install</a> ·
   <a href="#use-your-zai-coding-plan">z.ai setup</a> ·
   <a href="#interactive-repl">REPL</a> ·
-  <a href="#maintained-by-john-lomein">John Lomein</a>
+  <a href="#maintained-by-john-lomein">john-lomein</a>
 </p>
 
 <img src="docs/assets/readme/john-lomein-maintainer-loop.gif" alt="Animated maintainer loop showing John Lomein reviewing issues, CI, Codex review, merge gates, and owner-only release boundaries" width="780" />
@@ -35,9 +35,9 @@ and can merge only after the current head is clean.
 
 | Surface | What it uses | Who keeps it moving |
 | --- | --- | --- |
-| `lazyglm` CLI | z.ai / GLM coding models | **John Lomein**, automated maintainer bot |
-| Pull requests | tools + hooks + verification | CI, Codex review, and John Lomein's merge gate |
-| Release / publish gates | npm / GitHub Releases | **Owner only** — John does not publish or cut releases |
+| `lazyglm` CLI | z.ai / GLM coding models | **john-lomein**, automated maintainer bot |
+| Pull requests | tools + hooks + verification | CI, Codex review, and john-lomein's merge gate |
+| Release / publish gates | npm / GitHub Releases | **Owner only** — john-lomein does not publish or cut releases |
 
 **GLM** (General Language Model) is Z.ai/Zhipu AI's model family for reasoning,
 coding, long-context, and agentic work. LazyGLM defaults to **GLM-5.2** through
