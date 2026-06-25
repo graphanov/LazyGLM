@@ -56,6 +56,7 @@ export async function install({ cwd, force = false } = {}) {
     });
     created.push(".lazyglm/config.json");
   }
+  const existingConfig = existsSync(configPath) ? await readJson(configPath).catch(() => ({})) : {};
 
   // AGENTS.md template
   const agentsPath = join(dir, "AGENTS.md");
@@ -73,7 +74,7 @@ export async function install({ cwd, force = false } = {}) {
   let gi = "";
   if (existsSync(giPath)) gi = await readFile(giPath, "utf8");
   const alreadyIgnored = gi.split("\n").includes(entry);
-  let gitignoreOwnedByLazyglm = false;
+  let gitignoreOwnedByLazyglm = existingConfig.gitignoreOwnedByLazyglm === true;
   if (!alreadyIgnored) {
     await writeFile(giPath, (gi ? gi.replace(/\n?$/, "\n") : "") + entry + "\n", "utf8");
     created.push(".gitignore (+.lazyglm/)");
@@ -81,11 +82,12 @@ export async function install({ cwd, force = false } = {}) {
   }
 
   // Persist ownership marker into config so uninstall knows whether it owns the
-  // `.lazyglm/` gitignore line. Use mergeWrite so we don't clobber an existing
-  // config written earlier in this same install() run.
+  // `.lazyglm/` gitignore line. Preserve a previous true marker across repeat
+  // installs; once LazyGLM owns the entry, a later idempotent install must not
+  // demote it to user-owned merely because the line is already present.
   if (existsSync(configPath)) {
     await writeJson(configPath, {
-      ...(await readJson(configPath).catch(() => ({}))),
+      ...existingConfig,
       gitignoreOwnedByLazyglm,
     });
   }

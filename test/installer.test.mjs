@@ -138,6 +138,22 @@ test("install does not claim ownership of pre-existing .lazyglm/ gitignore entry
   }
 });
 
+test("repeat install keeps ownership of lazyglm-created .gitignore entry", async () => {
+  const d = await mkdtemp(join(tmpdir(), "lazyglm-repeat-install-gitignore-"));
+  try {
+    await install({ cwd: d });
+    await install({ cwd: d });
+    const cfg = JSON.parse(await readFile(join(d, ".lazyglm", "config.json"), "utf8"));
+    assert.equal(cfg.gitignoreOwnedByLazyglm, true, "repeat install must preserve lazyglm ownership");
+
+    const res = await uninstall({ cwd: d });
+    assert.ok(!existsSync(join(d, ".gitignore")), "lazyglm-created .gitignore should still be removed after repeat install");
+    assert.ok(res.removed.includes(".gitignore (-.lazyglm/)"), "removed should list the owned gitignore edit");
+  } finally {
+    await rm(d, { recursive: true, force: true });
+  }
+});
+
 test("uninstall preserves pre-existing .lazyglm/ gitignore entry and reports it", async () => {
   const d = await mkdtemp(join(tmpdir(), "lazyglm-uninstall-preexist-"));
   try {
