@@ -193,6 +193,28 @@ export interface HookFireResult {
   results: Array<{ plugin: string; result: HookResult }>;
 }
 
+/**
+ * Minimal structural contract for the hook engine runAgent consumes.
+ * runAgent treats the `hooks` option as the engine itself: it calls
+ * `register(...)`, reads `sessionId`, and calls `setMeta(...)` before firing
+ * events. Exposing only `{ fire }` would typecheck but crash at startup with
+ * `engine.setMeta is not a function`. Keep this aligned with src/hooks/engine.js.
+ */
+export interface HookEngineContract {
+  sessionId: string;
+  register(plugin: HookPlugin): void;
+  setMeta(meta?: {
+    model?: string;
+    transcriptPath?: string | null;
+    permissionMode?: PermissionMode;
+  }): void;
+  fire(
+    event: HookEventName,
+    fields?: Record<string, unknown>,
+    options?: { signal?: AbortSignal },
+  ): Promise<HookFireResult> | HookFireResult;
+}
+
 export interface SessionRecord {
   t: string;
   type: string;
@@ -209,7 +231,7 @@ export interface RunAgentOptions {
   model?: string;
   config?: ProviderConfig;
   plugins?: HookPlugin[];
-  hooks?: { fire(event: HookEventName, fields?: Record<string, unknown>, options?: { signal?: AbortSignal }): Promise<HookFireResult> | HookFireResult };
+  hooks?: HookEngineContract;
   maxTurns?: number;
   budget?: number;
   temperature?: number;
