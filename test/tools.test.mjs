@@ -4,6 +4,7 @@ import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TOOL_HANDLERS } from "../src/agent/tools.js";
+import { createDeadline, composeAbortSignals } from "../src/agent/deadline.js";
 
 let cwd;
 test.before(async () => { cwd = await mkdtemp(join(tmpdir(), "lazyglm-tools-")); });
@@ -51,9 +52,49 @@ test("grep finds a pattern", async () => {
   assert.match(res, /g\.js:\d+:function hello/);
 });
 
+test("grep honors a pre-aborted runtime signal", async () => {
+  const controller = new AbortController();
+  controller.abort(new Error("grep canceled"));
+  await assert.rejects(
+    () => TOOL_HANDLERS.grep({ pattern: "hello", path: "." }, { cwd, runtime: { signal: controller.signal } }),
+    /grep canceled/,
+  );
+});
+
 test("run_shell runs a command and captures output", async () => {
   const res = await TOOL_HANDLERS.run_shell({ command: "echo hello-shell" }, { cwd });
   assert.match(res, /hello-shell/);
+});
+
+test("run_shell honors the runtime deadline", async () => {
+  const deadline = createDeadline(30);
+  try {
+    await assert.rejects(
+      () => TOOL_HANDLERS.run_shell({ command: "node -e \"setTimeout(() => {}, 1000)\"", timeout: 5 }, { cwd, runtime: { deadline } }),
+      /timed out/,
+    );
+  } finally {
+    deadline.cancel();
+  }
+});
+
+test("run_shell honors composed runtime aborts before the deadline", async () => {
+  const controller = new AbortController();
+  const deadline = createDeadline(1000, { message: "deadline fired" });
+  const composed = composeAbortSignals([deadline.signal, controller.signal]);
+  const abortTimer = setTimeout(() => controller.abort(new Error("caller canceled")), 25);
+  const started = Date.now();
+  try {
+    await assert.rejects(
+      () => TOOL_HANDLERS.run_shell({ command: "node -e \"setTimeout(() => {}, 1000)\"", timeout: 5 }, { cwd, runtime: { deadline, signal: composed.signal } }),
+      /caller canceled/,
+    );
+    assert.ok(Date.now() - started < 500, "caller abort should stop shell command before the deadline");
+  } finally {
+    clearTimeout(abortTimer);
+    composed.cancel();
+    deadline.cancel();
+  }
 });
 
 test("read_file refuses path escapes", async () => {

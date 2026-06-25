@@ -3,6 +3,7 @@
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { abortReason, throwIfAborted, withAbort } from "../agent/deadline.js";
 import { buildHookInput, isBlock } from "./schema.js";
 import { nowIso, truncate } from "../util.js";
 
@@ -34,10 +35,11 @@ export class HookEngine {
     return `${this.sessionId}-${this.turnId}`;
   }
 
-  api() {
+  api({ signal } = {}) {
     const cwd = this.cwd;
     return {
       cwd,
+      signal,
       sessionId: this.sessionId,
       log: (msg) => this.log(msg),
       readFile: async (rel) => {
@@ -56,7 +58,8 @@ export class HookEngine {
    * Fire an event. Returns aggregated results.
    * @returns {{ blocks: string[], injects: string[], feedbacks: string[], results: any[] }}
    */
-  async fire(event, fields = {}) {
+  async fire(event, fields = {}, { signal } = {}) {
+    throwIfAborted(signal);
     const meta = {
       sessionId: this.sessionId,
       turnId: this.nextTurn(),
@@ -70,15 +73,17 @@ export class HookEngine {
     const injects = [];
     const feedbacks = [];
     const results = [];
-    const api = this.api();
+    const api = this.api({ signal });
 
     for (const plugin of this.plugins) {
+      throwIfAborted(signal);
       const handler = plugin.hooks?.[event];
       if (typeof handler !== "function") continue;
       let result;
       try {
-        result = await handler(input, api);
+        result = await withAbort(Promise.resolve().then(() => handler(input, api)), signal);
       } catch (err) {
+        if (signal?.aborted) throw abortReason(signal, err);
         this.log(`[hook] ${plugin.name}.${event} threw: ${err?.message || err}`);
         continue;
       }
