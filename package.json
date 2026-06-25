@@ -1,6 +1,6 @@
 {
   "name": "lazyglm",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Dedicated coding-agent CLI for GLM models — REPL, tool use, model routing, sessions, and verified completion.",
   "type": "module",
   "repository": {
