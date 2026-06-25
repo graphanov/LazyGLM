@@ -89,10 +89,13 @@ test("timing humanizes for TTY and is raw ms for non-TTY", () => {
   assert.ok(/session_ms=133000/.test(nontty), "non-TTY session_ms is raw ms");
 });
 
-test("minute boundary rounding never renders 60s (e.g. 119600ms => 2m0s)", () => {
+test("minute boundary rounding never renders 60s (e.g. 59600ms => 1m0s)", () => {
   // Durations in the upper half of the last second before a minute boundary must
-  // round up into the minute, not render an impossible "1m60s".
+  // round up into the minute, not render "60s" or an impossible "1m60s".
   const cases = [
+    { ms: 59600, expect: "1m0s" },
+    { ms: 59900, expect: "1m0s" },
+    { ms: 60000, expect: "1m0s" },
     { ms: 119600, expect: "2m0s" },
     { ms: 119900, expect: "2m0s" },
     { ms: 120000, expect: "2m0s" },
@@ -110,6 +113,7 @@ test("minute boundary rounding never renders 60s (e.g. 119600ms => 2m0s)", () =>
       plain.includes(`session ${expect}`),
       `${ms}ms should render session as ${expect}, got: ${plain}`,
     );
+    assert.doesNotMatch(plain, /\b60s\b/, "no standalone 60s duration");
     assert.doesNotMatch(plain, /\dm60s/, "no impossible 60s remainder");
   }
 });
