@@ -4,7 +4,7 @@
 // so install just initializes the per-project state.
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { mkdir, writeFile, readFile, rm } from "node:fs/promises";
+import { mkdir, writeFile, readFile, rm, unlink } from "node:fs/promises";
 import { ensureDir, readJson, writeJson, gitInfo, looksLikeProject } from "./util.js";
 
 const AGENTS_TEMPLATE = `# AGENTS.md
@@ -80,10 +80,50 @@ export async function install({ cwd, force = false } = {}) {
 export async function uninstall({ cwd } = {}) {
   const dir = cwd || process.cwd();
   const lazyDir = join(dir, ".lazyglm");
+  const removed = [];
+  const preserved = [];
+
+  // Remove the .lazyglm/ runtime directory wholesale.
   if (existsSync(lazyDir)) {
     await rm(lazyDir, { recursive: true, force: true });
+    removed.push(".lazyglm/");
   }
-  return { cwd: dir, removed: [".lazyglm/"] };
+
+  // AGENTS.md: remove only if it still equals the install template verbatim.
+  // If the user customized it, preserve it and report it as preserved.
+  const agentsPath = join(dir, "AGENTS.md");
+  if (existsSync(agentsPath)) {
+    const content = await readFile(agentsPath, "utf8");
+    if (content === AGENTS_TEMPLATE) {
+      await unlink(agentsPath);
+      removed.push("AGENTS.md");
+    } else {
+      preserved.push("AGENTS.md");
+    }
+  }
+
+  // .gitignore: remove the lazyglm-owned `.lazyglm/` entry (purely runtime
+  // state, never user content), preserving all other lines. If the file ends
+  // up empty/whitespace-only after removal, delete it — that is true
+  // round-trip honesty (install created it if it didn't exist).
+  const giPath = join(dir, ".gitignore");
+  const entry = ".lazyglm/";
+  if (existsSync(giPath)) {
+    const gi = await readFile(giPath, "utf8");
+    const lines = gi.split("\n");
+    if (lines.includes(entry)) {
+      const filtered = lines.filter((l) => l !== entry);
+      const result = filtered.join("\n");
+      if (result.trim() === "") {
+        await unlink(giPath);
+      } else {
+        await writeFile(giPath, result, "utf8");
+      }
+      removed.push(".gitignore (-.lazyglm/)");
+    }
+  }
+
+  return { cwd: dir, removed, preserved };
 }
 
 async function readVersion() {

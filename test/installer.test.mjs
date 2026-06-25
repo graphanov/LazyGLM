@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,4 +37,79 @@ test("install --force overwrites AGENTS.md", async () => {
 test("uninstall removes .lazyglm", async () => {
   await uninstall({ cwd });
   assert.ok(!existsSync(join(cwd, ".lazyglm")));
+});
+
+// --- uninstall cleanup of install-created artifacts (issue #35) ---
+// Each of these runs in its own isolated temp dir so install/uninstall
+// ordering is not coupled across tests.
+
+test("uninstall on pristine install removes AGENTS.md, .gitignore entry, reports accurately", async () => {
+  const d = await mkdtemp(join(tmpdir(), "lazyglm-uninstall-pristine-"));
+  try {
+    await install({ cwd: d });
+    // sanity: install created both artifacts
+    assert.ok(existsSync(join(d, "AGENTS.md")));
+    assert.ok(existsSync(join(d, ".gitignore")));
+
+    const res = await uninstall({ cwd: d });
+
+    // .lazyglm gone
+    assert.ok(!existsSync(join(d, ".lazyglm")), ".lazyglm should be removed");
+    // AGENTS.md gone (pristine template -> deleted)
+    assert.ok(!existsSync(join(d, "AGENTS.md")), "pristine AGENTS.md should be removed");
+    // .gitignore: install created it with only `.lazyglm/`, so after removal
+    // it is empty and unlinked -> absent.
+    assert.ok(!existsSync(join(d, ".gitignore")), "empty .gitignore should be removed");
+
+    // metadata accuracy
+    assert.ok(res.removed.includes(".lazyglm/"), "removed should list .lazyglm/");
+    assert.ok(res.removed.includes("AGENTS.md"), "removed should list AGENTS.md");
+    assert.ok(res.removed.includes(".gitignore (-.lazyglm/)"), "removed should list .gitignore edit");
+    assert.deepEqual(res.preserved, [], "preserved should be empty on pristine install");
+  } finally {
+    await rm(d, { recursive: true, force: true });
+  }
+});
+
+test("uninstall preserves customized AGENTS.md and reports it", async () => {
+  const d = await mkdtemp(join(tmpdir(), "lazyglm-uninstall-custom-"));
+  try {
+    await install({ cwd: d });
+    // user customizes AGENTS.md after install
+    await writeFile(join(d, "AGENTS.md"), "# My custom agents file\n", "utf8");
+
+    const res = await uninstall({ cwd: d });
+
+    assert.ok(!existsSync(join(d, ".lazyglm")), ".lazyglm removed");
+    assert.ok(existsSync(join(d, "AGENTS.md")), "customized AGENTS.md should be preserved");
+    assert.ok(res.preserved.includes("AGENTS.md"), "preserved should list AGENTS.md");
+    assert.ok(!res.removed.includes("AGENTS.md"), "removed should NOT list customized AGENTS.md");
+    // .gitignore entry is still runtime state and removed regardless
+    assert.ok(res.removed.includes(".gitignore (-.lazyglm/)"), ".gitignore edit still removed");
+  } finally {
+    await rm(d, { recursive: true, force: true });
+  }
+});
+
+test("uninstall removes only the .lazyglm/ gitignore line, preserves other entries", async () => {
+  const d = await mkdtemp(join(tmpdir(), "lazyglm-uninstall-gitignore-"));
+  try {
+    await install({ cwd: d });
+    // simulate a pre-existing .gitignore with other entries by rewriting it
+    // to contain user lines + the lazyglm entry
+    await writeFile(join(d, ".gitignore"), "node_modules/\n.lazyglm/\ndist/\n*.log\n", "utf8");
+
+    const res = await uninstall({ cwd: d });
+
+    assert.ok(existsSync(join(d, ".gitignore")), ".gitignore should survive with other entries");
+    const gi = await readFile(join(d, ".gitignore"), "utf8");
+    const lines = gi.split("\n");
+    assert.ok(!lines.includes(".lazyglm/"), ".lazyglm/ line must be removed");
+    assert.ok(lines.includes("node_modules/"), "node_modules/ must survive");
+    assert.ok(lines.includes("dist/"), "dist/ must survive");
+    assert.ok(lines.includes("*.log"), "*.log must survive");
+    assert.ok(res.removed.includes(".gitignore (-.lazyglm/)"), "removed lists the gitignore edit");
+  } finally {
+    await rm(d, { recursive: true, force: true });
+  }
 });
