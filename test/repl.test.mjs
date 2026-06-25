@@ -100,13 +100,17 @@ test("REPL turn-frame helpers stay zero-ANSI and empty/plain for non-TTY", () =>
   assert.equal(echo, "> hello\n");
   assert.ok(!echo.includes("─"), "non-TTY echo must carry no rule glyph");
 
-  // Long input is truncated to the same cap used elsewhere, no rule glyph.
+  // Long input is truncated with a single inline marker, no rule glyph, and
+  // critically: no embedded newline (PR #26 Codex P3 — non-TTY echoes must
+  // stay single-line so they don't break the `> text` standalone-line contract).
   const longText = "x".repeat(500);
   const trunc = turnStart(longText, { isTTY: false });
   assertNoAnsi(trunc);
   assert.ok(trunc.length < longText.length, "long input must be truncated");
-  assert.ok(trunc.includes("truncated"), "truncation marker must be present");
+  assert.ok(trunc.includes("…"), "inline truncation marker must be present");
   assert.ok(!trunc.includes("─"), "truncated non-TTY echo must carry no rule glyph");
+  assert.equal(trunc.split("\n").length, 2, "non-TTY echo must be exactly one line + trailing newline");
+  assert.ok(trunc.endsWith("…\n"), "truncated non-TTY echo ends with inline marker + newline");
 });
 
 // Regression (PR #26 Codex review P2, thread src/repl.js:542): in the REPL
@@ -189,7 +193,7 @@ test("REPL non-TTY turn echo uses raw displayText, not expanded skill body", () 
 
   // Sanity: the expanded body would have polluted the echo if passed directly.
   const wrongEcho = turnStart(expandedBody, { isTTY: false });
-  assert.ok(wrongEcho.includes("truncated"), "expanded body is long enough to trigger truncation");
+  assert.ok(wrongEcho.includes("…"), "expanded body is long enough to trigger truncation");
   assert.ok(wrongEcho.includes("skill body"), "expanded body would leak into echo");
 });
 

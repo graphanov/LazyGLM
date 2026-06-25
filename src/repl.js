@@ -88,7 +88,14 @@ export function stripControlSequences(text = "") {
 }
 
 export function turnStart(userText, { isTTY = true } = {}) {
-  if (!isTTY) return `> ${truncate(stripControlSequences(userText ?? ""), 100)}\n`;
+  if (!isTTY) {
+    // Single-line truncation: the shared truncate() inserts a newline before
+    // its marker, which would break the "standalone `> text` line" contract
+    // for piped output. Use a flat inline marker instead.
+    const clean = stripControlSequences(userText ?? "");
+    const display = clean.length > 100 ? clean.slice(0, 100) + "…" : clean;
+    return `> ${display}\n`;
+  }
   return `\n${turnRule({ isTTY })}\n`;
 }
 
