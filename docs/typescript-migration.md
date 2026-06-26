@@ -38,12 +38,24 @@ npm run typecheck
 
 If a boundary file is being opted into checking, run the same command locally after adding its JSDoc/pragma and before opening the PR. CI should confirm known-clean typechecking, not discover a large untriaged backlog.
 
+#### PR-B1 — model router boundary
+
+The first boundary rollout is intentionally limited to `src/agent/router.js`:
+
+- `tsconfig.json` enables `allowJs` so selected JavaScript files can join the program.
+- `checkJs` remains disabled globally.
+- `include` adds only `src/agent/router.js` beside `src/**/*.ts`.
+- `src/agent/router.js` uses file-level `// @ts-check` plus JSDoc contracts for the model catalog, route options, resolved route, provider config entry, and persisted config fields it reads.
+
+The provider/runtime/tools boundary remains deferred. A local all-boundary smoke currently pulls transitive JavaScript errors from context/deadline/runtime/hooks code, so broad `@ts-check` would be noisy and out of scope for this slice. Future PRs should continue the same pattern: measure one boundary, annotate it narrowly, then add it to the configured typecheck surface only when clean.
+
 ## Deferred decisions
 
-These are intentionally not part of PR-A:
+These remain outside PR-A and PR-B1:
 
 - enabling `checkJs` globally;
 - converting provider/router/runtime/tools/hooks files to `.ts`;
+- typechecking provider/runtime/tools/hooks JavaScript in this router-only slice;
 - adding a `dist/` build step;
 - changing `bin/lazyglm.js`;
 - changing `package.json` `files`, `bin`, `engines`, or version;
@@ -53,7 +65,7 @@ These are intentionally not part of PR-A:
 
 `src/types/index.ts` is included under the existing `src` package allowlist. It is type-only and has no runtime imports, so `npx lazyglm`, global installs, and direct Node execution remain unchanged. If later PRs add compiled output, `npm pack --dry-run` must prove the shipped CLI and runtime files are still correct.
 
-## Verification for PR-A
+## Verification
 
 ```bash
 npm install --no-package-lock
