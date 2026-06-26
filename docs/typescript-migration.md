@@ -49,13 +49,25 @@ The first boundary rollout is intentionally limited to `src/agent/router.js`:
 
 The provider/runtime/tools boundary remains deferred. A local all-boundary smoke currently pulls transitive JavaScript errors from context/deadline/runtime/hooks code, so broad `@ts-check` would be noisy and out of scope for this slice. Future PRs should continue the same pattern: measure one boundary, annotate it narrowly, then add it to the configured typecheck surface only when clean.
 
+#### PR-B2 — provider boundary
+
+The second boundary rollout adds `src/agent/provider.js` to the configured typecheck surface:
+
+- `checkJs` remains disabled globally.
+- `include` adds only `src/agent/provider.js` beside the existing router boundary and TypeScript contract files.
+- `src/agent/provider.js` uses file-level `// @ts-check`, shared contract imports for provider config, chat completions, stream deltas, tool calls, tool specs, and usage, plus local typedefs for OpenAI-compatible wire JSON.
+- The provider boundary now checks `resolveProviderConfig`, `chat`, non-streaming completion normalization, SSE delta parsing, retry callback payloads, and model listing without changing provider behavior or adding a build step.
+- The shared `ToolCall` contract admits the existing OpenAI-compatible `type: "function"` field returned by provider normalization.
+
+The runtime/tools/hooks boundary remains deferred. This PR intentionally keeps package behavior unchanged: no `.js -> .ts` conversion, no `dist/`, no CLI shim changes, and no package version or publish-flow changes.
+
 ## Deferred decisions
 
-These remain outside PR-A and PR-B1:
+These remain outside PR-A and the current PR-B boundary slices:
 
 - enabling `checkJs` globally;
 - converting provider/router/runtime/tools/hooks files to `.ts`;
-- typechecking provider/runtime/tools/hooks JavaScript in this router-only slice;
+- typechecking runtime/tools/hooks JavaScript in this provider-boundary slice;
 - adding a `dist/` build step;
 - changing `bin/lazyglm.js`;
 - changing `package.json` `files`, `bin`, `engines`, or version;

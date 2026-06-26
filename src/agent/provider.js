@@ -1,3 +1,5 @@
+// @ts-check
+
 // GLM provider: speaks the OpenAI Chat Completions schema with tool calling.
 //
 // DEFAULT: the z.ai coding endpoint (https://api.z.ai/api/coding/paas/v4)
@@ -33,6 +35,30 @@ import {
   withAbort,
 } from "./deadline.js";
 
+/**
+ * @typedef {import("../types/index.js").Provider} Provider
+ * @typedef {import("../types/index.js").ProviderConfig} ProviderConfig
+ * @typedef {import("../types/index.js").ModelRouteOptions} ModelRouteOptions
+ * @typedef {import("../types/index.js").ChatCompletion} ChatCompletion
+ * @typedef {import("../types/index.js").ChatUsage} ChatUsage
+ * @typedef {import("../types/index.js").StreamDelta} StreamDelta
+ * @typedef {import("../types/index.js").ToolCall} ToolCall
+ * @typedef {import("../types/index.js").ToolSpec} ToolSpec
+ *
+ * @typedef {{ attempt: number, reason: string, delay: number }} RetryPayload
+ * @typedef {{ timeout: number, maxRetries: number, onRetry?: (payload: RetryPayload) => void, signal?: AbortSignal }} RetryOptions
+ * @typedef {{ role?: string, content?: string | null, reasoning_content?: string | null, name?: string, tool_call_id?: string, tool_calls?: unknown, [key: string]: unknown }} ChatMessage
+ * @typedef {{ model?: string, messages: ChatMessage[], tools?: ToolSpec[], temperature?: number, config?: ProviderConfig, onDelta?: (delta: StreamDelta) => void, onRetry?: (payload: RetryPayload) => void, signal?: AbortSignal }} ChatOptions
+ * @typedef {{ model: string, messages: ChatMessage[], temperature: number, stream: boolean, tools?: ToolSpec[], tool_choice?: "auto", stream_options?: { include_usage: boolean } }} ChatRequestBody
+ * @typedef {{ id?: string | null, name?: string | null }} ModelListEntry
+ * @typedef {{ id?: string | null, function?: { name?: string | null, arguments?: string | null } | null, [key: string]: unknown }} OpenAIToolCall
+ * @typedef {{ index?: number, id?: string | null, function?: { name?: string | null, arguments?: string | null } | null, [key: string]: unknown }} OpenAIStreamToolCallDelta
+ * @typedef {{ content?: string | null, reasoning_content?: string | null, tool_calls?: OpenAIToolCall[] | OpenAIStreamToolCallDelta[] | null, [key: string]: unknown }} OpenAIMessage
+ * @typedef {{ message?: OpenAIMessage | null, delta?: OpenAIMessage | null, finish_reason?: string | null, [key: string]: unknown }} OpenAIChoice
+ * @typedef {{ choices?: OpenAIChoice[], usage?: ChatUsage | null, data?: ModelListEntry[], models?: ModelListEntry[], [key: string]: unknown }} OpenAIResponse
+ * @typedef {{ id: string | null, name: string | null, args: string }} StreamToolCallAccumulator
+ */
+
 const DEFAULT_TIMEOUT = 600_000;
 const DEFAULT_MAX_RETRIES = 4;
 const OLLAMA_BASE = "http://localhost:11434/v1";
@@ -44,8 +70,8 @@ const RETRYABLE_STATUS = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
  * Resolve the full provider config: base_url, api_key, timeout, and the
  * provider-specific model ID. This is the single entry point the runtime uses.
  *
- * @param {object} options - { model?, provider?, role? }
- * @returns {Promise<{baseURL, apiKey, modelId, model, provider, role, timeout, maxRetries}>}
+ * @param {ModelRouteOptions} [options] - { model?, provider?, role? }
+ * @returns {Promise<ProviderConfig>}
  */
 export async function resolveProviderConfig(options = {}) {
   const role = options.role || "default";
@@ -113,8 +139,8 @@ export async function resolveProviderConfig(options = {}) {
  * Non-retryable statuses (4xx other than above) throw immediately.
  *
  * @param {string} url
- * @param {object} init  - fetch init (headers, body, signal)
- * @param {object} opts  - { timeout, maxRetries, onRetry, signal }
+ * @param {RequestInit} init  - fetch init (headers, body, signal)
+ * @param {RetryOptions} opts  - { timeout, maxRetries, onRetry, signal }
  * @returns {Promise<Response>}
  */
 async function fetchWithRetry(url, init, { timeout, maxRetries, onRetry, signal }) {
@@ -137,8 +163,10 @@ async function fetchWithRetry(url, init, { timeout, maxRetries, onRetry, signal 
     } catch (err) {
       clearTimeout(timer);
       combined.cancel();
-      if (isDeadlineError(err) || signal?.aborted) throw abortReason(signal, err);
-      if (isRequestTimeoutError(err) || err?.name === "AbortError") {
+      const errName = errorName(err);
+      const errText = errorMessage(err);
+      if (isDeadlineError(err) || signal?.aborted) throw abortReason(signal, errorForAbort(err));
+      if (isRequestTimeoutError(err) || errName === "AbortError") {
         // Per-request timeouts are retryable; the outer run deadline is not.
         if (attempt < maxRetries) {
           const delay = backoffDelay(baseDelay, maxDelay, attempt);
@@ -152,13 +180,13 @@ async function fetchWithRetry(url, init, { timeout, maxRetries, onRetry, signal 
       // Network error (DNS, connection refused, ECONNRESET, etc.) — retryable.
       if (attempt < maxRetries) {
         const delay = backoffDelay(baseDelay, maxDelay, attempt);
-        onRetry?.({ attempt: attempt + 1, reason: `network error: ${err?.message || err}`, delay });
+        onRetry?.({ attempt: attempt + 1, reason: `network error: ${errText}`, delay });
         await abortableSleep(delay, signal);
         attempt++;
         continue;
       }
       const hint = /localhost|11434/.test(url) ? "Is Ollama running? Try: ollama serve" : `Is ${new URL(url).origin} reachable?`;
-      throw new Error(`GLM request failed: ${err?.message || err}. ${hint}`);
+      throw new Error(`GLM request failed: ${errText}. ${hint}`);
     } finally {
       clearTimeout(timer);
       combined.cancel();
@@ -193,12 +221,47 @@ async function fetchWithRetry(url, init, { timeout, maxRetries, onRetry, signal 
   }
 }
 
+/**
+ * @param {unknown} err
+ * @returns {Error | undefined}
+ */
+function errorForAbort(err) {
+  return /** @type {Error | undefined} */ (err);
+}
+
+/**
+ * @param {unknown} err
+ * @returns {string}
+ */
+function errorName(err) {
+  return err && typeof err === "object" && "name" in err ? String(err.name) : "";
+}
+
+/**
+ * @param {unknown} err
+ * @returns {string}
+ */
+function errorMessage(err) {
+  if (err && typeof err === "object" && "message" in err && err.message) return String(err.message);
+  return String(err);
+}
+
+/**
+ * @param {number} base
+ * @param {number} max
+ * @param {number} attempt
+ * @returns {number}
+ */
 function backoffDelay(base, max, attempt) {
   const exp = Math.min(base * 2 ** attempt, max);
   // Full jitter: uniform random in [0, exp].
   return Math.floor(Math.random() * exp);
 }
 
+/**
+ * @param {string | null} header
+ * @returns {number | null}
+ */
 function parseRetryAfter(header) {
   if (!header) return null;
   const secs = Number(header);
@@ -208,6 +271,11 @@ function parseRetryAfter(header) {
   return null;
 }
 
+/**
+ * @param {Response} res
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<string>}
+ */
 async function readResponseText(res, signal) {
   throwIfAborted(signal);
   if (!res.body || typeof res.body.getReader !== "function") {
@@ -234,7 +302,7 @@ async function readResponseText(res, signal) {
     text += decoder.decode();
     return text;
   } catch (err) {
-    if (signal?.aborted) throw abortReason(signal, err);
+    if (signal?.aborted) throw abortReason(signal, errorForAbort(err));
     throw err;
   } finally {
     if (signal) signal.removeEventListener("abort", onAbort);
@@ -250,6 +318,9 @@ async function readResponseText(res, signal) {
  * Ollama, custom shims) may reject the unknown field, so we strip by default.
  *
  * Override with LAZYGLM_PRESERVE_THINKING=auto|on|off (see shouldPreserveThinking).
+ *
+ * @param {Provider | null | undefined} provider
+ * @returns {boolean}
  */
 export function supportsPreservedThinking(provider) {
   return provider === "zai";
@@ -260,6 +331,9 @@ export function supportsPreservedThinking(provider) {
  *   auto (default) → supportsPreservedThinking(provider)
  *   on             → always keep (force keep on unsupported providers / shims)
  *   off            → always strip (force strip on zai-compatible endpoints)
+ *
+ * @param {Provider | null | undefined} provider
+ * @returns {boolean}
  */
 export function shouldPreserveThinking(provider) {
   const override = (process.env.LAZYGLM_PRESERVE_THINKING || "auto").trim().toLowerCase();
@@ -273,6 +347,10 @@ export function shouldPreserveThinking(provider) {
  * provider should not receive it. The original array (the live Context) is
  * never mutated — reasoning is stored in context + session regardless of
  * provider, and only stripped from the outgoing wire payload.
+ *
+ * @param {ChatMessage[]} messages
+ * @param {boolean} preserveThinking
+ * @returns {ChatMessage[]}
  */
 function messagesForProvider(messages, preserveThinking) {
   if (preserveThinking) return messages;
@@ -297,16 +375,8 @@ function messagesForProvider(messages, preserveThinking) {
  * The resolved value is the same shape regardless of streaming, so the
  * runtime can treat both paths uniformly.
  *
- * @param {object} opts
- * @param {string} opts.model      provider-specific model ID (e.g. z-ai/glm-5.2)
- * @param {Array}  opts.messages   OpenAI messages
- * @param {Array}  [opts.tools]    OpenAI function/tool specs
- * @param {number} [opts.temperature]
- * @param {object} [opts.config]   provider config (from resolveProviderConfig)
- * @param {function} [opts.onDelta] streaming callback
- * @param {function} [opts.onRetry] retry callback
- * @param {AbortSignal} [opts.signal] whole-run abort signal
- * @returns {Promise<{content: string|null, reasoning: string|null, tool_calls: Array|null, raw: object, usage: object|null}>}
+ * @param {ChatOptions} opts
+ * @returns {Promise<ChatCompletion>}
  */
 export async function chat({ model, messages, tools, temperature, config, onDelta, onRetry, signal }) {
   const cfg = config || await resolveProviderConfig();
@@ -317,6 +387,7 @@ export async function chat({ model, messages, tools, temperature, config, onDelt
   // provider honors it (or LAZYGLM_PRESERVE_THINKING forces keep). The live
   // Context keeps reasoning_content regardless — only the wire payload changes.
   const sendMessages = messagesForProvider(messages, shouldPreserveThinking(cfg.provider));
+  /** @type {ChatRequestBody} */
   const body = {
     model: model || cfg.modelId,
     messages: sendMessages,
@@ -351,14 +422,18 @@ export async function chat({ model, messages, tools, temperature, config, onDelt
   }
 
   // ---- Streaming path: parse SSE ----
-  return parseSSEStream(res, onDelta, signal);
+  return parseSSEStream(res, /** @type {(delta: StreamDelta) => void} */ (onDelta), signal);
 }
 
 /**
  * Parse a non-streaming completion response into the unified shape.
+ *
+ * @param {unknown} data
+ * @returns {ChatCompletion}
  */
 function parseCompletion(data) {
-  const choice = data?.choices?.[0];
+  const completion = /** @type {OpenAIResponse} */ (data);
+  const choice = completion?.choices?.[0];
   if (!choice) {
     throw new Error(`GLM provider returned no choices: ${JSON.stringify(data).slice(0, 500)}`);
   }
@@ -368,17 +443,23 @@ function parseCompletion(data) {
     reasoning: typeof msg.reasoning_content === "string" ? msg.reasoning_content : null,
     tool_calls: normalizeToolCalls(msg.tool_calls),
     raw: data,
-    usage: data.usage || null,
+    usage: completion.usage || null,
   };
 }
 
+/**
+ * @param {unknown} rawToolCalls
+ * @returns {ToolCall[] | null}
+ */
 function normalizeToolCalls(rawToolCalls) {
   if (!Array.isArray(rawToolCalls) || !rawToolCalls.length) return null;
-  return rawToolCalls.map((tc, i) => {
+  return rawToolCalls.map((raw, i) => {
+    const tc = /** @type {OpenAIToolCall} */ (raw);
     const fn = tc.function || {};
+    /** @type {Record<string, unknown>} */
     let args = {};
     try {
-      args = fn.arguments ? JSON.parse(fn.arguments) : {};
+      args = fn.arguments ? /** @type {Record<string, unknown>} */ (JSON.parse(fn.arguments)) : {};
     } catch {
       args = { _raw: fn.arguments };
     }
@@ -394,9 +475,14 @@ function normalizeToolCalls(rawToolCalls) {
 /**
  * Parse an SSE streaming response from an OpenAI-compatible endpoint.
  * Emits delta events via onDelta and returns the unified completion shape.
+ *
+ * @param {Response} res
+ * @param {(delta: StreamDelta) => void} onDelta
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<ChatCompletion>}
  */
 async function parseSSEStream(res, onDelta, signal) {
-  const reader = res.body.getReader();
+  const reader = /** @type {ReadableStream<Uint8Array>} */ (res.body).getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   const onAbort = () => {
@@ -406,17 +492,21 @@ async function parseSSEStream(res, onDelta, signal) {
 
   let content = "";
   let reasoning = "";
-  /** @type {Map<number, {id, name, args}>} */
+  /** @type {Map<number, StreamToolCallAccumulator>} */
   const toolCalls = new Map();
+  /** @type {string | null} */
   let finishReason = null;
+  /** @type {ChatUsage | null} */
   let usage = null;
 
+  /** @param {string} line */
   const handleLine = (line) => {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith(":")) return; // blank or comment
     if (!trimmed.startsWith("data:")) return; // ignore event:/id: lines
     const payload = trimmed.slice(5).trim();
     if (payload === "[DONE]") return;
+    /** @type {OpenAIResponse} */
     let chunk;
     try {
       chunk = JSON.parse(payload);
@@ -437,8 +527,9 @@ async function parseSSEStream(res, onDelta, signal) {
       onDelta({ type: "reasoning", text: delta.reasoning_content });
     }
     if (Array.isArray(delta.tool_calls)) {
-      for (const tc of delta.tool_calls) {
-        const idx = tc.index ?? 0;
+      for (const rawTc of delta.tool_calls) {
+        const tc = /** @type {OpenAIStreamToolCallDelta} */ (rawTc);
+        const idx = typeof tc.index === "number" ? tc.index : 0;
         const existing = toolCalls.get(idx) || { id: null, name: null, args: "" };
         if (tc.id) {
           existing.id = tc.id;
@@ -472,8 +563,8 @@ async function parseSSEStream(res, onDelta, signal) {
     // Flush any trailing line.
     if (buffer.trim()) handleLine(buffer.replace(/\r$/, ""));
   } catch (err) {
-    if (signal?.aborted) throw abortReason(signal, err);
-    throw new Error(`GLM stream interrupted: ${err?.message || err}. Partial content may have been received (${content.length} chars).`);
+    if (signal?.aborted) throw abortReason(signal, errorForAbort(err));
+    throw new Error(`GLM stream interrupted: ${errorMessage(err)}. Partial content may have been received (${content.length} chars).`);
   } finally {
     if (signal) signal.removeEventListener("abort", onAbort);
     try { reader.releaseLock(); } catch {}
@@ -481,11 +572,13 @@ async function parseSSEStream(res, onDelta, signal) {
 
   onDelta({ type: "done", finish_reason: finishReason });
 
+  /** @type {ToolCall[]} */
   const calls = [];
   for (const [, tc] of [...toolCalls].sort((a, b) => a[0] - b[0])) {
+    /** @type {Record<string, unknown>} */
     let args = {};
     try {
-      args = tc.args ? JSON.parse(tc.args) : {};
+      args = tc.args ? /** @type {Record<string, unknown>} */ (JSON.parse(tc.args)) : {};
     } catch {
       args = { _raw: tc.args };
     }
@@ -506,6 +599,11 @@ async function parseSSEStream(res, onDelta, signal) {
   };
 }
 
+/**
+ * @param {unknown} text
+ * @param {number} max
+ * @returns {string}
+ */
 function truncateBody(text, max) {
   const s = String(text ?? "");
   return s.length <= max ? s : s.slice(0, max) + "…";
@@ -513,14 +611,18 @@ function truncateBody(text, max) {
 
 /**
  * List models at the configured provider (for `doctor`).
+ *
+ * @param {ProviderConfig} [config]
+ * @returns {Promise<string[]>}
  */
 export async function listModels(config) {
   const cfg = config || await resolveProviderConfig();
   const url = `${cfg.baseURL}/models`;
+  /** @type {Record<string, string>} */
   const headers = {};
   if (cfg.apiKey) headers.Authorization = `Bearer ${cfg.apiKey}`;
   const res = await fetchWithRetry(url, { headers }, { timeout: cfg.timeout, maxRetries: cfg.maxRetries });
   if (!res.ok) throw new Error(`list models failed: ${res.status}`);
-  const data = await res.json();
-  return (data.data || data.models || []).map((m) => m.id || m.name).filter(Boolean);
+  const data = /** @type {OpenAIResponse} */ (await res.json());
+  return /** @type {string[]} */ ((data.data || data.models || []).map((m) => m.id || m.name).filter(Boolean));
 }

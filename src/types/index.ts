@@ -96,7 +96,8 @@ export type StreamDelta =
 
 export interface ToolCall {
   id: string;
-  name: string;
+  type?: "function";
+  name?: string | null;
   arguments: Record<string, unknown>;
 }
 
