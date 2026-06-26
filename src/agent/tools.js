@@ -1,3 +1,4 @@
+// @ts-check
 // Tool layer for the GLM agent. Each tool is an OpenAI function spec plus a
 // handler. Handlers run sandboxed to the project cwd unless explicitly escaped.
 import { readFile, writeFile, readdir } from "node:fs/promises";
@@ -10,7 +11,18 @@ import { abortReason, boundedTimeoutMs, isDeadlineError, throwIfAborted } from "
 
 const execP = promisify(exec);
 
+/**
+ * @typedef {import("../types/index.js").ToolSpec} ToolSpec
+ * @typedef {{ signal?: AbortSignal, throwIfExpired?: () => void, remainingMs?: () => number }} ToolDeadline
+ * @typedef {{ signal?: AbortSignal, deadline?: ToolDeadline }} ToolRuntime
+ * @typedef {{ cwd: string, runtime?: ToolRuntime }} ToolContext
+ * @typedef {{ code?: number, stdout?: string, stderr?: string, message?: string }} ExecFailure
+ * @typedef {string | { __finish: true, summary: string }} ToolHandlerResult
+ * @typedef {{ read_file(args: { path: string, offset?: number, limit?: number }, ctx: ToolContext): Promise<ToolHandlerResult>, write_file(args: { path: string, content?: string }, ctx: ToolContext): Promise<ToolHandlerResult>, patch_file(args: { path: string, old_string: string, new_string: string, replace_all?: boolean }, ctx: ToolContext): Promise<ToolHandlerResult>, list_dir(args: { path?: string }, ctx: ToolContext): Promise<ToolHandlerResult>, grep(args: { pattern: string, path?: string, glob?: string }, ctx: ToolContext): Promise<ToolHandlerResult>, run_shell(args: { command: string, timeout?: number }, ctx: ToolContext): Promise<ToolHandlerResult>, finish(args: { summary?: string }, ctx: ToolContext): Promise<ToolHandlerResult> }} ToolHandlers
+ */
+
 // --- Tool specs (OpenAI function-calling schema) ---
+/** @type {ToolSpec[]} */
 export const TOOL_SPECS = [
   {
     type: "function",
@@ -136,6 +148,7 @@ export const TOOL_NAMES = TOOL_SPECS.map((t) => t.function.name);
 
 // --- Handlers ---
 // ctx = { cwd, runtime }
+/** @type {ToolHandlers} */
 export const TOOL_HANDLERS = {
   async read_file({ path, offset, limit }, ctx) {
     const abs = resolvePath(path, ctx.cwd);
@@ -198,17 +211,19 @@ export const TOOL_HANDLERS = {
       const args = ["-n", "-H"];
       if (glob) args.push("-g", glob);
       args.push("--", pattern, root);
+      /** @type {{ maxBuffer: number, signal?: AbortSignal, timeout?: number }} */
       const execOptions = { maxBuffer: 4 * 1024 * 1024 };
       if (signal) execOptions.signal = signal;
       const remaining = deadline?.remainingMs?.();
-      if (Number.isFinite(remaining)) execOptions.timeout = Math.max(1, remaining);
+      if (typeof remaining === "number" && Number.isFinite(remaining)) execOptions.timeout = Math.max(1, remaining);
       const { stdout } = await execP(`rg ${args.map(shellQuote).join(" ")}`, execOptions);
       return truncate(stdout || "(no matches)", 8000);
     } catch (err) {
-      if (isDeadlineError(err) || signal?.aborted) throw abortReason(signal, err);
-      if (err.stdout !== undefined) {
+      if (isDeadlineError(err) || signal?.aborted) throw abortReason(signal, errorForAbort(err));
+      const execErr = /** @type {ExecFailure} */ (err);
+      if (execErr.stdout !== undefined) {
         // rg returns exit 1 on no matches — that's fine
-        if (err.code === 1 || err.code === 2) return truncate(err.stdout || "(no matches)", 8000);
+        if (execErr.code === 1 || execErr.code === 2) return truncate(execErr.stdout || "(no matches)", 8000);
       }
     }
     return jsGrep(pattern, root, glob, signal, deadline);
@@ -230,9 +245,10 @@ export const TOOL_HANDLERS = {
       const out = [stdout, stderr].filter(Boolean).join("\n");
       return truncate(out || "(no output)", 12000);
     } catch (err) {
-      if (isDeadlineError(err) || signal?.aborted) throw abortReason(signal, err);
-      const out = [err.stdout, err.stderr, err.message].filter(Boolean).join("\n");
-      return `Command exited ${err.code ?? "?"}:\n${truncate(out, 12000)}`;
+      if (isDeadlineError(err) || signal?.aborted) throw abortReason(signal, errorForAbort(err));
+      const execErr = /** @type {ExecFailure} */ (err);
+      const out = [execErr.stdout, execErr.stderr, execErr.message].filter(Boolean).join("\n");
+      return `Command exited ${execErr.code ?? "?"}:\n${truncate(out, 12000)}`;
     }
   },
 
@@ -241,18 +257,40 @@ export const TOOL_HANDLERS = {
   },
 };
 
+/**
+ * @param {unknown} err
+ */
+function errorForAbort(err) {
+  return /** @type {Error | undefined} */ (err);
+}
+
+/**
+ * @param {unknown} s
+ */
 function shellQuote(s) {
   return `'${String(s).replace(/'/g, "'\\''")}'`;
 }
 
+/**
+ * @param {string} pattern
+ * @param {string} root
+ * @param {string | undefined} glob
+ * @param {AbortSignal | undefined} signal
+ * @param {ToolDeadline | undefined} deadline
+ */
 async function jsGrep(pattern, root, glob, signal, deadline) {
   const re = new RegExp(pattern);
+  /** @type {string[]} */
   const results = [];
+  /** @type {Set<string>} */
   const seen = new Set();
   const checkAbort = () => {
     deadline?.throwIfExpired?.();
     throwIfAborted(signal);
   };
+  /**
+   * @param {string} dir
+   */
   async function walk(dir) {
     checkAbort();
     let entries;
@@ -289,6 +327,10 @@ async function jsGrep(pattern, root, glob, signal, deadline) {
   return truncate(results.join("\n") || "(no matches)", 8000);
 }
 
+/**
+ * @param {string} name
+ * @param {string} glob
+ */
 function minimatch(name, glob) {
   // minimal glob: handle * and exact suffix
   const g = glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");

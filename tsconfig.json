@@ -11,6 +11,6 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "src/agent/router.js", "src/agent/provider.js"],
+  "include": ["src/**/*.ts", "src/agent/router.js", "src/agent/provider.js", "src/agent/tools.js"],
   "exclude": ["node_modules", "test", "dist"]
 }
