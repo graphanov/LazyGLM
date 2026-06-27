@@ -143,7 +143,8 @@ export class Context {
     const tail = rest.slice(tailStart);
     const dropped = rest.slice(1, tailStart); // everything between task and recent tail
 
-    const { decisions: newDecisions, overridden } = extractDecisions(dropped);
+    const existingDecisions = this.getDecisions();
+    const { decisions: newDecisions, overridden } = extractDecisions(dropped, existingDecisions);
     // An override in the current dropped slice supersedes decisions retained
     // from earlier compactions too: a user correction ("Actually use SQLite")
     // must evict a choice ("I decided to use Postgres") persisted in a prior
@@ -151,7 +152,8 @@ export class Context {
     // Compaction normally runs right after a new user turn, so the override is
     // typically in the retained tail (not `dropped`); scan the tail for override
     // cues as well so a live correction evicts persisted decisions.
-    const tailOverridden = tail.some(isOverrideTurn);
+    const activeDecisions = [...existingDecisions, ...newDecisions];
+    const tailOverridden = tail.some((m) => isOverrideTurn(m, activeDecisions));
     if (overridden || tailOverridden) this.decisions.length = 0;
     // When the override is live in the retained tail, every decision extracted
     // from `dropped` predates the correction and is therefore superseded. Skip
@@ -233,6 +235,15 @@ const RATHER_REPLACEMENT_CUE = /\brather\b.*\b(?:use|switch to|change to|prefer|
 const SECOND_THOUGHT_REPLACEMENT_CUE = /\bon second thought\b.*\b(?:use|switch to|change to|prefer|go with|replace|decision|choice|approach|plan|design|rationale)\b/i;
 const NEVERMIND_REPLACEMENT_CUE = /\bnever ?mind\b.*\b(?:use|switch to|change to|prefer|go with|replace|decision|choice|approach|plan|design|rationale)\b/i;
 const DISCARD_DECISION_CUE = /\b(?:scrap|redo|revert)\b.*\b(?:decision|choice|approach|plan|design|rationale)\b|\b(?:decision|choice|approach|plan|design|rationale)\b.*\b(?:scrap|redo|revert)\b/i;
+const NEGATED_REPLACEMENT_TARGET_CUES = [
+  /\b(?:do not|don't|dont)\s+(?:use|replace|prefer|go with)\s+([^.;,\n]+?)(?=\s+instead\b|[.;,\n]|$)/i,
+  /\b(?:do not|don't|dont)\s+(?:switch|change)\s+to\s+([^.;,\n]+?)(?=\s+instead\b|[.;,\n]|$)/i,
+  /\b(?:no|not|without)\s+(?:replacement|use|switch\s+to|change\s+to|preference)\s+(?:of\s+|for\s+)?([^.;,\n]+?)(?=\s+instead\b|[.;,\n]|$)/i,
+];
+const PRESERVE_TARGET_CUES = [
+  /\b(?:keep|preserve|retain|stick with|stay with|leave)\s+([^.;,\n]+?)(?=[.;,\n]|$)/i,
+];
+const PRONOUN_CHOICE_TARGETS = new Set(["it", "that", "this", "them"]);
 
 const OVERRIDE_CUES = [
   // `actually` is only an override when it introduces a replacement target;
@@ -276,20 +287,58 @@ function hasPositiveReplacementCue(content) {
     || DISCARD_DECISION_CUE.test(content);
 }
 
-function isPreserveChoiceTurn(content) {
+function normalizeChoiceTarget(value) {
+  return String(value || "")
+    .replace(/[`"']/g, "")
+    .replace(/^\s*(?:the|a|an|current|existing|prior|previous|same)\s+/i, "")
+    .replace(/\s+/g, " ")
+    .replace(/[.!?;:,]+$/g, "")
+    .trim()
+    .toLowerCase();
+}
+
+function firstChoiceTarget(content, cues) {
+  for (const cue of cues) {
+    const match = cue.exec(content);
+    const target = normalizeChoiceTarget(match?.[1]);
+    if (target) return target;
+  }
+  return "";
+}
+
+function isPronounChoiceTarget(target) {
+  return PRONOUN_CHOICE_TARGETS.has(target);
+}
+
+function decisionsMentionChoice(decisions, target) {
+  if (!target || isPronounChoiceTarget(target)) return false;
+  return decisions.some((decision) => normalizeChoiceTarget(decision).includes(target));
+}
+
+function isNegatedReplacementOverride(content, activeDecisions = []) {
+  const negatedTarget = firstChoiceTarget(content, NEGATED_REPLACEMENT_TARGET_CUES);
+  const preservedTarget = firstChoiceTarget(content, PRESERVE_TARGET_CUES);
+  if (!negatedTarget || !preservedTarget) return false;
+  if (negatedTarget === preservedTarget || isPronounChoiceTarget(preservedTarget)) return false;
+  return decisionsMentionChoice(activeDecisions, negatedTarget);
+}
+
+function isPreserveChoiceTurn(content, activeDecisions = []) {
   // "No change to ..." and "do not change to ..." preserve the current choice;
   // negated replacement/use wording does too when paired with explicit keep/retain
-  // language ("Don't replace Postgres; keep it"). Preserve-current phrasing
-  // without a positive replacement target ("I'd rather keep Postgres") also
-  // must not clear the durable Decisions & rationale store.
+  // language ("Don't replace Postgres; keep it"). If the negated target matches
+  // an active prior decision while keep/retain names a different target, the user
+  // is rejecting the old choice and the decision must be evicted instead.
+  if (isNegatedReplacementOverride(content, activeDecisions)) return false;
   return NEGATED_CHANGE_TO_CUE.test(content)
     || (NEGATED_REPLACEMENT_CUE.test(content) && PRESERVE_CHOICE_CUE.test(content))
     || (PRESERVE_CHOICE_CUE.test(content) && !hasPositiveReplacementCue(content));
 }
 
-function isOverrideTurn(m) {
+function isOverrideTurn(m, activeDecisions = []) {
   if (m.role !== "user" || typeof m.content !== "string") return false;
-  if (isPreserveChoiceTurn(m.content)) return false;
+  if (isPreserveChoiceTurn(m.content, activeDecisions)) return false;
+  if (isNegatedReplacementOverride(m.content, activeDecisions)) return true;
   return OVERRIDE_CUES.some((cue) => cue.test(m.content));
 }
 
@@ -316,7 +365,7 @@ function extractSentences(text) {
   return normalized.match(/.+?(?:[.!?](?=\s|$)|$)(?:\s|$)*/gsu) || [normalized];
 }
 
-function extractDecisions(dropped) {
+function extractDecisions(dropped, existingDecisions = []) {
   const decisions = [];
   const seen = new Set();
   let overridden = false;
@@ -328,7 +377,8 @@ function extractDecisions(dropped) {
     // "I decided to use Postgres." then user "Actually use SQLite"). Decisions
     // emitted after the override are retained. `overridden` also lets the caller
     // evict decisions persisted from earlier compaction passes.
-    if (isOverrideTurn(m)) {
+    const activeDecisions = [...existingDecisions, ...decisions];
+    if (isOverrideTurn(m, activeDecisions)) {
       decisions.length = 0;
       seen.clear();
       overridden = true;
@@ -372,7 +422,8 @@ function buildDigest(dropped, prevDecisions = [], { suppressDecisionNotes = fals
   };
 
   for (const m of dropped) {
-    if (isOverrideTurn(m)) {
+    const activeDecisionNotes = notes.filter((note) => note.isDecision).map((note) => note.text);
+    if (isOverrideTurn(m, activeDecisionNotes)) {
       // If a user correction is in the dropped slice, decision sentences before
       // it are superseded not only in Decisions & rationale but also in Agent
       // notes. Keep non-decision operational notes; drop only the rejected
