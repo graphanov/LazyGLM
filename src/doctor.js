@@ -8,7 +8,7 @@ import { loadPlugins } from "./plugins/index.js";
 import { loadSkills, listSkillNames } from "./skills/index.js";
 import { loadUserConfig } from "./config.js";
 import { parseMcpServers, mcpServersSummary } from "./mcp/config.js";
-import { CONTEXT_BUDGET_FACTOR, resolveContextBudget } from "./agent/router.js";
+import { CONTEXT_BUDGET_FACTOR, resolveContextBudget, findCatalogModelEntry } from "./agent/router.js";
 import { readJson } from "./util.js";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
@@ -104,7 +104,8 @@ export async function doctor({ cwd } = {}) {
   // context budget: catalog-derived soft budget, with env override support.
   const contextModel = cfg.model || cfg.modelId;
   const contextBudget = resolveContextBudget(contextModel, catalog);
-  const contextWindow = catalog.models?.[contextModel]?.context_window || catalog.models?.[contextModel]?.context;
+  const contextEntry = findCatalogModelEntry(contextModel, catalog);
+  const contextWindow = contextEntry?.context_window || contextEntry?.context;
   const hasContextOverride = !!process.env.LAZYGLM_CONTEXT_BUDGET;
   if (contextWindow) {
     const percent = Math.round(CONTEXT_BUDGET_FACTOR * 100);

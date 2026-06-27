@@ -88,7 +88,7 @@ export function resolveContextBudget(model, catalog = {}, env = process.env) {
  * @param {ModelCatalog} [catalog]
  * @returns {ModelCatalogEntry | null}
  */
-function findCatalogModelEntry(model, catalog = {}) {
+export function findCatalogModelEntry(model, catalog = {}) {
   if (!model) return null;
   const direct = catalog.models?.[model];
   if (direct) return direct;

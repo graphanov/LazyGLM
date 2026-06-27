@@ -658,6 +658,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
           model: currentModel,
           role: "ultrabrain",
           config: providerConfig,
+          budget: contextBudget,
           completionPromise,
           verifyCommand,
           maxIterations: 3,
