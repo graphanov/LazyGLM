@@ -242,7 +242,7 @@ const NEGATED_REPLACEMENT_TARGET_CUES = [
 const PRESERVE_TARGET_CUES = [
   /\b(?:keep|preserve|retain|stick with|stay with|leave)\s+([^.;,\n]+?)(?=[.;,\n]|$)/i,
 ];
-const NEUTRAL_ACTION_USE_CUE = /\bactually\b.*\buse\s+(`[^`]+`|[^.;,\n]+?)\s+to\s+(?:verify|test|run|check|build|lint|format|inspect|update|edit|modify|write|patch|create|delete|read|open)\b/i;
+const NEUTRAL_ACTION_USE_CUE = /\bactually\b.*\buse\s+(`[^`]+`|[^.;,\n]+?)\s+to\s+(?:verify|test|run|check|build|lint|format|inspect|update|edit|modify|write|patch|create|delete|read|open|search|find|look)\b/i;
 const COMMANDISH_REPLACEMENT_TARGET_CUE = /^(?:`(?:(?:npm|pnpm|yarn|node|npx|git|gh|python3?|pytest|go|cargo|make|cmake|bash|sh)\s+[^`]+|[a-z][a-z0-9]*_[a-z0-9_]+)`|(?:npm|pnpm|yarn|node|npx|git|gh|python3?|pytest|go|cargo|make|cmake|bash|sh)\s+\S+|[a-z][a-z0-9]*_[a-z0-9_]+\b)/i;
 const ONE_WORD_TOOL_ACTION_TARGET_CUE = /^(?:`)?(?:rg|ripgrep|tsc|eslint|prettier|biome|ruff|mypy|grep|fd|jq)(?:`)?$/;
 const ARTICLE_ACTION_TARGET_CUE = /^(?:`)?(?:the|a|an|this|that|these|those)\s+\S+/i;
@@ -329,11 +329,21 @@ function isNeutralShortInsteadTurn(content) {
 
 function isNeutralActionUseTurn(content) {
   const target = NEUTRAL_ACTION_USE_CUE.exec(content)?.[1]?.trim() || "";
-  return Boolean(target && (
-    COMMANDISH_REPLACEMENT_TARGET_CUE.test(target)
-      || ONE_WORD_TOOL_ACTION_TARGET_CUE.test(target)
-      || ARTICLE_ACTION_TARGET_CUE.test(target)
-  ));
+  if (!target) return false;
+  if (COMMANDISH_REPLACEMENT_TARGET_CUE.test(target)
+      || ONE_WORD_TOOL_ACTION_TARGET_CUE.test(target)) return true;
+  // An article-prefixed target is neutral when it names a generic artifact
+  // ("the test suite", "a config file") or an all-caps file/acronym ("the
+  // README", "the JSON schema"). A title-case technology/approach name after
+  // the article ("a Svelte frontend", "the Rust port") is a real replacement
+  // target that should evict a prior decision, not preserve it.
+  if (ARTICLE_ACTION_TARGET_CUE.test(target)) {
+    const afterArticle = target.replace(/^(?:`)?(?:the|a|an|this|that|these|those)\s+/i, "");
+    const firstWord = afterArticle.split(/\s/)[0] || "";
+    if (/^[A-Z][a-z]/.test(firstWord)) return false;
+    return true;
+  }
+  return false;
 }
 
 function isPronounChoiceTarget(target) {

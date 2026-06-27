@@ -582,6 +582,53 @@ test("actually use technology swap drops superseded decisions", async () => {
   assert.doesNotMatch(block, /React/i, "an actually-use technology swap must evict superseded decisions");
 });
 
+test("neutral search/find tool-action requests do not drop decisions", async () => {
+  // Regression for the P2 finding: search/find/look verbs were missing from
+  // the neutral-action list, so "Actually use rg to search the repo" matched
+  // ACTUALLY_REPLACEMENT_CUE and evicted all decisions instead of being treated
+  // as a neutral tool/action request.
+  for (const request of [
+    "Actually use rg to search the repo.",
+    "Actually use fd to find the config.",
+    "Actually use grep to look for imports.",
+  ]) {
+    const ctx = new Context({ budget: 1 });
+    ctx.addDecision("I decided to use Postgres for persistence.");
+    ctx.setSystem("system prompt");
+    ctx.push({ role: "user", content: "the task" });
+    ctx.push({ role: "user", content: request });
+    pushRecentTail(ctx, "filler", 13);
+
+    await ctx.maybeCompact();
+    const summary = latestCompactionSummary(ctx);
+    const block = decisionsBlock(summary);
+
+    assert.match(
+      block,
+      /I decided to use Postgres for persistence\./,
+      `an actually-use search/find request must not evict decisions: ${request}`,
+    );
+  }
+});
+
+test("article-prefixed technology swap drops superseded decisions", async () => {
+  // Regression for the P2 finding: "Actually use a Svelte frontend to build the
+  // UI" was classified as neutral because ARTICLE_ACTION_TARGET_CUE matched the
+  // article prefix, preserving the stale prior decision instead of evicting it.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use React for the UI." });
+  ctx.push({ role: "user", content: "Actually use a Svelte frontend to build the UI." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.doesNotMatch(block, /React/i, "an article-prefixed technology swap must evict superseded decisions");
+});
+
 test("neutral replace edit request does not drop decisions", async () => {
   // Regression for the P2 finding: plain /\breplace\b/i matched ordinary edit
   // requests ("replace the README placeholder"), clearing persisted rationale
