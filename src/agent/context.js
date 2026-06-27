@@ -251,6 +251,16 @@ const RATHER_REPLACEMENT_CUE = /\brather\b.*\b(?:use|switch to|change to|prefer|
 const RATHER_THAN_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go\s+with)\s+([^.;,\n]+?)\s+rather\s+than\s+([^.;,\n]+?)(?=\s+(?:because|since|as|in|for|on|during|when|while|where|under|with)\b|\s+(?:but|and)\s+(?:(?:do not|don't|dont|not|never)\s+)?(?:keep|preserve|retain|stick with|stay with|leave|update|edit|modify|write|patch|create|delete|read|open|run|rerun|test|verify|check|build|lint|format|fix)\b|[.;,\n]|$)/i;
 const SECOND_THOUGHT_REPLACEMENT_CUE = /\bon second thought\b.*\b(?:use|switch to|change to|prefer|go with|replace|scrap|redo|revert)\b/i;
 const NEVERMIND_REPLACEMENT_CUE = /\bnever ?mind\b.*\b(?:use|switch to|change to|prefer|go with|replace|decision|choice|approach|plan|design|rationale)\b/i;
+// Bare imperative choice replacement: "Use SQLite.", "Switch to Redis.", "Prefer Bun."
+// without an instead/rather/actually qualifier. This only evicts prior decisions
+// that affirm a *different* technology choice via the USE_CHOICE_FROM_DECISION_CUE
+// below, so it is safe from false positives on first-time choices and neutral
+// action requests ("use the test suite to verify" → isNeutralReplacementTarget).
+const BARE_CHOICE_IMPERATIVE_CUE = /^\s*(?:use|switch\s+to|change\s+to|prefer|go\s+with)\s+([^.;,\n]+?)\s*(?:because\s+|since\s+|but\s+|and\s+|for\s+|to\s+|in\s+)[^.;,\n]*[.;,\n]?\s*$|^\s*(?:use|switch\s+to|change\s+to|prefer|go\s+with)\s+([^.;,\n]+?)[.;,\n]?\s*$/i;
+// Extract a technology choice from an assistant decision sentence: "I decided to
+// use Postgres for persistence" → "Postgres", "chose SQLite" → "SQLite". The
+// decision text is the affirming statement; this captures the choice it names.
+const USE_CHOICE_FROM_DECISION_CUE = /\b(?:decided?\s+to\s+)?(?:use|using|chose|choosing|prefer|preferring|going\s+with|go\s+with|switch(?:ing)?\s+to|chang(?:e|ing)\s+to)\s+([^.;,\n]+?)(?=\s+(?:for|because|since|as|to|in|on|during|when|while|where|under|with|but|and)\b|[.;,\n]|$)/i;
 const DISCARD_DECISION_CUE = /\b(?:scrap|redo|revert)\b.*\b(?:decision|choice|approach|plan|design|rationale)\b|\b(?:decision|choice|approach|plan|design|rationale)\b.*\b(?:scrap|redo|revert)\b/i;
 const NEGATED_REPLACEMENT_TARGET_CUES = [
   /\b(?:do not|don't|dont)\s+(?:use|replace|prefer|go with)\s+([^.;,\n]+?)(?=\s+(?:because\b|since\b|as\b|instead\b|(?:but|and)\s+(?:use|switch|change|prefer|go with|keep\s+going|continue|carry\s+on|move\s+on|proceed)\b)|[.;,\n]|$)/i,
@@ -446,6 +456,49 @@ function ratherThanOldChoiceTargets(content, activeDecisions = []) {
   return decisionsMentionChoice(activeDecisions, replacedTarget) ? [replacedTarget] : [];
 }
 
+// A terse imperative like "Use SQLite." or "Switch to Redis." with no
+// instead/rather/actually qualifier. It is an override only when an active
+// decision affirms a *different* technology choice — the new target names what
+// to use instead, and the prior decision's affirmed choice is the rejected one.
+// This mirrors the targeted eviction path so the superseded decision is evicted
+// precisely without clearing unrelated decisions.
+function bareUseReplacementTargets(content, activeDecisions = []) {
+  // Skip when an explicit qualifier is present: those are handled by the
+  // instead-of / rather-than / actually / second-thought / nevermind / discard
+  // paths above, which name the old target explicitly. The bare path only
+  // catches terse corrections like "Use SQLite." with no qualifier at all.
+  if (/\b(?:instead|rather|actually|second thought|never ?mind|scrap|redo|revert|replace)\b/i.test(content)) return [];
+  const match = BARE_CHOICE_IMPERATIVE_CUE.exec(content);
+  const rawTarget = match?.[1] || match?.[2] || "";
+  const newTarget = normalizeChoiceTarget(rawTarget);
+  if (!newTarget) return [];
+  // Neutral action targets ("use the test suite to verify", "use npm run test")
+  // are routine requests, not technology overrides.
+  if (isNeutralReplacementTarget(rawTarget.trim())) return [];
+  if (GENERIC_ARTIFACT_NOUNS.has(newTarget)) return [];
+  // Find prior decisions that affirm a *different* technology choice. A decision
+  // like "I decided to use Postgres for persistence." affirms Postgres; if the
+  // user now says "Use SQLite." the Postgres decision is superseded.
+  const oldTargets = [];
+  for (const decision of activeDecisions) {
+    const choiceMatch = USE_CHOICE_FROM_DECISION_CUE.exec(decision);
+    if (!choiceMatch) continue;
+    const rawOldTarget = choiceMatch[1].trim();
+    // Only treat the old affirmed target as a technology choice when its first
+    // word is a proper noun (capitalized) and not a generic concept extracted
+    // from "use the factory pattern" or "use an event-driven approach".
+    const firstWord = rawOldTarget.split(/\s+/)[0];
+    if (!/^[A-Z]/.test(firstWord)) continue;
+    if (GENERIC_ARTIFACT_NOUNS.has(firstWord.toLowerCase())) continue;
+    const oldTarget = normalizeChoiceTarget(rawOldTarget);
+    if (!oldTarget || oldTarget === newTarget) continue;
+    // Only evict when the old decision actually affirms the old choice (not a
+    // negation like "decided not to use Postgres").
+    if (decisionAffirmsTarget(decision, oldTarget)) oldTargets.push(oldTarget);
+  }
+  return oldTargets;
+}
+
 function isNegatedReplacementOverride(content, activeDecisions = []) {
   return negatedReplacementOverrideTargets(content, activeDecisions).length > 0;
 }
@@ -472,6 +525,7 @@ function targetedOverrideTargets(content, activeDecisions = []) {
     ...negatedReplacementOverrideTargets(content, activeDecisions),
     ...insteadOfOldChoiceTargets(content, activeDecisions),
     ...ratherThanOldChoiceTargets(content, activeDecisions),
+    ...bareUseReplacementTargets(content, activeDecisions),
   ])];
 }
 

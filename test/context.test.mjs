@@ -1097,6 +1097,67 @@ test("\"rather than\" replacement does not evict unrelated decisions", async () 
   assert.match(block, /React/i, "unrelated React decision must survive a targeted rather-than override");
 });
 
+test("bare imperative replacement drops superseded decisions", async () => {
+  // Regression for the P2 finding: a terse user correction like "Use SQLite."
+  // without an instead/rather/actually qualifier did not fire any override cue,
+  // so a prior "I decided to use Postgres for persistence." decision survived in
+  // the handoff digest and could steer the agent back to the old choice.
+  for (const [overrideMessage, oldDecision] of [
+    ["Use SQLite.", "I decided to use Postgres for persistence."],
+    ["Switch to Redis.", "I decided to use Postgres for persistence."],
+    ["Prefer Bun.", "I decided to use Node for the runtime."],
+    ["Go with Postgres.", "I decided to use SQLite for persistence."],
+  ]) {
+    const ctx = new Context({ budget: 1 });
+    ctx.setSystem("system prompt");
+    ctx.push({ role: "user", content: "the task" });
+    ctx.push({ role: "assistant", content: oldDecision });
+    ctx.push({ role: "user", content: overrideMessage });
+    pushRecentTail(ctx, "filler", 13);
+
+    await ctx.maybeCompact();
+    const summary = latestCompactionSummary(ctx);
+    const block = decisionsBlock(summary);
+
+    assert.doesNotMatch(
+      block,
+      /Postgres/i,
+      `bare imperative replacement must evict superseded decisions; message=${overrideMessage}`,
+    );
+  }
+});
+
+test("bare imperative does not evict same-target or unrelated decisions", async () => {
+  // The bare override is targeted: it only evicts a prior decision affirming a
+  // *different* technology choice. A reaffirmation ("Use Postgres." when the
+  // decision already mentions Postgres) must keep the decision, and an unrelated
+  // non-technology decision must survive too.
+  {
+    const ctx = new Context({ budget: 1 });
+    ctx.setSystem("system prompt");
+    ctx.push({ role: "user", content: "the task" });
+    ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+    ctx.push({ role: "user", content: "Use Postgres." });
+    pushRecentTail(ctx, "filler", 13);
+
+    await ctx.maybeCompact();
+    const block = decisionsBlock(latestCompactionSummary(ctx));
+    assert.match(block, /Postgres/i, "a same-target bare imperative must not evict the decision");
+  }
+  {
+    const ctx = new Context({ budget: 1 });
+    ctx.setSystem("system prompt");
+    ctx.push({ role: "user", content: "the task" });
+    ctx.push({ role: "assistant", content: "I decided to use the factory pattern for object creation." });
+    ctx.push({ role: "user", content: "Use SQLite." });
+    pushRecentTail(ctx, "filler", 13);
+
+    await ctx.maybeCompact();
+    const block = decisionsBlock(latestCompactionSummary(ctx));
+    assert.match(block, /factory/i, "a non-technology decision must survive a bare imperative override");
+  }
+});
+
 test("non-word technology names are matched in override targets", async () => {
   // Regression for the P2 finding: decisionMentionsTarget used \b...\b which
   // fails after non-word endpoints (C++, C#, F#, .NET). The rejected decision
