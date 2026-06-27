@@ -663,27 +663,33 @@ test("neutral use instead-of command request does not drop decisions", async () 
 test("choice instead-of wording drops superseded decisions", async () => {
   // Regression for the P2 finding: `Use SQLite instead of Postgres` names the
   // old active choice after `instead of`, so it must evict the Postgres rationale.
-  for (const persistOldDecision of [false, true]) {
-    const ctx = new Context({ budget: 1 });
-    ctx.setSystem("system prompt");
-    ctx.push({ role: "user", content: "the task" });
-    if (persistOldDecision) {
-      ctx.addDecision("I decided to use Postgres for persistence.");
-    } else {
-      ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  // Inline rationale after the old choice must not become part of the target.
+  for (const overrideMessage of [
+    "Use SQLite instead of Postgres.",
+    "Use SQLite instead of Postgres because it is simpler.",
+  ]) {
+    for (const persistOldDecision of [false, true]) {
+      const ctx = new Context({ budget: 1 });
+      ctx.setSystem("system prompt");
+      ctx.push({ role: "user", content: "the task" });
+      if (persistOldDecision) {
+        ctx.addDecision("I decided to use Postgres for persistence.");
+      } else {
+        ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+      }
+      ctx.push({ role: "user", content: overrideMessage });
+      pushRecentTail(ctx, "filler", 13);
+
+      await ctx.maybeCompact();
+      const summary = latestCompactionSummary(ctx);
+      const block = decisionsBlock(summary);
+
+      assert.doesNotMatch(
+        block,
+        /Postgres/i,
+        `choice instead-of wording must evict superseded decisions; persisted=${persistOldDecision}; message=${overrideMessage}`,
+      );
     }
-    ctx.push({ role: "user", content: "Use SQLite instead of Postgres." });
-    pushRecentTail(ctx, "filler", 13);
-
-    await ctx.maybeCompact();
-    const summary = latestCompactionSummary(ctx);
-    const block = decisionsBlock(summary);
-
-    assert.doesNotMatch(
-      block,
-      /Postgres/i,
-      `choice instead-of wording must evict superseded decisions; persisted=${persistOldDecision}`,
-    );
   }
 });
 
