@@ -19,6 +19,7 @@ import {
   formatToolResult,
   turnDivider,
   formatExitMarker,
+  resolveContextBudgetCommand,
   turnRule,
   turnStart,
   turnEnd,
@@ -215,6 +216,37 @@ test("REPL non-TTY turn echo uses raw displayText, not expanded skill body", () 
   const wrongEcho = turnStart(expandedBody, { isTTY: false });
   assert.ok(wrongEcho.includes("…"), "expanded body is long enough to trigger truncation");
   assert.ok(wrongEcho.includes("skill body"), "expanded body would leak into echo");
+});
+
+test("REPL context-budget command supports manual override and catalog reset", () => {
+  const catalog = {
+    models: {
+      "glm-5.2": { context_window: 1_000_000 },
+      "glm-4.7": { context_window: 200_000 },
+    },
+  };
+
+  const initial = resolveContextBudgetCommand("", { model: "glm-5.2", catalog });
+  assert.equal(initial.budget, 800_000);
+  assert.equal(initial.manualBudget, null);
+  assert.equal(initial.mode, "catalog");
+
+  const manual = resolveContextBudgetCommand("300_000", { model: "glm-5.2", catalog });
+  assert.equal(manual.budget, 300_000);
+  assert.equal(manual.manualBudget, 300_000);
+  assert.equal(manual.mode, "manual");
+
+  const retained = resolveContextBudgetCommand("", { model: "glm-4.7", catalog, manualBudget: manual.manualBudget });
+  assert.equal(retained.budget, 300_000);
+  assert.equal(retained.mode, "manual");
+
+  const reset = resolveContextBudgetCommand("auto", { model: "glm-4.7", catalog, manualBudget: manual.manualBudget });
+  assert.equal(reset.budget, 160_000);
+  assert.equal(reset.manualBudget, null);
+  assert.equal(reset.mode, "catalog");
+
+  const invalid = resolveContextBudgetCommand("0", { model: "glm-5.2", catalog });
+  assert.match(invalid.error, /context-budget/);
 });
 
 test.after(async () => {

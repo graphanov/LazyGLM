@@ -149,12 +149,12 @@ export async function pickModel(role = "default", options = {}, userConfig = nul
   const uc = userConfig ?? (await loadUserConfig());
   const provider = resolveProvider(options, catalog, uc);
 
-  // explicit --model wins, but still resolve to provider-specific ID.
-  // The persisted config-file model is an override of the catalog default only
-  // (role-specific models always win, so routing tiers are preserved).
+  // Explicit --model wins, followed by LAZYGLM_MODEL. The persisted config-file
+  // model is an override of the catalog default only (role-specific models
+  // still win, so routing tiers are preserved).
   /** @type {RoleModelConfig} */
   const roleEntry = catalog.roles?.[role] || catalog.roles?.default || {};
-  const canonical = options.model || roleEntry.model || uc?.model || catalog.current?.model || "glm-5.2";
+  const canonical = options.model || process.env.LAZYGLM_MODEL || roleEntry.model || uc?.model || catalog.current?.model || "glm-5.2";
   const modelId = resolveModelId(canonical, provider, catalog);
 
   return {

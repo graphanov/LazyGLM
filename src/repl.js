@@ -110,6 +110,29 @@ export function turnEnd({ isTTY = true } = {}) {
   return `${turnRule({ isTTY })}\n\n`;
 }
 
+export function parseContextBudgetInput(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const normalized = String(value).replace(/_/g, "");
+  const n = Number(normalized);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+export function resolveContextBudgetCommand(argStr, { model, catalog, manualBudget = null } = {}) {
+  const arg = String(argStr || "").trim();
+  const derivedBudget = () => resolveContextBudget(model, catalog);
+  if (!arg) {
+    const budget = manualBudget ?? derivedBudget();
+    return { budget, manualBudget, mode: manualBudget !== null ? "manual" : "catalog", action: "show" };
+  }
+  if (/^(auto|catalog|default)$/i.test(arg)) {
+    const budget = derivedBudget();
+    return { budget, manualBudget: null, mode: "catalog", action: "set" };
+  }
+  const parsed = parseContextBudgetInput(arg);
+  if (!parsed) return { error: "usage: /context-budget <positive-tokens|auto>" };
+  return { budget: parsed, manualBudget: parsed, mode: "manual", action: "set" };
+}
+
 const REPL_PERSONA = `You are LazyGLM, a terminal-based AI coding agent connected directly to the user's file system via a CLI.
 
 PERSONALITY:
@@ -383,7 +406,8 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
     process.exit(1);
   }
   let currentModel = providerConfig.modelId;
-  let contextBudget = resolveContextBudget(providerConfig.model, await loadCatalog());
+  let manualContextBudget = Number.isInteger(flags.contextBudget) && flags.contextBudget > 0 ? flags.contextBudget : null;
+  let contextBudget = manualContextBudget ?? resolveContextBudget(providerConfig.model, await loadCatalog());
 
   // 3. Auto-init the project dir silently (.lazyglm/ + AGENTS.md) if missing
   if (!existsSync(join(dir, ".lazyglm")) || !existsSync(join(dir, "AGENTS.md"))) {
@@ -479,6 +503,7 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
   /exit                 quit
   /clear                clear conversation (keep system prompt)
   /model <name>         switch model (e.g. glm-4.7-flash, glm-4.7, glm-5.2)
+  /context-budget <n>   override context budget; use auto to restore catalog-derived
   /status               show session, model, role/effort, timing, and token totals
   /cost                 show cumulative token spend (incl. reasoning)
   /compact              compact the context now
@@ -506,7 +531,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
           const nc = await resolveProviderConfig({ model: argStr, provider: flags.provider, role: "default" });
           providerConfig = nc;
           currentModel = nc.modelId;
-          contextBudget = resolveContextBudget(nc.model, await loadCatalog());
+          contextBudget = manualContextBudget ?? resolveContextBudget(nc.model, await loadCatalog());
           ctx.model = currentModel;
           ctx.budget = contextBudget;
           // A /model switch can change the provider (e.g. zai → ollama), which
@@ -518,6 +543,23 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
         } catch (e) {
           console.log(`${YELLOW}   ✗ ${e.message}${RESET}`);
         }
+        return;
+      }
+      case "context-budget": {
+        const res = resolveContextBudgetCommand(argStr, {
+          model: providerConfig.model,
+          catalog: await loadCatalog(),
+          manualBudget: manualContextBudget,
+        });
+        if (res.error) {
+          console.log(`${YELLOW}   ${res.error}${RESET}`);
+          return;
+        }
+        manualContextBudget = res.manualBudget;
+        contextBudget = res.budget;
+        ctx.budget = contextBudget;
+        const label = res.mode === "manual" ? "manual" : "catalog";
+        console.log(`${GREEN}   ✓ context budget: ${contextBudget.toLocaleString()} tokens (${label})${RESET}`);
         return;
       }
       case "cost":

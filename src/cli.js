@@ -26,6 +26,7 @@ Usage:
     --yolo                             Bypass all permission gates (auto everywhere)
     --model <name>                     GLM model (default: glm-5.2 via z.ai)
     --provider <zai|nous|ollama>       Backend (default: zai; ollama=keyless local)
+    --context-budget <tokens>          Override the catalog-derived soft context budget
   lazyglm run "<task>" [options]       Run the GLM agent on a task (one-shot, non-interactive)
   lazyglm install [--force]            Initialize .lazyglm/ + AGENTS.md in this project
   lazyglm uninstall                    Remove .lazyglm/ runtime state
@@ -42,6 +43,7 @@ Usage:
     --yolo                             Bypass all permission gates (auto everywhere)
     --max-turns <n>                    Max agent turns (default 80)
     --timeout <seconds>                Whole-run deadline (default 600; 0 disables)
+    --context-budget <tokens>          Override the catalog-derived soft context budget
     --max-reasoning-tokens <n>         Soft cap on cumulative reasoning tokens (0=unlimited)
     --ultrawork                        Verified-completion loop mode ($ulw-loop)
     --max-iterations <n>               Max Ultrawork iterations (default 3)
@@ -97,10 +99,15 @@ export async function main(argv) {
   // `lazyglm run "..."` stays the one-shot non-interactive path.
   if (!cmd || cmd === "chat" || (cmd.startsWith("--") && !["--version", "--help", "-v", "-h"].includes(cmd))) {
     const { flags } = parseFlags(cmd === "chat" ? rest : argv);
+    const contextBudget = parsePositiveIntegerFlag(flags["context-budget"], undefined, "--context-budget");
+    if (contextBudget.error) {
+      console.error(contextBudget.error);
+      return 1;
+    }
     const { launchREPL } = await import("./repl.js");
     return launchREPL({
       cwd: flags.cwd ? resolve(flags.cwd) : process.cwd(),
-      flags: { continue: !!flags.continue, yolo: !!flags.yolo, model: flags.model, provider: flags.provider },
+      flags: { continue: !!flags.continue, yolo: !!flags.yolo, model: flags.model, provider: flags.provider, contextBudget: contextBudget.value },
     });
   }
 
@@ -224,6 +231,8 @@ export async function main(argv) {
       if (reasoningBudget.error) return runUsageError(reasoningBudget.error, jsonMode);
       const timeoutSeconds = parseNonnegativeNumberFlag(flags.timeout, 600, "--timeout");
       if (timeoutSeconds.error) return runUsageError(timeoutSeconds.error, jsonMode);
+      const contextBudget = parsePositiveIntegerFlag(flags["context-budget"], undefined, "--context-budget");
+      if (contextBudget.error) return runUsageError(contextBudget.error, jsonMode);
 
       const cwd = flags.cwd ? resolve(flags.cwd) : process.cwd();
       const model = flags.model;
@@ -250,6 +259,7 @@ export async function main(argv) {
             verifyCommand,
             maxIterations: maxIterations.value,
             maxTurns: maxTurns.value,
+            budget: contextBudget.value,
             reasoningBudget: reasoningBudget.value,
             permissionMode,
             failOnToolBlock: jsonMode,
@@ -274,6 +284,7 @@ export async function main(argv) {
           role,
           plugins: loadPlugins(),
           maxTurns: maxTurns.value,
+          budget: contextBudget.value,
           reasoningBudget: reasoningBudget.value,
           permissionMode,
           failOnToolBlock: jsonMode,
@@ -329,7 +340,8 @@ export async function main(argv) {
 function parsePositiveIntegerFlag(value, defaultValue, name) {
   if (value === undefined) return { value: defaultValue };
   if (value === true) return { error: `${name} requires a value` };
-  const n = Number(value);
+  const normalized = typeof value === "string" ? value.replace(/_/g, "") : value;
+  const n = Number(normalized);
   if (!Number.isInteger(n) || n < 1) return { error: `${name} must be a positive integer` };
   return { value: n };
 }
@@ -337,7 +349,8 @@ function parsePositiveIntegerFlag(value, defaultValue, name) {
 function parseNonnegativeIntegerFlag(value, defaultValue, name) {
   if (value === undefined) return { value: defaultValue };
   if (value === true) return { error: `${name} requires a value` };
-  const n = Number(value);
+  const normalized = typeof value === "string" ? value.replace(/_/g, "") : value;
+  const n = Number(normalized);
   if (!Number.isInteger(n) || n < 0) return { error: `${name} must be a non-negative integer` };
   return { value: n };
 }

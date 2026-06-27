@@ -19,6 +19,7 @@ function restoreEnv(name, value) {
 async function withIsolatedHome(fn) {
   const savedHome = process.env.LAZYGLM_HOME;
   const savedProvider = process.env.LAZYGLM_PROVIDER;
+  const savedModel = process.env.LAZYGLM_MODEL;
   const savedBase = process.env.LAZYGLM_BASE_URL;
   const savedKey = process.env.LAZYGLM_API_KEY;
   const savedTimeout = process.env.LAZYGLM_TIMEOUT;
@@ -28,6 +29,7 @@ async function withIsolatedHome(fn) {
   try {
     process.env.LAZYGLM_HOME = home;
     process.env.LAZYGLM_PROVIDER = "ollama";
+    delete process.env.LAZYGLM_MODEL;
     delete process.env.LAZYGLM_BASE_URL;
     delete process.env.LAZYGLM_API_KEY;
     delete process.env.LAZYGLM_CONTEXT_BUDGET;
@@ -38,6 +40,7 @@ async function withIsolatedHome(fn) {
   } finally {
     restoreEnv("LAZYGLM_HOME", savedHome);
     restoreEnv("LAZYGLM_PROVIDER", savedProvider);
+    restoreEnv("LAZYGLM_MODEL", savedModel);
     restoreEnv("LAZYGLM_BASE_URL", savedBase);
     restoreEnv("LAZYGLM_API_KEY", savedKey);
     restoreEnv("LAZYGLM_TIMEOUT", savedTimeout);
@@ -78,6 +81,17 @@ test("doctor reports catalog-derived context budget and documented window", asyn
   });
 });
 
+test("doctor context budget follows the active LAZYGLM_MODEL override", async () => {
+  await withIsolatedHome(async () => {
+    process.env.LAZYGLM_MODEL = "glm-4.7";
+    const res = await doctor({ cwd: tmpdir() });
+    const context = findCheck(res, "context");
+    assert.ok(context, "doctor must include a 'context' check");
+    assert.equal(context.status, "ok");
+    assert.match(context.detail, /context budget: 160000 tokens/);
+    assert.match(context.detail, /glm-4\.7's 200000 token window/);
+  });
+});
 test("doctor warns when user config JSON is malformed before declaring MCP healthy", async () => {
   await withIsolatedHome(async (home) => {
     await writeFile(join(home, "config.json"), "{ bad json", "utf8");

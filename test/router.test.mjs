@@ -41,6 +41,18 @@ test("pickModel honors explicit --model override", async () => {
   assert.equal(m.modelId, "z-ai/glm-4.7");
 });
 
+test("pickModel honors LAZYGLM_MODEL as an env override", async () => {
+  const savedModel = process.env.LAZYGLM_MODEL;
+  try {
+    process.env.LAZYGLM_MODEL = "glm-4.7";
+    const m = await pickModel("default", { provider: "ollama" });
+    assert.equal(m.model, "glm-4.7");
+    assert.equal(m.modelId, "glm-4.7");
+  } finally {
+    restoreEnv("LAZYGLM_MODEL", savedModel);
+  }
+});
+
 test("detectRole picks ultrabrain for ultrawork tasks", () => {
   assert.equal(detectRole("build a game $ulw-loop --ultrawork"), "ultrabrain");
 });
