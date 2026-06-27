@@ -694,6 +694,7 @@ test("choice instead-of wording drops superseded decisions", async () => {
     "Use SQLite instead of Postgres.",
     "Use SQLite instead of Postgres because it is simpler.",
     "Use SQLite instead of the current Postgres.",
+    "Use SQLite instead of using Postgres.",
   ]) {
     for (const persistOldDecision of [false, true]) {
       const ctx = new Context({ budget: 1 });

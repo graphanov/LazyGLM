@@ -292,6 +292,8 @@ function normalizeChoiceTarget(value) {
   return String(value || "")
     .replace(/[`"']/g, "")
     .replace(/^\s*(?:(?:the|a|an|current|existing|prior|previous|same)\s+)+/i, "")
+    .replace(/^\s*(?:using|use|running|run|switching\s+to|switch\s+to|changing\s+to|change\s+to|choosing|choose|preferring|prefer|going\s+with|go\s+with)\s+/i, "")
+    .replace(/^\s*(?:(?:the|a|an|current|existing|prior|previous|same)\s+)+/i, "")
     .replace(/\s+/g, " ")
     .replace(/[.!?;:,]+$/g, "")
     .trim()
