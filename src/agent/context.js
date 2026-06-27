@@ -123,7 +123,13 @@ export class Context {
     // from earlier compactions too: a user correction ("Actually use SQLite")
     // must evict a choice ("I decided to use Postgres") persisted in a prior
     // pass, or the rejected decision keeps leaking into later handoff digests.
-    if (overridden) this.decisions.length = 0;
+    // Compaction normally runs right after a new user turn, so the override is
+    // typically in the retained tail (not `dropped`); scan the tail for override
+    // cues as well so a live correction evicts persisted decisions.
+    const tailOverridden = tail.some(
+      (m) => m.role === "user" && typeof m.content === "string" && OVERRIDE_CUES.some((c) => c.test(m.content)),
+    );
+    if (overridden || tailOverridden) this.decisions.length = 0;
     for (const decision of newDecisions) {
       if (!this.decisions.includes(decision)) this.addDecision(decision);
     }

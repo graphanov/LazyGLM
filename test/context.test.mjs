@@ -300,6 +300,33 @@ test("a user override in a later compaction evicts decisions persisted from an e
   assert.doesNotMatch(block, /Postgres/i, "a decision persisted in an earlier pass must be evicted by a later override");
 });
 
+test("a user override in the retained tail evicts decisions persisted from an earlier pass", async () => {
+  // Regression for the P2 finding: compaction runs immediately after a new user
+  // turn, so the override ("Actually use SQLite") lands in the kept recent tail,
+  // not in `dropped`. extractDecisions only scans `dropped`, so without a tail
+  // override check the persisted Postgres decision survives into the new digest
+  // even though the user explicitly reversed it in the live window.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  pushRecentTail(ctx, "first");
+
+  await ctx.maybeCompact(); // pass 1: persists the Postgres decision
+
+  // The override lands in the retained tail: only a few messages are pushed so
+  // the override stays within keepRecent=12 and is never in `dropped`.
+  ctx.push({ role: "user", content: "Actually use SQLite instead." });
+  ctx.push({ role: "assistant", content: "Understood, switching to SQLite now." });
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.equal(ctx.compactionCount, 2);
+  assert.doesNotMatch(block, /Postgres/i, "a decision persisted in an earlier pass must be evicted by an override in the retained tail");
+});
+
 // --- assistantMessageFrom (preserved-thinking replay) ---
 
 test("assistantMessageFrom preserves reasoning_content verbatim and serializes tool_calls to wire form", () => {
