@@ -541,6 +541,8 @@ test("neutral actually use tool/action requests do not drop decisions", async ()
   for (const request of [
     "Actually, use npm test to verify.",
     "Actually use patch_file to update the README.",
+    "Actually, use the test suite to verify.",
+    "Actually, use the README to update docs.",
   ]) {
     const ctx = new Context({ budget: 1 });
     ctx.addDecision("I decided to use Postgres for persistence.");

@@ -244,6 +244,7 @@ const PRESERVE_TARGET_CUES = [
 ];
 const NEUTRAL_ACTION_USE_CUE = /\bactually\b.*\buse\s+(`[^`]+`|[^.;,\n]+?)\s+to\s+(?:verify|test|run|check|build|lint|format|inspect|update|edit|modify|write|patch|create|delete|read|open)\b/i;
 const COMMANDISH_REPLACEMENT_TARGET_CUE = /^(?:`(?:(?:npm|pnpm|yarn|node|npx|git|gh|python3?|pytest|go|cargo|make|cmake|bash|sh)\s+[^`]+|[a-z][a-z0-9]*_[a-z0-9_]+)`|(?:npm|pnpm|yarn|node|npx|git|gh|python3?|pytest|go|cargo|make|cmake|bash|sh)\s+\S+|[a-z][a-z0-9]*_[a-z0-9_]+\b)/i;
+const ARTICLE_ACTION_TARGET_CUE = /^(?:`)?(?:the|a|an|this|that|these|those)\s+\S+/i;
 const PRONOUN_CHOICE_TARGETS = new Set(["it", "that", "this", "them"]);
 
 const OVERRIDE_CUES = [
@@ -327,7 +328,7 @@ function isNeutralShortInsteadTurn(content) {
 
 function isNeutralActionUseTurn(content) {
   const target = NEUTRAL_ACTION_USE_CUE.exec(content)?.[1]?.trim() || "";
-  return Boolean(target && COMMANDISH_REPLACEMENT_TARGET_CUE.test(target));
+  return Boolean(target && (COMMANDISH_REPLACEMENT_TARGET_CUE.test(target) || ARTICLE_ACTION_TARGET_CUE.test(target)));
 }
 
 function isPronounChoiceTarget(target) {
