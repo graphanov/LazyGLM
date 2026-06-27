@@ -327,6 +327,73 @@ test("a user override in the retained tail evicts decisions persisted from an ea
   assert.doesNotMatch(block, /Postgres/i, "a decision persisted in an earlier pass must be evicted by an override in the retained tail");
 });
 
+test("tail override suppresses dropped decisions from the same compaction", async () => {
+  // Regression for the P2 finding: when the override is in the retained tail,
+  // tailOverridden clears this.decisions but the loop immediately re-adds
+  // newDecisions extracted from `dropped` — which are all pre-correction. So a
+  // superseded decision ("I decided to use Postgres") reappears in the digest
+  // even though the user's correction ("Actually use SQLite") is live in the tail.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  // The decision lands in `dropped` for this compaction.
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  pushRecentTail(ctx, "middle", 13); // enough to push the decision into dropped
+  // The override lands in the retained tail (the common path: compaction runs
+  // right after a new user turn).
+  ctx.push({ role: "user", content: "Actually use SQLite instead." });
+  pushRecentTail(ctx, "recent", 1);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.doesNotMatch(
+    block,
+    /Postgres/i,
+    "a pre-correction decision in `dropped` must not re-enter the digest when an override is live in the tail",
+  );
+});
+
+test("Context.reset clears decisions alongside messages", () => {
+  // Regression for the P2 finding: this.decisions lives outside messages, so
+  // /clear and /resume (which only replace ctx.messages) left stale rationale
+  // in the next compaction digest. A reset() API must zero both.
+  const ctx = new Context({ budget: 1 });
+  ctx.addDecision("I decided to use Postgres for persistence.");
+  ctx.push({ role: "user", content: "the task" });
+
+  assert.equal(ctx.getDecisions().length, 1, "decision should be stored before reset");
+
+  ctx.reset();
+
+  assert.deepEqual(ctx.getDecisions(), [], "reset() must clear the decision store");
+  assert.equal(ctx.compactionCount, 0, "reset() must reset compactionCount");
+});
+
+test("neutral negation user turn does not drop decisions", async () => {
+  // Regression for the P2 finding: broad negation cues like /\bnot\b/i and
+  // /\bdon'?t\b/i matched ordinary messages ("Do not run tests yet"), wrongly
+  // clearing the Decisions & rationale block in multi-compaction sessions.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  // A neutral instruction that contains "not" but does not reverse any decision.
+  ctx.push({ role: "user", content: "Do not run tests yet." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.match(
+    block,
+    /I decided to use Postgres for persistence\./,
+    "a neutral negation message must not evict decisions",
+  );
+});
+
 // --- assistantMessageFrom (preserved-thinking replay) ---
 
 test("assistantMessageFrom preserves reasoning_content verbatim and serializes tool_calls to wire form", () => {

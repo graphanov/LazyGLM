@@ -80,6 +80,18 @@ export class Context {
     return [...this.decisions];
   }
 
+  /**
+   * Reset the conversation to an empty transcript. Clears messages, the
+   * per-context decision store, and compaction counters — used by REPL
+   * /clear and /resume so a stale `decisions` array does not leak rationale
+   * from a prior session into the next compaction digest.
+   */
+  reset() {
+    this.messages = [];
+    this.decisions = [];
+    this.compactionCount = 0;
+  }
+
   estimateTokens() {
     let chars = 0;
     for (const m of this.messages) {
@@ -130,7 +142,13 @@ export class Context {
       (m) => m.role === "user" && typeof m.content === "string" && OVERRIDE_CUES.some((c) => c.test(m.content)),
     );
     if (overridden || tailOverridden) this.decisions.length = 0;
-    for (const decision of newDecisions) {
+    // When the override is live in the retained tail, every decision extracted
+    // from `dropped` predates the correction and is therefore superseded. Skip
+    // them or the just-cleared store is immediately repopulated with the
+    // rejected choice (e.g. "I decided to use Postgres" re-enters the digest
+    // even though "Actually use SQLite" is in the live window).
+    const effectiveNewDecisions = tailOverridden ? [] : newDecisions;
+    for (const decision of effectiveNewDecisions) {
       if (!this.decisions.includes(decision)) this.addDecision(decision);
     }
     const digest = buildDigest(dropped, this.getDecisions());
@@ -188,11 +206,13 @@ const DECISION_CUES = [
 // matching one of these in the dropped region causes preceding assistant
 // decisions to be treated as superseded, so the handoff does not keep
 // surfacing a rejected choice after the user's correction is gone.
+//
+// These are narrowed to explicit correction/replacement phrasing. Broad
+// negation cues (\bnot\b, \bdon'?t\b) were removed: they matched neutral
+// instructions ("Do not run tests yet", "No need to update docs") and wrongly
+// cleared the Decisions & rationale block in multi-compaction sessions.
 const OVERRIDE_CUES = [
   /\bactually\b/i,
-  /\bno[,\s]+/i,
-  /\bnot\b/i,
-  /\bdon'?t\b/i,
   /\binstead\b/i,
   /\bchange\b.*\bto\b/i,
   /\bswitch\b/i,

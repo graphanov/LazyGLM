@@ -491,6 +491,8 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
         return "exit";
       case "clear":
         ctx.messages = ctx.messages.filter((m) => m.role === "system");
+        ctx.decisions.length = 0;
+        ctx.compactionCount = 0;
         console.log(`${DIM}   (context cleared)${RESET}`);
         return;
       case "model": {
@@ -589,6 +591,8 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
           return;
         }
         ctx.messages = ctx.messages.filter((m) => m.role === "system");
+        ctx.decisions.length = 0;
+        ctx.compactionCount = 0;
         replayIntoContext(events, ctx);
         restoreTelemetry(events);
         session = { id: pick.id, path: pick.path, model: pick.model, provider: pick.provider };
