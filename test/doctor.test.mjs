@@ -92,6 +92,25 @@ test("doctor context budget follows the active LAZYGLM_MODEL override", async ()
     assert.match(context.detail, /glm-4\.7's 200000 token window/);
   });
 });
+test("doctor context check honors LAZYGLM_MODEL in the provider-error fallback path", async () => {
+  // Simulate the common troubleshooting path: default zai provider with no API
+  // key (resolveProviderConfig throws), but LAZYGLM_MODEL selects a different
+  // model. The fallback cfg must report the env-selected model's context window,
+  // not the catalog default.
+  await withIsolatedHome(async () => {
+    process.env.LAZYGLM_PROVIDER = "zai"; // requires a key we don't have -> throws
+    process.env.LAZYGLM_API_KEY = ""; // force the error path
+    process.env.LAZYGLM_MODEL = "glm-4.7";
+    const res = await doctor({ cwd: tmpdir() });
+    const context = findCheck(res, "context");
+    assert.ok(context, "doctor must include a 'context' check");
+    assert.equal(context.status, "ok");
+    // glm-4.7 has a 200000 token window; 80% = 160000
+    assert.match(context.detail, /context budget: 160000 tokens/);
+    assert.match(context.detail, /glm-4\.7's 200000 token window/);
+  });
+});
+
 test("doctor warns when user config JSON is malformed before declaring MCP healthy", async () => {
   await withIsolatedHome(async (home) => {
     await writeFile(join(home, "config.json"), "{ bad json", "utf8");

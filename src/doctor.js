@@ -33,7 +33,10 @@ export async function doctor({ cwd } = {}) {
     cfg = await resolveProviderConfig({ role: "default" });
   } catch (e) {
     providerError = e.message;
-    cfg = { baseURL: "?", provider: "?", modelId: catalog.current?.model || "glm-5.2", apiKey: "" };
+    // Honor LAZYGLM_MODEL in the fallback so the context check reports the
+    // env-selected model, matching runtime routing (router.js pickModel).
+    const fallbackModel = process.env.LAZYGLM_MODEL || catalog.current?.model || "glm-5.2";
+    cfg = { baseURL: "?", provider: "?", model: fallbackModel, modelId: fallbackModel, apiKey: "***" };
   }
 
   // provider config resolved?
