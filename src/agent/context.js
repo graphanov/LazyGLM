@@ -185,7 +185,11 @@ function normalizeDecision(text) {
 function extractSentences(text) {
   const normalized = String(text || "").replace(/\s+/g, " ").trim();
   if (!normalized) return [];
-  return normalized.match(/[^.!?]+[.!?]?(?=\s|$)/g) || [normalized];
+  // Split on [.!?] only at a real sentence boundary: a period directly followed
+  // by a non-space char (e.g. "src/context.js", "v2.1.3", "3.14", "config.json")
+  // is an intra-token period, not a boundary. A terminator counts only at
+  // end-of-string or when followed by whitespace.
+  return normalized.match(/.+?(?:[.!?](?=\s|$)|$)(?:\s|$)*/gsu) || [normalized];
 }
 
 function extractDecisions(dropped) {

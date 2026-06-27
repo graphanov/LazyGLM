@@ -139,6 +139,20 @@ test("compaction decision extraction ignores tool messages", async () => {
   assert.doesNotMatch(block, /decided to skip failing test/);
 });
 
+test("compaction decisions preserve dotted paths and identifiers", async () => {
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  // The sentence splitter must not treat the period inside a path/identifier as
+  // a sentence boundary, or the decision text is truncated mid-token.
+  ctx.push({ role: "assistant", content: "I decided to update src/context.js because it owns compaction." });
+  pushRecentTail(ctx);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  assert.match(decisionsBlock(summary), /I decided to update src\/context\.js because it owns compaction\./);
+});
+
 test("long decisions are truncated to a single digest line", async () => {
   const ctx = new Context({ budget: 1 });
   ctx.setSystem("system prompt");
