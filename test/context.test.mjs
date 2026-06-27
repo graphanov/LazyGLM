@@ -394,6 +394,29 @@ test("neutral negation user turn does not drop decisions", async () => {
   );
 });
 
+test("neutral wait instruction does not drop decisions", async () => {
+  // Regression for the P2 finding: /\bwait\b/i was a broad override cue that
+  // matched ordinary instructions ("please wait for CI before finalizing") and
+  // wrongly cleared the Decisions & rationale block in multi-compaction sessions.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  // A neutral instruction that contains "wait" but does not reverse any decision.
+  ctx.push({ role: "user", content: "Please wait for CI before finalizing." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.match(
+    block,
+    /I decided to use Postgres for persistence\./,
+    "a neutral wait message must not evict decisions",
+  );
+});
+
 test("default context budget stays conservative for unknown models", async () => {
   // The bare Context() default applies when no catalog budget is resolved
   // (unknown/custom model). It must stay conservative so small-window models

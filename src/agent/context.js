@@ -217,7 +217,9 @@ const OVERRIDE_CUES = [
   /\bchange\b.*\bto\b/i,
   /\bswitch\b/i,
   /\breplace\b/i,
-  /\bwait\b/i,
+  // Note: /\bwait\b/i was removed — it matched neutral instructions ("please wait
+  // for CI before finalizing") and wrongly cleared the Decisions & rationale
+  // block, the same false-positive class that removed /\bnot\b/ and /\bdon'?t\b/.
   /\bon second thought\b/i,
   /\bnever ?mind\b/i,
   /\bscrap\b/i,
