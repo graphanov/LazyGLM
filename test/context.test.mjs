@@ -707,39 +707,44 @@ test("neutral use instead-of command request does not drop decisions", async () 
 test("neutral short instead command request does not drop decisions", async () => {
   // `Use npm test instead` is a routine command substitution; without a named
   // old choice it must not broad-clear unrelated persisted rationale.
-  const ctx = new Context({ budget: 1 });
-  ctx.addDecision("I decided to use Postgres for persistence.");
-  ctx.setSystem("system prompt");
-  ctx.push({ role: "user", content: "the task" });
-  ctx.push({ role: "user", content: "Use npm test instead." });
-  pushRecentTail(ctx, "filler", 13);
+  for (const request of ["Use npm test instead.", "Use `npm test` instead."]) {
+    const ctx = new Context({ budget: 1 });
+    ctx.addDecision("I decided to use Postgres for persistence.");
+    ctx.setSystem("system prompt");
+    ctx.push({ role: "user", content: "the task" });
+    ctx.push({ role: "user", content: request });
+    pushRecentTail(ctx, "filler", 13);
 
-  await ctx.maybeCompact();
-  const summary = latestCompactionSummary(ctx);
-  const block = decisionsBlock(summary);
+    await ctx.maybeCompact();
+    const summary = latestCompactionSummary(ctx);
+    const block = decisionsBlock(summary);
 
-  assert.match(
-    block,
-    /I decided to use Postgres for persistence\./,
-    "a short command substitution must not evict unrelated decisions",
-  );
+    assert.match(
+      block,
+      /I decided to use Postgres for persistence\./,
+      `a short command substitution must not evict unrelated decisions: ${request}`,
+    );
+  }
 });
 
-test("bare CLI-language short instead drops superseded decisions", async () => {
+test("bare or identifier short instead drops superseded decisions", async () => {
   // Bare CLI names such as Go can be technology choices; only command-shaped
-  // targets like `npm test` should be neutral command substitutions.
-  const ctx = new Context({ budget: 1 });
-  ctx.setSystem("system prompt");
-  ctx.push({ role: "user", content: "the task" });
-  ctx.push({ role: "assistant", content: "I decided to use Rust for the CLI." });
-  ctx.push({ role: "user", content: "Use Go instead." });
-  pushRecentTail(ctx, "filler", 13);
+  // targets like `npm test` should be neutral command substitutions. Backticks
+  // can also quote identifiers/package names and must not be neutral by itself.
+  for (const request of ["Use Go instead.", "Use `SQLite` instead."]) {
+    const ctx = new Context({ budget: 1 });
+    ctx.setSystem("system prompt");
+    ctx.push({ role: "user", content: "the task" });
+    ctx.push({ role: "assistant", content: "I decided to use Rust for the CLI." });
+    ctx.push({ role: "user", content: request });
+    pushRecentTail(ctx, "filler", 13);
 
-  await ctx.maybeCompact();
-  const summary = latestCompactionSummary(ctx);
-  const block = decisionsBlock(summary);
+    await ctx.maybeCompact();
+    const summary = latestCompactionSummary(ctx);
+    const block = decisionsBlock(summary);
 
-  assert.doesNotMatch(block, /Rust/i, "a bare CLI-language replacement must evict superseded decisions");
+    assert.doesNotMatch(block, /Rust/i, `a short replacement must evict superseded decisions: ${request}`);
+  }
 });
 
 test("short instead database choice with test noun drops superseded decisions", async () => {
@@ -777,6 +782,7 @@ test("choice instead-of wording drops superseded decisions", async () => {
   for (const overrideMessage of [
     "Use SQLite instead of Postgres.",
     "Use SQLite instead of Postgres because it is simpler.",
+    "Use SQLite instead of Postgres in tests.",
     "Use SQLite instead of Postgres and update tests.",
     "Use SQLite instead of the current Postgres.",
     "Use SQLite instead of using Postgres.",
