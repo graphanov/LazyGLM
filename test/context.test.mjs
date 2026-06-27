@@ -532,6 +532,45 @@ test("neutral replace edit request does not drop decisions", async () => {
   );
 });
 
+test("neutral instead-of command request does not drop decisions", async () => {
+  // Regression for the P2 finding: plain /\binstead\b/i matched ordinary
+  // command substitutions ("run npm test instead of npm run test"), clearing
+  // persisted rationale even though the user was not reversing a prior decision.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  ctx.push({ role: "user", content: "Run `npm test` instead of `npm run test`." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.match(
+    block,
+    /I decided to use Postgres for persistence\./,
+    "a neutral instead-of command request must not evict decisions",
+  );
+});
+
+test("use-based instead wording drops superseded decisions", async () => {
+  // Keep explicit replacement wording active after narrowing plain instead:
+  // choosing a different tool/approach "instead" is still an override.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  ctx.push({ role: "user", content: "Use SQLite instead." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.doesNotMatch(block, /Postgres/i, "use-based instead wording must evict superseded decisions");
+});
+
 test("decision replacement wording drops superseded decisions", async () => {
   // Keep explicit decision-reversal wording active after narrowing plain replace
   // requests: replacing a prior decision is still an override.

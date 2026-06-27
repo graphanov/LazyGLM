@@ -227,13 +227,16 @@ const NEGATED_CHANGE_TO_CUE = /\b(?:no|not|without)\s+change\b.*\bto\b|\b(?:do n
 const NEGATED_REPLACEMENT_CUE = /\b(?:do not|don't|dont)\s+(?:replace|use|switch\s+to|change\s+to|prefer|go with)\b|\b(?:no|not|without)\s+(?:replace|replacement|use|switch\s+to|change\s+to|preference)\b/i;
 const PRESERVE_CHOICE_CUE = /\b(?:keep|preserve|retain|stick with|stay with|leave)\b|\b(?:same|current|existing|prior|previous)\b.*\b(?:choice|decision|approach|plan)\b/i;
 const REPLACE_DECISION_CUE = /\breplace\b.*\b(?:decision|choice|approach|rationale)\b|\b(?:decision|choice|approach|rationale)\b.*\breplace\b/i;
+const INSTEAD_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\b.*\binstead\b(?!\s+of\b)|\binstead\b(?!\s+of\b).*\b(?:use|switch\s+to|change\s+to|prefer|go with)\b/i;
 
 const OVERRIDE_CUES = [
   // `actually` is only an override when it introduces a replacement target;
   // standalone "Actually, please run tests" is a neutral request. `replace` is
   // intentionally excluded here because normal edit requests also say replace.
   /\bactually\b.*\b(?:use|switch to|change to|prefer|go with)\b/i,
-  /\binstead\b/i,
+  // Plain /\binstead\b/i was too broad: command substitutions like
+  // "run npm test instead of npm run test" are not decision reversals.
+  INSTEAD_REPLACEMENT_CUE,
   CHANGE_TO_CUE,
   // Note: /\bswitch\b/i was removed — it matched neutral discussion of switch
   // statements ("the switch statement still fails") and wrongly cleared the
