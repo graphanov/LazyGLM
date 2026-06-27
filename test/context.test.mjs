@@ -417,6 +417,29 @@ test("neutral wait instruction does not drop decisions", async () => {
   );
 });
 
+test("neutral switch statement discussion does not drop decisions", async () => {
+  // Regression for the P2 finding: /\bswitch\b/i was a broad override cue that
+  // matched ordinary code discussion ("the switch statement still fails") and
+  // wrongly cleared the Decisions & rationale block in multi-compaction sessions.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  // A neutral diagnostic sentence that contains "switch" but does not reverse any decision.
+  ctx.push({ role: "user", content: "The switch statement still fails in the parser." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.match(
+    block,
+    /I decided to use Postgres for persistence\./,
+    "a neutral switch statement message must not evict decisions",
+  );
+});
+
 test("default context budget stays conservative for unknown models", async () => {
   // The bare Context() default applies when no catalog budget is resolved
   // (unknown/custom model). It must stay conservative so small-window models
