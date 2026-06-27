@@ -182,6 +182,32 @@ test("lazyglm run --output-format json emits exactly one structured object on su
   });
 });
 
+test("lazyglm run --context-budget overrides the runtime compaction budget", async () => {
+  await withTempCwd(async (cwd) => {
+    const fetchResponses = [
+      ...Array.from({ length: 8 }, () => toolResponse("list_dir", { path: "." })),
+      finishResponse("done", usage(13, 8, 0)),
+    ];
+    const { code, stdout, stderr } = await captureMain([
+      "run",
+      "loop until the small context budget is exceeded",
+      "--cwd",
+      cwd,
+      "--output-format",
+      "json",
+      "--context-budget",
+      "10",
+      "--max-turns",
+      "12",
+    ], { fetchResponses });
+
+    assert.equal(code, 0, stderr);
+    const json = parseSingleJson(stdout);
+    assert.equal(json.ok, true);
+    assert.ok(json.session.compactions > 0, "manual tiny budget should force compaction before finish");
+  });
+});
+
 test("startup/config error in JSON mode returns session:null and exit 1", async () => {
   await withTempCwd(async (cwd) => {
     const { code, stdout } = await captureMain([

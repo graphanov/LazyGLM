@@ -8,6 +8,7 @@ import { loadPlugins } from "./plugins/index.js";
 import { loadSkills, listSkillNames } from "./skills/index.js";
 import { loadUserConfig } from "./config.js";
 import { parseMcpServers, mcpServersSummary } from "./mcp/config.js";
+import { CONTEXT_BUDGET_FACTOR, resolveContextBudget, findCatalogModelEntry } from "./agent/router.js";
 import { readJson } from "./util.js";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
@@ -32,7 +33,10 @@ export async function doctor({ cwd } = {}) {
     cfg = await resolveProviderConfig({ role: "default" });
   } catch (e) {
     providerError = e.message;
-    cfg = { baseURL: "?", provider: "?", modelId: catalog.current?.model || "glm-5.2", apiKey: "" };
+    // Honor LAZYGLM_MODEL in the fallback so the context check reports the
+    // env-selected model, matching runtime routing (router.js pickModel).
+    const fallbackModel = process.env.LAZYGLM_MODEL || catalog.current?.model || "glm-5.2";
+    cfg = { baseURL: "?", provider: "?", model: fallbackModel, modelId: fallbackModel, apiKey: "***" };
   }
 
   // provider config resolved?
@@ -98,6 +102,22 @@ export async function doctor({ cwd } = {}) {
     const roleCount = Object.keys(catalog.roles || {}).length;
     const modelCount = Object.keys(catalog.models || {}).length;
     ok("catalog", `v${catalog.version} | ${modelCount} models, ${roleCount} routing roles | default: ${catalog.current.model} via ${catalog.current.provider}`);
+  }
+
+  // context budget: catalog-derived soft budget, with env override support.
+  const contextModel = cfg.model || cfg.modelId;
+  const contextBudget = resolveContextBudget(contextModel, catalog);
+  const contextEntry = findCatalogModelEntry(contextModel, catalog);
+  const contextWindow = contextEntry?.context_window || contextEntry?.context;
+  const hasContextOverride = !!process.env.LAZYGLM_CONTEXT_BUDGET;
+  if (contextWindow) {
+    const percent = Math.round(CONTEXT_BUDGET_FACTOR * 100);
+    const source = hasContextOverride
+      ? `env override; ${contextModel}'s documented window is ${contextWindow} tokens`
+      : `${percent}% of ${contextModel}'s ${contextWindow} token window`;
+    ok("context", `context budget: ${contextBudget} tokens (${source})`);
+  } else {
+    warn("context", `context budget: ${contextBudget} tokens (no catalog context window for ${contextModel})`);
   }
 
   // routing sanity: verify roles resolve to models

@@ -10,7 +10,7 @@
 //     from re-doing work or thrashing after a compaction.
 import { nowIso, truncate } from "../util.js";
 
-const CHARS_PER_TOKEN = 4; // rough estimate
+const CHARS_PER_TOKEN = 4; // rough cross-model estimate; budget windows come from the catalog.
 
 /**
  * Build a wire-format assistant message from a provider chat() response,

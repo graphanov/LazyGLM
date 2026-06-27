@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pickModel, detectRole, resolveModelId } from "../src/agent/router.js";
+import { pickModel, detectRole, resolveModelId, resolveContextBudget } from "../src/agent/router.js";
 import { resolveProviderConfig } from "../src/agent/provider.js";
 import { resetConfigCache } from "../src/config.js";
 
@@ -41,6 +41,18 @@ test("pickModel honors explicit --model override", async () => {
   assert.equal(m.modelId, "z-ai/glm-4.7");
 });
 
+test("pickModel honors LAZYGLM_MODEL as an env override", async () => {
+  const savedModel = process.env.LAZYGLM_MODEL;
+  try {
+    process.env.LAZYGLM_MODEL = "glm-4.7";
+    const m = await pickModel("default", { provider: "ollama" });
+    assert.equal(m.model, "glm-4.7");
+    assert.equal(m.modelId, "glm-4.7");
+  } finally {
+    restoreEnv("LAZYGLM_MODEL", savedModel);
+  }
+});
+
 test("detectRole picks ultrabrain for ultrawork tasks", () => {
   assert.equal(detectRole("build a game $ulw-loop --ultrawork"), "ultrabrain");
 });
@@ -71,6 +83,37 @@ test("detectRole honors explicit role override", () => {
 test("resolveModelId falls back to bare name for unknown providers", () => {
   const catalog = { models: { "glm-5.2": { aliases: { nous: "z-ai/glm-5.2" } } } };
   assert.equal(resolveModelId("glm-5.2", "custom", catalog), "glm-5.2");
+});
+
+test("resolveContextBudget derives glm-5.2 budget from catalog context window", () => {
+  const catalog = { models: { "glm-5.2": { context_window: 1_000_000 } } };
+  assert.equal(resolveContextBudget("glm-5.2", catalog, {}), 800_000);
+});
+
+test("resolveContextBudget derives lower-window model budgets from the same factor", () => {
+  const catalog = { models: { "glm-4.7": { context_window: 200_000 } } };
+  assert.equal(resolveContextBudget("glm-4.7", catalog, {}), 160_000);
+});
+
+test("resolveContextBudget accepts provider aliases defensively", () => {
+  const catalog = {
+    models: {
+      "glm-5.2": { context_window: 1_000_000, aliases: { nous: "z-ai/glm-5.2" } },
+    },
+  };
+  assert.equal(resolveContextBudget("z-ai/glm-5.2", catalog, {}), 800_000);
+});
+
+test("resolveContextBudget supports absolute env override", () => {
+  const catalog = { models: { "glm-5.2": { context_window: 1_000_000 } } };
+  assert.equal(resolveContextBudget("glm-5.2", catalog, { LAZYGLM_CONTEXT_BUDGET: "300_000" }), 300_000);
+});
+
+test("resolveContextBudget falls back conservatively when catalog window is missing", () => {
+  // Unknown/custom models (Ollama, OpenAI-compatible shims) often have small
+  // windows (4k/8k). A large fallback would suppress compaction until the
+  // provider rejects the request; keep the conservative default.
+  assert.equal(resolveContextBudget("unknown", { models: {} }, {}), 24_000);
 });
 
 test("resolveProviderConfig rejects an unknown explicit provider before fetch", async () => {
