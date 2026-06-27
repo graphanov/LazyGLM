@@ -398,6 +398,19 @@ function isNeutralActionUseTurn(content) {
   return isNeutralReplacementTarget(target);
 }
 
+// Reversed "rather ... use X" form: RATHER_REPLACEMENT_CUE matches this order,
+// so a routine command substitution like "Rather than npm test, use npm run
+// lint." would otherwise fall through to OVERRIDE_CUES and broad-clear every
+// persisted decision. When the replacement target after "use" is a neutral
+// command-like target, treat the turn as neutral (mirrors isNeutralShortInsteadTurn
+// / isNeutralActionUseTurn for the instead/actually forms).
+const RATHER_USE_REPLACEMENT_TARGET_CUE = /\brather\b[^.;\n]*\b(?:use|switch\s+to|change\s+to|prefer|go\s+with)\s+([^.;\n]+?)(?=\s+(?:because|since|as|in|for|on|during|when|while|where|under|with)\b|[.;\n]|$)/i;
+function isNeutralRatherUseTurn(content) {
+  if (!RATHER_REPLACEMENT_CUE.test(content)) return false;
+  const target = RATHER_USE_REPLACEMENT_TARGET_CUE.exec(content)?.[1]?.trim() || "";
+  return isNeutralReplacementTarget(target);
+}
+
 function isPronounChoiceTarget(target) {
   return PRONOUN_CHOICE_TARGETS.has(target);
 }
@@ -548,6 +561,7 @@ function decisionOverrideForTurn(m, activeDecisions = []) {
   if (targets.length) return { all: false, targets };
   if (isPreserveChoiceTurn(m.content, activeDecisions)) return false;
   if (isNeutralShortInsteadTurn(m.content)) return null;
+  if (isNeutralRatherUseTurn(m.content)) return null;
   if (OVERRIDE_CUES.some((cue) => cue.test(m.content))) return { all: true, targets: [] };
   return null;
 }

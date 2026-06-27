@@ -880,6 +880,35 @@ test("bare or identifier short instead drops superseded decisions", async () => 
   }
 });
 
+test("rather-than command substitution does not drop decisions", async () => {
+  // Reversed "rather ... use X" form: RATHER_REPLACEMENT_CUE matches this order,
+  // so a routine command substitution like "Rather than npm test, use npm run
+  // lint." must not broad-clear unrelated persisted rationale. The replacement
+  // target after "use" is a neutral command-like target, not a technology choice.
+  for (const request of [
+    "Rather than npm test, use npm run lint.",
+    "Rather than running npm test, use npx vitest.",
+    "Rather than npm test, prefer eslint for linting.",
+  ]) {
+    const ctx = new Context({ budget: 1 });
+    ctx.addDecision("I decided to use Postgres for persistence.");
+    ctx.setSystem("system prompt");
+    ctx.push({ role: "user", content: "the task" });
+    ctx.push({ role: "user", content: request });
+    pushRecentTail(ctx, "filler", 13);
+
+    await ctx.maybeCompact();
+    const summary = latestCompactionSummary(ctx);
+    const block = decisionsBlock(summary);
+
+    assert.match(
+      block,
+      /I decided to use Postgres for persistence\./,
+      `a rather-than command substitution must not evict unrelated decisions: ${request}`,
+    );
+  }
+});
+
 test("short instead database choice with test noun drops superseded decisions", async () => {
   // Regression for the P2 finding: `test` inside a noun phrase like "SQLite
   // test database" is not enough to classify the replacement target as a
