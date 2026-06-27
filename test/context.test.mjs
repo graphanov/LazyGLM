@@ -561,6 +561,23 @@ test("neutral actually use tool/action requests do not drop decisions", async ()
   }
 });
 
+test("actually use technology swap drops superseded decisions", async () => {
+  // Regression for the P2 finding: `Actually use Svelte to build the UI` is a
+  // technology replacement, not a neutral request to use a tool/command.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use React for the UI." });
+  ctx.push({ role: "user", content: "Actually use Svelte to build the UI." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.doesNotMatch(block, /React/i, "an actually-use technology swap must evict superseded decisions");
+});
+
 test("neutral replace edit request does not drop decisions", async () => {
   // Regression for the P2 finding: plain /\breplace\b/i matched ordinary edit
   // requests ("replace the README placeholder"), clearing persisted rationale
@@ -768,6 +785,33 @@ test("choice instead-of wording drops superseded decisions", async () => {
         `choice instead-of wording must evict superseded decisions; persisted=${persistOldDecision}; message=${overrideMessage}`,
       );
     }
+  }
+});
+
+test("choice instead-of with unrelated keep wording drops superseded decisions", async () => {
+  // Regression for the P2 finding: a keep/preserve clause for unrelated work
+  // must not prevent the named old choice after `instead of` from being evicted.
+  for (const persistOldDecision of [false, true]) {
+    const ctx = new Context({ budget: 1 });
+    ctx.setSystem("system prompt");
+    ctx.push({ role: "user", content: "the task" });
+    if (persistOldDecision) {
+      ctx.addDecision("I decided to use Postgres for persistence.");
+    } else {
+      ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+    }
+    ctx.push({ role: "user", content: "Use SQLite instead of Postgres and keep the parser dependency-free." });
+    pushRecentTail(ctx, "filler", 13);
+
+    await ctx.maybeCompact();
+    const summary = latestCompactionSummary(ctx);
+    const block = decisionsBlock(summary);
+
+    assert.doesNotMatch(
+      block,
+      /Postgres/i,
+      `choice instead-of with unrelated keep wording must evict superseded decisions; persisted=${persistOldDecision}`,
+    );
   }
 });
 

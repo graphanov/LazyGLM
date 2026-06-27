@@ -228,7 +228,7 @@ const PRESERVE_CHOICE_CUE = /\b(?:keep|preserve|retain|stick with|stay with|leav
 const REPLACE_DECISION_CUE = /\breplace\b.*\b(?:decision|choice|approach|rationale)\b|\b(?:decision|choice|approach|rationale)\b.*\breplace\b/i;
 const INSTEAD_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\b.*\binstead\b(?!\s+of\b)|\binstead\b(?!\s+of\b).*\b(?:use|switch\s+to|change\s+to|prefer|go with)\b/i;
 const SHORT_INSTEAD_REPLACEMENT_TARGET_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\s+([^.;,\n]+?)\s+instead\b(?!\s+of\b)/i;
-const INSTEAD_OF_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\s+([^.;,\n]+?)\s+instead\s+of\s+([^.;,\n]+?)(?=\s+(?:because|since|as)\b|[.;,\n]|$)/i;
+const INSTEAD_OF_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\s+([^.;,\n]+?)\s+instead\s+of\s+([^.;,\n]+?)(?=\s+(?:because|since|as)\b|\s+(?:but|and)\s+(?:keep|preserve|retain|stick with|stay with|leave)\b|[.;,\n]|$)/i;
 const ACTUALLY_REPLACEMENT_CUE = /\bactually\b.*\b(?:use|switch to|change to|prefer|go with)\b/i;
 const RATHER_REPLACEMENT_CUE = /\brather\b.*\b(?:use|switch to|change to|prefer|go with)\b/i;
 const SECOND_THOUGHT_REPLACEMENT_CUE = /\bon second thought\b.*\b(?:use|switch to|change to|prefer|go with|replace|decision|choice|approach|plan|design|rationale)\b/i;
@@ -242,8 +242,8 @@ const NEGATED_REPLACEMENT_TARGET_CUES = [
 const PRESERVE_TARGET_CUES = [
   /\b(?:keep|preserve|retain|stick with|stay with|leave)\s+([^.;,\n]+?)(?=[.;,\n]|$)/i,
 ];
-const NEUTRAL_ACTION_USE_CUE = /\bactually\b.*\buse\s+(?:`[^`]+`|[^.;,\n]+?)\s+to\s+(?:verify|test|run|check|build|lint|format|inspect|update|edit|modify|write|patch|create|delete|read|open)\b/i;
-const COMMANDISH_REPLACEMENT_TARGET_CUE = /^(?:`[^`]+`|(?:npm|pnpm|yarn|node|npx|git|gh|python3?|pytest|go|cargo|make|cmake|bash|sh)\b)/i;
+const NEUTRAL_ACTION_USE_CUE = /\bactually\b.*\buse\s+(`[^`]+`|[^.;,\n]+?)\s+to\s+(?:verify|test|run|check|build|lint|format|inspect|update|edit|modify|write|patch|create|delete|read|open)\b/i;
+const COMMANDISH_REPLACEMENT_TARGET_CUE = /^(?:`[^`]+`|(?:npm|pnpm|yarn|node|npx|git|gh|python3?|pytest|go|cargo|make|cmake|bash|sh)\b|[a-z][a-z0-9]*_[a-z0-9_]+\b)/i;
 const PRONOUN_CHOICE_TARGETS = new Set(["it", "that", "this", "them"]);
 
 const OVERRIDE_CUES = [
@@ -311,6 +311,11 @@ function firstChoiceTarget(content, cues) {
 
 function isNeutralShortInsteadTurn(content) {
   const target = SHORT_INSTEAD_REPLACEMENT_TARGET_CUE.exec(content)?.[1]?.trim() || "";
+  return Boolean(target && COMMANDISH_REPLACEMENT_TARGET_CUE.test(target));
+}
+
+function isNeutralActionUseTurn(content) {
+  const target = NEUTRAL_ACTION_USE_CUE.exec(content)?.[1]?.trim() || "";
   return Boolean(target && COMMANDISH_REPLACEMENT_TARGET_CUE.test(target));
 }
 
@@ -386,7 +391,7 @@ function isPreserveChoiceTurn(content, activeDecisions = []) {
   // an active prior decision while keep/retain names a different target, the user
   // is rejecting the old choice and the decision must be evicted instead.
   if (isNegatedReplacementOverride(content, activeDecisions)) return false;
-  if (NEUTRAL_ACTION_USE_CUE.test(content)) return true;
+  if (isNeutralActionUseTurn(content)) return true;
   return NEGATED_CHANGE_TO_CUE.test(content)
     || (NEGATED_REPLACEMENT_CUE.test(content) && PRESERVE_CHOICE_CUE.test(content))
     || (PRESERVE_CHOICE_CUE.test(content) && !hasPositiveReplacementCue(content));
@@ -394,10 +399,10 @@ function isPreserveChoiceTurn(content, activeDecisions = []) {
 
 function decisionOverrideForTurn(m, activeDecisions = []) {
   if (m.role !== "user" || typeof m.content !== "string") return false;
-  if (isPreserveChoiceTurn(m.content, activeDecisions)) return false;
-  if (isNeutralShortInsteadTurn(m.content)) return null;
   const targets = targetedOverrideTargets(m.content, activeDecisions);
   if (targets.length) return { all: false, targets };
+  if (isPreserveChoiceTurn(m.content, activeDecisions)) return false;
+  if (isNeutralShortInsteadTurn(m.content)) return null;
   if (OVERRIDE_CUES.some((cue) => cue.test(m.content))) return { all: true, targets: [] };
   return null;
 }
