@@ -247,6 +247,18 @@ const COMMANDISH_REPLACEMENT_TARGET_CUE = /^(?:`(?:(?:npm|pnpm|yarn|node|npx|git
 const ONE_WORD_TOOL_ACTION_TARGET_CUE = /^(?:`)?(?:rg|ripgrep|tsc|eslint|prettier|biome|ruff|mypy|grep|fd|jq)(?:`)?$/;
 const ARTICLE_ACTION_TARGET_CUE = /^(?:`)?(?:the|a|an|this|that|these|those)\s+\S+/i;
 const PRONOUN_CHOICE_TARGETS = new Set(["it", "that", "this", "them"]);
+// Generic artifact/tool nouns that name what you use for a task, not a
+// technology choice. Used to keep "actually use the test suite to verify"
+// neutral while letting lowercase tech names ("svelte", "react") evict.
+const GENERIC_ARTIFACT_NOUNS = new Set([
+  "test", "tests", "suite", "config", "configuration", "file", "files",
+  "schema", "code", "docs", "documentation", "log", "logs", "output",
+  "build", "results", "report", "summary", "diff", "patch", "commit",
+  "script", "command", "tool", "tools", "package", "module", "library",
+  "setup", "approach", "method", "process", "environment", "directory",
+  "folder", "path", "branch", "version", "existing", "current",
+  "previous", "same", "latest", "fixture", "stubs", "binary",
+]);
 
 const OVERRIDE_CUES = [
   // `actually` is only an override when it introduces a replacement target;
@@ -334,14 +346,17 @@ function isNeutralActionUseTurn(content) {
       || ONE_WORD_TOOL_ACTION_TARGET_CUE.test(target)) return true;
   // An article-prefixed target is neutral when it names a generic artifact
   // ("the test suite", "a config file") or an all-caps file/acronym ("the
-  // README", "the JSON schema"). A title-case technology/approach name after
-  // the article ("a Svelte frontend", "the Rust port") is a real replacement
-  // target that should evict a prior decision, not preserve it.
+  // README", "the JSON schema"). A technology/approach name after the article
+  // ("a Svelte frontend", "the Rust port", "a svelte frontend") is a real
+  // replacement target that should evict a prior decision, not preserve it.
+  // Title-case-only detection missed lowercase tech names (svelte, react).
   if (ARTICLE_ACTION_TARGET_CUE.test(target)) {
     const afterArticle = target.replace(/^(?:`)?(?:the|a|an|this|that|these|those)\s+/i, "");
     const firstWord = afterArticle.split(/\s/)[0] || "";
     if (/^[A-Z][a-z]/.test(firstWord)) return false;
-    return true;
+    if (/^[A-Z]{2,}$/.test(firstWord)) return true;
+    if (GENERIC_ARTIFACT_NOUNS.has(firstWord.toLowerCase())) return true;
+    return false;
   }
   return false;
 }

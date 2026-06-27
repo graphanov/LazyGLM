@@ -582,6 +582,25 @@ test("actually use technology swap drops superseded decisions", async () => {
   assert.doesNotMatch(block, /React/i, "an actually-use technology swap must evict superseded decisions");
 });
 
+test("actually use lowercase technology swap drops superseded decisions", async () => {
+  // Regression for the P2 finding: a lowercase tech name after an article
+  // ("a svelte frontend") was treated as a neutral artifact because only
+  // title-case first words returned false from isNeutralActionUseTurn. The
+  // rejected prior decision then survived compaction in the digest.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use React for the UI." });
+  ctx.push({ role: "user", content: "Actually use a svelte frontend to build the UI." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.doesNotMatch(block, /React/i, "a lowercase tech swap must evict superseded decisions");
+});
+
 test("neutral search/find tool-action requests do not drop decisions", async () => {
   // Regression for the P2 finding: search/find/look verbs were missing from
   // the neutral-action list, so "Actually use rg to search the repo" matched
