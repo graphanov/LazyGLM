@@ -139,6 +139,27 @@ test("compaction decision extraction ignores tool messages", async () => {
   assert.doesNotMatch(block, /decided to skip failing test/);
 });
 
+test("long decisions are truncated to a single digest line", async () => {
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  // A decision cue sentence longer than 200 chars; it must collapse to one line.
+  const long = "I decided to adopt a layered architecture because " + "detail ".repeat(40);
+  ctx.push({ role: "assistant", content: long });
+  pushRecentTail(ctx);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+  assert.match(block, /I decided to adopt a layered architecture because/, "long decision should be retained");
+  // The numbered entry must occupy exactly one line: no newline + truncation marker.
+  assert.doesNotMatch(block, /\n…\[truncated/, "long decision must not get a multi-line truncation marker");
+  // Every non-empty line in the decisions block must start with a number prefix.
+  for (const line of block.split("\n").filter((l) => l.trim())) {
+    assert.match(line, /^\d+\./, `each decisions line should be numbered, got: ${line.slice(0, 60)}`);
+  }
+});
+
 test("post-compact inject lands immediately after summary when system exists", async () => {
   const ctx = new Context({ budget: 1 });
   ctx.setSystem("system prompt");

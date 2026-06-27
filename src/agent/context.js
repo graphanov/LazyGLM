@@ -174,7 +174,12 @@ const DECISION_CUES = [
 ];
 
 function normalizeDecision(text) {
-  return truncate(String(text || "").replace(/\s+/g, " ").trim(), 200);
+  const s = String(text || "").replace(/\s+/g, " ").trim();
+  if (s.length <= 200) return s;
+  // Keep decisions on a single line: the shared truncate() appends a newline
+  // plus marker, which would split a numbered digest entry. Use an inline
+  // ellipsis here so each decision stays one digest line.
+  return s.slice(0, 197) + "…";
 }
 
 function extractSentences(text) {
