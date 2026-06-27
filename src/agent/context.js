@@ -144,27 +144,24 @@ export class Context {
     const dropped = rest.slice(1, tailStart); // everything between task and recent tail
 
     const existingDecisions = this.getDecisions();
-    const { decisions: newDecisions, overridden } = extractDecisions(dropped, existingDecisions);
-    // An override in the current dropped slice supersedes decisions retained
-    // from earlier compactions too: a user correction ("Actually use SQLite")
-    // must evict a choice ("I decided to use Postgres") persisted in a prior
-    // pass, or the rejected decision keeps leaking into later handoff digests.
-    // Compaction normally runs right after a new user turn, so the override is
-    // typically in the retained tail (not `dropped`); scan the tail for override
-    // cues as well so a live correction evicts persisted decisions.
-    const activeDecisions = [...existingDecisions, ...newDecisions];
-    const tailOverridden = tail.some((m) => isOverrideTurn(m, activeDecisions));
-    if (overridden || tailOverridden) this.decisions.length = 0;
-    // When the override is live in the retained tail, every decision extracted
-    // from `dropped` predates the correction and is therefore superseded. Skip
-    // them or the just-cleared store is immediately repopulated with the
-    // rejected choice (e.g. "I decided to use Postgres" re-enters the digest
-    // even though "Actually use SQLite" is in the live window).
-    const effectiveNewDecisions = tailOverridden ? [] : newDecisions;
-    for (const decision of effectiveNewDecisions) {
+    const { decisions: newDecisions, override: droppedOverride } = extractDecisions(dropped, existingDecisions);
+    // Overrides can be broad ("Actually use SQLite") or targeted ("Use SQLite
+    // instead of Postgres"). Broad overrides clear all prior rationale; targeted
+    // ones only evict decisions that mention the rejected choice so unrelated
+    // handoff context survives.
+    let retainedExistingDecisions = applyDecisionOverride(existingDecisions, droppedOverride);
+    const tailOverride = collectDecisionOverrides(tail, [...retainedExistingDecisions, ...newDecisions]);
+    retainedExistingDecisions = applyDecisionOverride(retainedExistingDecisions, tailOverride);
+    const effectiveNewDecisions = applyDecisionOverride(newDecisions, tailOverride);
+
+    this.decisions.length = 0;
+    for (const decision of [...retainedExistingDecisions, ...effectiveNewDecisions]) {
       if (!this.decisions.includes(decision)) this.addDecision(decision);
     }
-    const digest = buildDigest(dropped, this.getDecisions(), { suppressDecisionNotes: tailOverridden });
+    const digest = buildDigest(dropped, this.getDecisions(), {
+      suppressDecisionNotes: Boolean(tailOverride?.all),
+      suppressedDecisionTargets: tailOverride?.targets || [],
+    });
 
     const summary = {
       role: "system",
@@ -227,6 +224,7 @@ const DECISION_CUES = [
 const CHANGE_TO_CUE = /\bchange\b.*\b(?:decision|choice|approach|plan|design|rationale)\b.*\bto\b|\b(?:decision|choice|approach|plan|design|rationale)\b.*\bchange\b.*\bto\b/i;
 const NEGATED_CHANGE_TO_CUE = /\b(?:no|not|without)\s+change\b.*\bto\b|\b(?:do not|don't)\s+change\b.*\bto\b/i;
 const NEGATED_REPLACEMENT_CUE = /\b(?:do not|don't|dont)\s+(?:replace|use|switch\s+to|change\s+to|prefer|go with)\b|\b(?:no|not|without)\s+(?:replace|replacement|use|switch\s+to|change\s+to|preference)\b/i;
+const POSITIVE_REPLACEMENT_AFTER_NEGATION_CUE = /\b(?:do not|don't|dont)\s+(?:use|replace|prefer|go with)\s+[^.;,\n]+[.;,]\s*(?:use|switch\s+to|change\s+to|prefer|go with)\b|\b(?:do not|don't|dont)\s+(?:switch|change)\s+to\s+[^.;,\n]+[.;,]\s*(?:use|switch\s+to|change\s+to|prefer|go with)\b|\b(?:no|not|without)\s+(?:replacement|use|switch\s+to|change\s+to|preference)\s+(?:of\s+|for\s+)?[^.;,\n]+[.;,]\s*(?:use|switch\s+to|change\s+to|prefer|go with)\b/i;
 const PRESERVE_CHOICE_CUE = /\b(?:keep|preserve|retain|stick with|stay with|leave)\b|\b(?:same|current|existing|prior|previous)\b.*\b(?:choice|decision|approach|plan)\b/i;
 const REPLACE_DECISION_CUE = /\breplace\b.*\b(?:decision|choice|approach|rationale)\b|\b(?:decision|choice|approach|rationale)\b.*\breplace\b/i;
 const INSTEAD_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\b.*\binstead\b(?!\s+of\b)|\binstead\b(?!\s+of\b).*\b(?:use|switch\s+to|change\s+to|prefer|go with)\b/i;
@@ -312,23 +310,62 @@ function isPronounChoiceTarget(target) {
   return PRONOUN_CHOICE_TARGETS.has(target);
 }
 
-function decisionsMentionChoice(decisions, target) {
-  if (!target || isPronounChoiceTarget(target)) return false;
-  return decisions.some((decision) => normalizeChoiceTarget(decision).includes(target));
+function decisionMentionsTarget(decision, target) {
+  return Boolean(target) && normalizeChoiceTarget(decision).includes(target);
 }
 
-function isInsteadOfOldChoiceOverride(content, activeDecisions = []) {
+function decisionsMentionChoice(decisions, target) {
+  if (!target || isPronounChoiceTarget(target)) return false;
+  return decisions.some((decision) => decisionMentionsTarget(decision, target));
+}
+
+function decisionMatchesTargets(decision, targets = []) {
+  return targets.some((target) => decisionMentionsTarget(decision, target));
+}
+
+function mergeDecisionOverride(existing, next) {
+  if (!next) return existing;
+  if (!existing) return next.all ? { all: true, targets: [] } : { all: false, targets: [...new Set(next.targets)] };
+  if (existing.all || next.all) return { all: true, targets: [] };
+  return { all: false, targets: [...new Set([...existing.targets, ...next.targets])] };
+}
+
+function applyDecisionOverride(decisions, override) {
+  if (!override) return [...decisions];
+  if (override.all) return [];
+  return decisions.filter((decision) => !decisionMatchesTargets(decision, override.targets));
+}
+
+function decisionRemovedByOverride(decision, override) {
+  if (!override) return false;
+  if (override.all) return true;
+  return decisionMatchesTargets(decision, override.targets);
+}
+
+function insteadOfOldChoiceTargets(content, activeDecisions = []) {
   const match = INSTEAD_OF_REPLACEMENT_CUE.exec(content);
   const replacedTarget = normalizeChoiceTarget(match?.[2]);
-  return decisionsMentionChoice(activeDecisions, replacedTarget);
+  return decisionsMentionChoice(activeDecisions, replacedTarget) ? [replacedTarget] : [];
 }
 
 function isNegatedReplacementOverride(content, activeDecisions = []) {
+  return negatedReplacementOverrideTargets(content, activeDecisions).length > 0;
+}
+
+function negatedReplacementOverrideTargets(content, activeDecisions = []) {
   const negatedTarget = firstChoiceTarget(content, NEGATED_REPLACEMENT_TARGET_CUES);
   const preservedTarget = firstChoiceTarget(content, PRESERVE_TARGET_CUES);
-  if (!negatedTarget || !preservedTarget) return false;
-  if (negatedTarget === preservedTarget || isPronounChoiceTarget(preservedTarget)) return false;
-  return decisionsMentionChoice(activeDecisions, negatedTarget);
+  if (!decisionsMentionChoice(activeDecisions, negatedTarget)) return [];
+  if (preservedTarget && (negatedTarget === preservedTarget || isPronounChoiceTarget(preservedTarget))) return [];
+  if (preservedTarget || POSITIVE_REPLACEMENT_AFTER_NEGATION_CUE.test(content)) return [negatedTarget];
+  return [];
+}
+
+function targetedOverrideTargets(content, activeDecisions = []) {
+  return [...new Set([
+    ...negatedReplacementOverrideTargets(content, activeDecisions),
+    ...insteadOfOldChoiceTargets(content, activeDecisions),
+  ])];
 }
 
 function isPreserveChoiceTurn(content, activeDecisions = []) {
@@ -344,12 +381,32 @@ function isPreserveChoiceTurn(content, activeDecisions = []) {
     || (PRESERVE_CHOICE_CUE.test(content) && !hasPositiveReplacementCue(content));
 }
 
-function isOverrideTurn(m, activeDecisions = []) {
+function decisionOverrideForTurn(m, activeDecisions = []) {
   if (m.role !== "user" || typeof m.content !== "string") return false;
   if (isPreserveChoiceTurn(m.content, activeDecisions)) return false;
-  if (isNegatedReplacementOverride(m.content, activeDecisions)) return true;
-  if (isInsteadOfOldChoiceOverride(m.content, activeDecisions)) return true;
-  return OVERRIDE_CUES.some((cue) => cue.test(m.content));
+  const targets = targetedOverrideTargets(m.content, activeDecisions);
+  if (targets.length) return { all: false, targets };
+  if (OVERRIDE_CUES.some((cue) => cue.test(m.content))) return { all: true, targets: [] };
+  return null;
+}
+
+function collectDecisionOverrides(messages, activeDecisions = []) {
+  let override = null;
+  let visibleDecisions = [...activeDecisions];
+  for (const m of messages) {
+    const turnOverride = decisionOverrideForTurn(m, visibleDecisions);
+    if (turnOverride) {
+      override = mergeDecisionOverride(override, turnOverride);
+      visibleDecisions = applyDecisionOverride(visibleDecisions, turnOverride);
+      continue;
+    }
+    if (m.role !== "assistant" || typeof m.content !== "string") continue;
+    for (const sentence of extractSentences(m.content)) {
+      const decision = normalizeDecision(sentence);
+      if (decision && isDecisionSentence(decision) && !visibleDecisions.includes(decision)) visibleDecisions.push(decision);
+    }
+  }
+  return override;
 }
 
 function isDecisionSentence(text) {
@@ -376,22 +433,26 @@ function extractSentences(text) {
 }
 
 function extractDecisions(dropped, existingDecisions = []) {
-  const decisions = [];
+  let activeExistingDecisions = [...existingDecisions];
+  let decisions = [];
   const seen = new Set();
-  let overridden = false;
+  let override = null;
 
   for (const m of dropped) {
     // A user turn that reverses an earlier assistant decision. Once an override
     // appears, assistant decisions captured before it are superseded: drop them
     // so the handoff does not keep surfacing a rejected choice (e.g. assistant
     // "I decided to use Postgres." then user "Actually use SQLite"). Decisions
-    // emitted after the override are retained. `overridden` also lets the caller
-    // evict decisions persisted from earlier compaction passes.
-    const activeDecisions = [...existingDecisions, ...decisions];
-    if (isOverrideTurn(m, activeDecisions)) {
-      decisions.length = 0;
+    // emitted after the override are retained. The returned override also lets
+    // the caller evict decisions persisted from earlier compaction passes.
+    const activeDecisions = [...activeExistingDecisions, ...decisions];
+    const turnOverride = decisionOverrideForTurn(m, activeDecisions);
+    if (turnOverride) {
+      activeExistingDecisions = applyDecisionOverride(activeExistingDecisions, turnOverride);
+      decisions = applyDecisionOverride(decisions, turnOverride);
       seen.clear();
-      overridden = true;
+      for (const decision of decisions) seen.add(decision);
+      override = mergeDecisionOverride(override, turnOverride);
       continue;
     }
     if (m.role !== "assistant") continue;
@@ -407,7 +468,7 @@ function extractDecisions(dropped, existingDecisions = []) {
     }
   }
 
-  return { decisions, overridden };
+  return { decisions, override };
 }
 
 /**
@@ -415,7 +476,7 @@ function extractDecisions(dropped, existingDecisions = []) {
  * retains operational memory (what it already did) after compaction — without
  * spending an extra LLM call on summarization.
  */
-function buildDigest(dropped, prevDecisions = [], { suppressDecisionNotes = false } = {}) {
+function buildDigest(dropped, prevDecisions = [], { suppressDecisionNotes = false, suppressedDecisionTargets = [] } = {}) {
   const filesWritten = new Set();
   const filesPatched = new Set();
   const commands = [];
@@ -427,18 +488,20 @@ function buildDigest(dropped, prevDecisions = [], { suppressDecisionNotes = fals
     if (notesLength >= 800) return;
     const isDecision = isDecisionSentence(text);
     if (suppressDecisionNotes && isDecision) return;
+    if (isDecision && decisionMatchesTargets(text, suppressedDecisionTargets)) return;
     notes.push({ text, isDecision });
     notesLength += text.length + 1;
   };
 
   for (const m of dropped) {
     const activeDecisionNotes = notes.filter((note) => note.isDecision).map((note) => note.text);
-    if (isOverrideTurn(m, activeDecisionNotes)) {
+    const noteOverride = decisionOverrideForTurn(m, activeDecisionNotes);
+    if (noteOverride) {
       // If a user correction is in the dropped slice, decision sentences before
       // it are superseded not only in Decisions & rationale but also in Agent
       // notes. Keep non-decision operational notes; drop only the rejected
       // decision sentences so the handoff does not contradict the correction.
-      notes = notes.filter((note) => !note.isDecision);
+      notes = notes.filter((note) => !note.isDecision || !decisionRemovedByOverride(note.text, noteOverride));
       notesLength = notes.reduce((n, note) => n + note.text.length + 1, 0);
     }
     if (m.role === "assistant") {

@@ -379,6 +379,30 @@ test("tail override suppresses dropped decisions from the same compaction", asyn
   );
 });
 
+test("targeted tail override preserves unrelated dropped decisions", async () => {
+  // A live targeted correction should evict only the rejected old choice. Other
+  // decisions from the compacted slice remain valid handoff context.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to keep the parser dependency-free." });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  pushRecentTail(ctx, "middle", 13);
+  ctx.push({ role: "user", content: "Use SQLite instead of Postgres." });
+  pushRecentTail(ctx, "recent", 1);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.match(
+    block,
+    /I decided to keep the parser dependency-free\./,
+    "a targeted tail override must preserve unrelated decisions",
+  );
+  assert.doesNotMatch(block, /Postgres/i, "a targeted tail override must evict only the superseded choice");
+});
+
 test("Context.reset clears decisions alongside messages", () => {
   // Regression for the P2 finding: this.decisions lives outside messages, so
   // /clear and /resume (which only replace ctx.messages) left stale rationale
@@ -847,7 +871,7 @@ test("negated replacement wording does not drop decisions", async () => {
 });
 
 test("negated old-choice replacement drops superseded decisions", async () => {
-  // Regression for the P2 finding: "Do not use Postgres; keep SQLite" rejects
+  // Regression for the P2 finding: "Do not use Postgres; use SQLite" rejects
   // the old Postgres choice. It must evict both freshly dropped decisions and
   // decisions persisted from an earlier compaction pass.
   for (const persistOldDecision of [false, true]) {
@@ -859,7 +883,7 @@ test("negated old-choice replacement drops superseded decisions", async () => {
     } else {
       ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
     }
-    ctx.push({ role: "user", content: "Do not use Postgres; keep SQLite." });
+    ctx.push({ role: "user", content: "Do not use Postgres; use SQLite." });
     pushRecentTail(ctx, "filler", 13);
 
     await ctx.maybeCompact();
@@ -872,6 +896,23 @@ test("negated old-choice replacement drops superseded decisions", async () => {
       `negated old-choice replacement must evict superseded decisions; persisted=${persistOldDecision}`,
     );
   }
+});
+
+test("targeted negated replacement preserves unrelated decisions", async () => {
+  const ctx = new Context({ budget: 1 });
+  ctx.addDecision("I decided to keep the parser dependency-free.");
+  ctx.addDecision("I decided to use Postgres for persistence.");
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "user", content: "Do not use Postgres; use SQLite." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.match(block, /I decided to keep the parser dependency-free\./, "unrelated decisions should survive a targeted negated replacement");
+  assert.doesNotMatch(block, /Postgres/i, "the negated active choice should be evicted");
 });
 
 test("default context budget stays conservative for unknown models", async () => {
