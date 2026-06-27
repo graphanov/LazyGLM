@@ -243,6 +243,7 @@ const NEGATED_REPLACEMENT_TARGET_CUES = [
 const PRESERVE_TARGET_CUES = [
   /\b(?:keep|preserve|retain|stick with|stay with|leave)\s+([^.;,\n]+?)(?=[.;,\n]|$)/i,
 ];
+const NEUTRAL_ACTION_USE_CUE = /\bactually\b.*\buse\s+(?:`[^`]+`|[^.;,\n]+?)\s+to\s+(?:verify|test|run|check|build|lint|format|inspect)\b/i;
 const PRONOUN_CHOICE_TARGETS = new Set(["it", "that", "this", "them"]);
 
 const OVERRIDE_CUES = [
@@ -330,6 +331,7 @@ function isPreserveChoiceTurn(content, activeDecisions = []) {
   // an active prior decision while keep/retain names a different target, the user
   // is rejecting the old choice and the decision must be evicted instead.
   if (isNegatedReplacementOverride(content, activeDecisions)) return false;
+  if (NEUTRAL_ACTION_USE_CUE.test(content)) return true;
   return NEGATED_CHANGE_TO_CUE.test(content)
     || (NEGATED_REPLACEMENT_CUE.test(content) && PRESERVE_CHOICE_CUE.test(content))
     || (PRESERVE_CHOICE_CUE.test(content) && !hasPositiveReplacementCue(content));
