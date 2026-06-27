@@ -784,6 +784,7 @@ test("choice instead-of wording drops superseded decisions", async () => {
     "Use SQLite instead of Postgres because it is simpler.",
     "Use SQLite instead of Postgres in tests.",
     "Use SQLite instead of Postgres and update tests.",
+    "Use SQLite instead of Postgres and do not update tests.",
     "Use SQLite instead of the current Postgres.",
     "Use SQLite instead of using Postgres.",
   ]) {
@@ -881,6 +882,7 @@ test("rather preserve-current wording does not drop decisions", async () => {
   for (const preserveMessage of [
     "I'd rather keep Postgres.",
     "On second thought, keep Postgres.",
+    "On second thought, keep the current decision.",
   ]) {
     const ctx = new Context({ budget: 1 });
     ctx.setSystem("system prompt");

@@ -228,10 +228,10 @@ const PRESERVE_CHOICE_CUE = /\b(?:keep|preserve|retain|stick with|stay with|leav
 const REPLACE_DECISION_CUE = /\breplace\b.*\b(?:decision|choice|approach|rationale)\b|\b(?:decision|choice|approach|rationale)\b.*\breplace\b/i;
 const INSTEAD_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\b.*\binstead\b(?!\s+of\b)|\binstead\b(?!\s+of\b).*\b(?:use|switch\s+to|change\s+to|prefer|go with)\b/i;
 const SHORT_INSTEAD_REPLACEMENT_TARGET_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\s+([^.;,\n]+?)\s+instead\b(?!\s+of\b)/i;
-const INSTEAD_OF_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\s+([^.;,\n]+?)\s+instead\s+of\s+([^.;,\n]+?)(?=\s+(?:because|since|as|in|for|on|during|when|while|where|under|with)\b|\s+(?:but|and)\s+(?:keep|preserve|retain|stick with|stay with|leave|update|edit|modify|write|patch|create|delete|read|open|run|rerun|test|verify|check|build|lint|format|fix)\b|[.;,\n]|$)/i;
+const INSTEAD_OF_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\s+([^.;,\n]+?)\s+instead\s+of\s+([^.;,\n]+?)(?=\s+(?:because|since|as|in|for|on|during|when|while|where|under|with)\b|\s+(?:but|and)\s+(?:(?:do not|don't|dont|not|never)\s+)?(?:keep|preserve|retain|stick with|stay with|leave|update|edit|modify|write|patch|create|delete|read|open|run|rerun|test|verify|check|build|lint|format|fix)\b|[.;,\n]|$)/i;
 const ACTUALLY_REPLACEMENT_CUE = /\bactually\b.*\b(?:use|switch to|change to|prefer|go with)\b/i;
 const RATHER_REPLACEMENT_CUE = /\brather\b.*\b(?:use|switch to|change to|prefer|go with)\b/i;
-const SECOND_THOUGHT_REPLACEMENT_CUE = /\bon second thought\b.*\b(?:use|switch to|change to|prefer|go with|replace|decision|choice|approach|plan|design|rationale)\b/i;
+const SECOND_THOUGHT_REPLACEMENT_CUE = /\bon second thought\b.*\b(?:use|switch to|change to|prefer|go with|replace|scrap|redo|revert)\b/i;
 const NEVERMIND_REPLACEMENT_CUE = /\bnever ?mind\b.*\b(?:use|switch to|change to|prefer|go with|replace|decision|choice|approach|plan|design|rationale)\b/i;
 const DISCARD_DECISION_CUE = /\b(?:scrap|redo|revert)\b.*\b(?:decision|choice|approach|plan|design|rationale)\b|\b(?:decision|choice|approach|plan|design|rationale)\b.*\b(?:scrap|redo|revert)\b/i;
 const NEGATED_REPLACEMENT_TARGET_CUES = [
