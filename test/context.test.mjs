@@ -1567,6 +1567,108 @@ test("targeted negated replacement preserves unrelated decisions", async () => {
   assert.doesNotMatch(block, /Postgres/i, "the negated active choice should be evicted");
 });
 
+test("rather-than preserve with rationale keeps the current choice", async () => {
+  // Regression for the P2 finding: "Rather than use SQLite, keep Postgres
+  // because it is already wired" captured "Postgres because it is already
+  // wired" as the kept target, which did not match the active Postgres
+  // decision. The turn fell through to RATHER_REPLACEMENT_CUE and
+  // broad-cleared the kept rationale.
+  const ctx = new Context({ budget: 1 });
+  ctx.addDecision("I decided to use Postgres for persistence.");
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "user", content: "Rather than use SQLite, keep Postgres because it is already wired." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.match(
+    block,
+    /I decided to use Postgres for persistence\./,
+    "rather-than preserve with rationale must keep the current choice",
+  );
+});
+
+test("never/avoid negation verbs drop superseded decisions", async () => {
+  // Regression for the P2 finding: "Never use Postgres" and "Avoid Postgres"
+  // were not recognized as rejected-choice overrides because never/avoid were
+  // absent from the negation verbs. The stale decision stayed in the digest.
+  for (const overrideMessage of [
+    "Never use Postgres; use SQLite.",
+    "Never use Postgres.",
+    "Avoid Postgres.",
+    "Avoid Postgres; use SQLite instead.",
+  ]) {
+    for (const persistOldDecision of [false, true]) {
+      const ctx = new Context({ budget: 1 });
+      ctx.setSystem("system prompt");
+      ctx.push({ role: "user", content: "the task" });
+      if (persistOldDecision) {
+        ctx.addDecision("I decided to use Postgres for persistence.");
+      } else {
+        ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+      }
+      ctx.push({ role: "user", content: overrideMessage });
+      pushRecentTail(ctx, "filler", 13);
+
+      await ctx.maybeCompact();
+      const summary = latestCompactionSummary(ctx);
+      const block = decisionsBlock(summary);
+
+      assert.doesNotMatch(
+        block,
+        /Postgres/i,
+        `never/avoid negation must evict superseded decisions; persisted=${persistOldDecision}; message=${overrideMessage}`,
+      );
+    }
+  }
+});
+
+test("never/avoid negation preserves already-negated decisions", async () => {
+  // A negative constraint ("I decided not to use Postgres") must survive a
+  // reaffirming "Never use Postgres" turn — the turn agrees with the decision.
+  const ctx = new Context({ budget: 1 });
+  ctx.addDecision("I decided not to use Postgres for persistence.");
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "user", content: "Never use Postgres; use SQLite." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.match(
+    block,
+    /I decided not to use Postgres for persistence\./,
+    "an already-negated decision should survive a reaffirming never/avoid turn",
+  );
+});
+
+test("never/avoid negation does not evict neutral non-decision targets", async () => {
+  // "Avoid the loop" or "Never run tests" must not evict an unrelated decision
+  // just because avoid/never are present; the negation only fires when the
+  // target is an active decision.
+  const ctx = new Context({ budget: 1 });
+  ctx.addDecision("I decided to use Postgres for persistence.");
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "user", content: "Never run the full suite before finishing." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.match(
+    block,
+    /I decided to use Postgres for persistence\./,
+    "a neutral never/avoid message must not evict unrelated decisions",
+  );
+});
+
 test("default context budget stays conservative for unknown models", async () => {
   // The bare Context() default applies when no catalog budget is resolved
   // (unknown/custom model). It must stay conservative so small-window models

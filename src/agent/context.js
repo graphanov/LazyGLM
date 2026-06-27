@@ -244,7 +244,12 @@ const PRESERVE_CHOICE_CUE = /\b(?:keep|preserve|retain|stick with|stay with|leav
 // target (the one after "rather than"), group 2 = kept target. When the rejected
 // target is also an active decision, it must be evicted even though the kept
 // target is preserved, otherwise the digest retains contradictory entries.
-const RATHER_THAN_PRESERVE_CUE = /\brather\s+than\b\s+([^.;,\n]+?)\s*,\s*(?:keep|preserve|retain|stick\s+with|stay\s+with|leave)\s+([^.;,\n]+?)(?=[.;,\n]|$)/i;
+// The kept target (group 2) stops at punctuation or a rationale boundary
+// (because/since/as/...) so "keep Postgres because it is already wired"
+// captures "Postgres" rather than the full rationale; otherwise the captured
+// target would not match the active decision and the turn would fall through
+// to RATHER_REPLACEMENT_CUE, broad-clearing the kept rationale.
+const RATHER_THAN_PRESERVE_CUE = /\brather\s+than\b\s+([^.;,\n]+?)\s*,\s*(?:keep|preserve|retain|stick\s+with|stay\s+with|leave)\s+([^.;,\n]+?)(?=\s+(?:because|since|as|in|for|on|during|when|while|where|under|with|to)\b|[.;,\n]|$)/i;
 const REPLACE_DECISION_CUE = /\breplace\b.*\b(?:decision|choice|approach|rationale)\b|\b(?:decision|choice|approach|rationale)\b.*\breplace\b/i;
 const INSTEAD_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\b.*\binstead\b(?!\s+of\b)|\binstead\b(?!\s+of\b).*\b(?:use|switch\s+to|change\s+to|prefer|go with)\b/i;
 const SHORT_INSTEAD_REPLACEMENT_TARGET_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\s+([^.;,\n]+?)\s+instead\b(?!\s+of\b)/i;
@@ -284,9 +289,13 @@ const BARE_CHOICE_IMPERATIVE_CUE = /^\s*(?:use|switch\s+to|change\s+to|prefer|go
 const USE_CHOICE_FROM_DECISION_CUE = /\b(?:decided?\s+to\s+)?(?:use|using|chose|choosing|prefer|preferring|going\s+with|go\s+with|switch(?:ing)?\s+to|chang(?:e|ing)\s+to)\s+([^.;,\n]+?)(?=\s+(?:for|because|since|as|to|in|on|during|when|while|where|under|with|but|and)\b|[.;,\n]|$)/i;
 const DISCARD_DECISION_CUE = /\b(?:scrap|redo|revert)\b.*\b(?:decision|choice|approach|plan|design|rationale)\b|\b(?:decision|choice|approach|plan|design|rationale)\b.*\b(?:scrap|redo|revert)\b/i;
 const NEGATED_REPLACEMENT_TARGET_CUES = [
-  /\b(?:do not|don't|dont)\s+(?:use|replace|prefer|go with)\s+([^.;,\n]+?)(?=\s+(?:because\b|since\b|as\b|instead\b|(?:but|and)\s+(?:use|switch|change|prefer|go with|keep\s+going|continue|carry\s+on|move\s+on|proceed)\b)|[.;,\n]|$)/i,
-  /\b(?:do not|don't|dont)\s+(?:switch|change)\s+to\s+([^.;,\n]+?)(?=\s+(?:because\b|since\b|as\b|instead\b|(?:but|and)\s+(?:use|switch|change|prefer|go with|keep\s+going|continue|carry\s+on|move\s+on|proceed)\b)|[.;,\n]|$)/i,
+  /\b(?:do not|don't|dont|never|avoid|avoiding)\s+(?:use|replace|prefer|go with)\s+([^.;,\n]+?)(?=\s+(?:because\b|since\b|as\b|instead\b|(?:but|and)\s+(?:use|switch|change|prefer|go with|keep\s+going|continue|carry\s+on|move\s+on|proceed)\b)|[.;,\n]|$)/i,
+  /\b(?:do not|don't|dont|never|avoid|avoiding)\s+(?:switch|change)\s+to\s+([^.;,\n]+?)(?=\s+(?:because\b|since\b|as\b|instead\b|(?:but|and)\s+(?:use|switch|change|prefer|go with|keep\s+going|continue|carry\s+on|move\s+on|proceed)\b)|[.;,\n]|$)/i,
   /\b(?:no|not|without)\s+(?:replacement|use|switch\s+to|change\s+to|preference)\s+(?:of\s+|for\s+)?([^.;,\n]+?)(?=\s+(?:because\b|since\b|as\b|instead\b|(?:but|and)\s+(?:use|switch|change|prefer|go with|keep\s+going|continue|carry\s+on|move\s+on|proceed)\b)|[.;,\n]|$)/i,
+  // Bare "Avoid Postgres" / "Never Postgres" without a use/replace verb:
+  // the negation verb alone names the rejected target. Only fires when the
+  // target is an active decision so neutral "avoid the loop" does not evict.
+  /\b(?:avoid|avoiding|never)\s+([^.;,\n]+?)(?=\s+(?:because\b|since\b|as\b|instead\b|(?:but|and)\s+(?:use|switch|change|prefer|go with|keep\s+going|continue|carry\s+on|move\s+on|proceed)\b)|[.;,\n]|$)/i,
 ];
 const PRESERVE_TARGET_CUES = [
   /\b(?:keep|preserve|retain|stick with|stay with|leave)\s+([^.;,\n]+?)(?=[.;,\n]|$)/i,
