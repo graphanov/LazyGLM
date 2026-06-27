@@ -174,6 +174,58 @@ test("long decisions are truncated to a single digest line", async () => {
   }
 });
 
+test("compaction drops a reversed decision when a user override follows it", async () => {
+  // Regression for the P2 finding: a compacted user turn reverses an earlier
+  // assistant decision ("I decided to use Postgres." → "Actually use SQLite").
+  // The rejected decision must NOT survive in the handoff digest, or the agent
+  // keeps surfacing a superseded choice after the correction is gone.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  ctx.push({ role: "user", content: "Actually use SQLite instead." });
+  pushRecentTail(ctx);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+  assert.doesNotMatch(block, /Postgres/i, "a decision reversed by a later user turn must not persist in the digest");
+});
+
+test("compaction keeps decisions emitted after a user override", async () => {
+  // The override only supersedes decisions captured before it; decisions made
+  // after the correction are still relevant and must be retained.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  ctx.push({ role: "user", content: "Actually use SQLite instead." });
+  ctx.push({ role: "assistant", content: "I decided to keep the parser dependency-free." });
+  pushRecentTail(ctx);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+  assert.doesNotMatch(block, /Postgres/i, "reversed decision before the override must be dropped");
+  assert.match(block, /I decided to keep the parser dependency-free\./, "later decision must be retained");
+});
+
+test("compaction does not drop decisions on a neutral user turn", async () => {
+  // A user turn without a reversal cue must not clear decisions — guards
+  // against false-positive overrides on ordinary conversational messages.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  ctx.push({ role: "user", content: "Sounds good, please continue." });
+  pushRecentTail(ctx);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+  assert.match(block, /I decided to use Postgres for persistence\./, "neutral user turn must not drop the decision");
+});
+
 test("post-compact inject lands immediately after summary when system exists", async () => {
   const ctx = new Context({ budget: 1 });
   ctx.setSystem("system prompt");

@@ -173,6 +173,28 @@ const DECISION_CUES = [
   /\bgoing with\b.*\bbecause\b/i,
 ];
 
+// Cues that a user turn reverses a prior assistant decision. A user message
+// matching one of these in the dropped region causes preceding assistant
+// decisions to be treated as superseded, so the handoff does not keep
+// surfacing a rejected choice after the user's correction is gone.
+const OVERRIDE_CUES = [
+  /\bactually\b/i,
+  /\bno[,\s]+/i,
+  /\bnot\b/i,
+  /\bdon'?t\b/i,
+  /\binstead\b/i,
+  /\bchange\b.*\bto\b/i,
+  /\bswitch\b/i,
+  /\breplace\b/i,
+  /\bwait\b/i,
+  /\bon second thought\b/i,
+  /\bnever ?mind\b/i,
+  /\bscrap\b/i,
+  /\bredo\b/i,
+  /\brather\b/i,
+  /\brevert\b/i,
+];
+
 function normalizeDecision(text) {
   const s = String(text || "").replace(/\s+/g, " ").trim();
   if (s.length <= 200) return s;
@@ -197,6 +219,15 @@ function extractDecisions(dropped) {
   const seen = new Set();
 
   for (const m of dropped) {
+    // A user turn that reverses an earlier assistant decision. Once an override
+    // appears, assistant decisions captured before it are superseded: drop them
+    // so the handoff does not keep surfacing a rejected choice (e.g. assistant
+    // "I decided to use Postgres." then user "Actually use SQLite"). Decisions
+    // emitted after the override are retained.
+    if (m.role === "user" && typeof m.content === "string" && OVERRIDE_CUES.some((c) => c.test(m.content))) {
+      if (decisions.length) decisions.length = 0;
+      continue;
+    }
     if (m.role !== "assistant") continue;
     if (typeof m.content !== "string") continue;
 
