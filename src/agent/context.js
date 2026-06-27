@@ -231,6 +231,13 @@ const SHORT_INSTEAD_REPLACEMENT_TARGET_CUE = /\b(?:use|switch\s+to|change\s+to|p
 const INSTEAD_OF_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\s+([^.;,\n]+?)\s+instead\s+of\s+([^.;,\n]+?)(?=\s+(?:because|since|as|in|for|on|during|when|while|where|under|with)\b|\s+(?:but|and)\s+(?:(?:do not|don't|dont|not|never)\s+)?(?:keep|preserve|retain|stick with|stay with|leave|update|edit|modify|write|patch|create|delete|read|open|run|rerun|test|verify|check|build|lint|format|fix)\b|[.;,\n]|$)/i;
 const ACTUALLY_REPLACEMENT_CUE = /\bactually\b.*\b(?:use|switch to|change to|prefer|go with)\b/i;
 const RATHER_REPLACEMENT_CUE = /\brather\b.*\b(?:use|switch to|change to|prefer|go with)\b/i;
+// Targeted "use X rather than Y" form: RATHER_REPLACEMENT_CUE only matches the
+// reversed "rather ... use" order, so a direct correction like "Use SQLite
+// rather than Postgres." slipped through and left the rejected Postgres
+// decision in the handoff digest. This cue names both targets so the old one
+// (the second capture group) can be evicted precisely, mirroring
+// INSTEAD_OF_REPLACEMENT_CUE for the "instead of" phrasing.
+const RATHER_THAN_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go\s+with)\s+([^.;,\n]+?)\s+rather\s+than\s+([^.;,\n]+?)(?=\s+(?:because|since|as|in|for|on|during|when|while|where|under|with)\b|\s+(?:but|and)\s+(?:(?:do not|don't|dont|not|never)\s+)?(?:keep|preserve|retain|stick with|stay with|leave|update|edit|modify|write|patch|create|delete|read|open|run|rerun|test|verify|check|build|lint|format|fix)\b|[.;,\n]|$)/i;
 const SECOND_THOUGHT_REPLACEMENT_CUE = /\bon second thought\b.*\b(?:use|switch to|change to|prefer|go with|replace|scrap|redo|revert)\b/i;
 const NEVERMIND_REPLACEMENT_CUE = /\bnever ?mind\b.*\b(?:use|switch to|change to|prefer|go with|replace|decision|choice|approach|plan|design|rationale)\b/i;
 const DISCARD_DECISION_CUE = /\b(?:scrap|redo|revert)\b.*\b(?:decision|choice|approach|plan|design|rationale)\b|\b(?:decision|choice|approach|plan|design|rationale)\b.*\b(?:scrap|redo|revert)\b/i;
@@ -410,6 +417,12 @@ function insteadOfOldChoiceTargets(content, activeDecisions = []) {
   return decisionsMentionChoice(activeDecisions, replacedTarget) ? [replacedTarget] : [];
 }
 
+function ratherThanOldChoiceTargets(content, activeDecisions = []) {
+  const match = RATHER_THAN_REPLACEMENT_CUE.exec(content);
+  const replacedTarget = normalizeChoiceTarget(match?.[2]);
+  return decisionsMentionChoice(activeDecisions, replacedTarget) ? [replacedTarget] : [];
+}
+
 function isNegatedReplacementOverride(content, activeDecisions = []) {
   return negatedReplacementOverrideTargets(content, activeDecisions).length > 0;
 }
@@ -435,6 +448,7 @@ function targetedOverrideTargets(content, activeDecisions = []) {
   return [...new Set([
     ...negatedReplacementOverrideTargets(content, activeDecisions),
     ...insteadOfOldChoiceTargets(content, activeDecisions),
+    ...ratherThanOldChoiceTargets(content, activeDecisions),
   ])];
 }
 

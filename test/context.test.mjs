@@ -990,6 +990,50 @@ test("rather replacement wording drops superseded decisions", async () => {
   assert.doesNotMatch(block, /Postgres/i, "rather replacement wording must evict superseded decisions");
 });
 
+test("\"use X rather than Y\" wording drops superseded decisions", async () => {
+  // Regression for the P2 finding: "Use SQLite rather than Postgres." did not
+  // fire any override cue because RATHER_REPLACEMENT_CUE only matches the
+  // reversed "rather ... use" order. The rejected Postgres decision survived in
+  // the handoff digest and could steer the agent back to the old choice.
+  for (const overrideMessage of [
+    "Use SQLite rather than Postgres.",
+    "Prefer SQLite rather than Postgres.",
+    "Switch to SQLite rather than Postgres.",
+  ]) {
+    const ctx = new Context({ budget: 1 });
+    ctx.setSystem("system prompt");
+    ctx.push({ role: "user", content: "the task" });
+    ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+    ctx.push({ role: "user", content: overrideMessage });
+    pushRecentTail(ctx, "filler", 13);
+
+    await ctx.maybeCompact();
+    const summary = latestCompactionSummary(ctx);
+    const block = decisionsBlock(summary);
+
+    assert.doesNotMatch(block, /Postgres/i, `"${overrideMessage}" must evict the superseded Postgres decision`);
+  }
+});
+
+test("\"rather than\" replacement does not evict unrelated decisions", async () => {
+  // The "rather than Y" cue is targeted: it must only evict decisions that
+  // mention the rejected old target Y, not unrelated retained rationale.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  ctx.push({ role: "assistant", content: "I chose React for the frontend." });
+  ctx.push({ role: "user", content: "Use SQLite rather than Postgres." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.doesNotMatch(block, /Postgres/i, "\"rather than Postgres\" must evict the Postgres decision");
+  assert.match(block, /React/i, "unrelated React decision must survive a targeted rather-than override");
+});
+
 test("neutral rework wording does not drop decisions", async () => {
   // Guard sibling broad cues: discard/rework words must not clear decisions when
   // they refer to routine work rather than a prior decision or approach.
