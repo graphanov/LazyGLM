@@ -61,17 +61,17 @@ The second boundary rollout adds `src/agent/provider.js` to the configured typec
 
 The runtime/tools/hooks boundary remains deferred. This PR intentionally keeps package behavior unchanged: no `.js -> .ts` conversion, no `dist/`, no CLI shim changes, and no package version or publish-flow changes.
 
-#### PR-B3 — tools boundary
+#### PR-B3 — runtime/tools boundary
 
-The third boundary rollout adds `src/agent/tools.js` to the configured typecheck surface:
+The third boundary rollout adds the two remaining named core runtime boundary files, `src/agent/runtime.js` and `src/agent/tools.js`, to the configured typecheck surface:
 
 - `checkJs` remains disabled globally.
-- `include` adds only `src/agent/tools.js` beside the existing router/provider boundaries and TypeScript contract files.
-- `src/agent/tools.js` uses file-level `// @ts-check`, the shared `ToolSpec` contract for `TOOL_SPECS`, a local `ToolContext` typedef, typed handler parameters for all seven tool handlers, and narrow casts for existing `child_process.exec` error paths.
-- The tools boundary now checks tool spec shape, handler argument destructuring, tool context access, shell timeout options, fallback grep helpers, and abort/error plumbing without changing tool behavior or adding a build step.
-- This JSDoc slice checks the spec array and handler signatures independently; it does not yet prove that each JSON schema is structurally equivalent to its handler argument typedef.
+- `include` adds only `src/agent/runtime.js` and `src/agent/tools.js` beside the existing router/provider boundary and TypeScript contract files.
+- Both files use file-level `// @ts-check` plus JSDoc imports from `src/types/index.ts`.
+- `src/agent/runtime.js` now checks `runAgent` inputs/results, hook-engine usage, tool execution records, token accounting, finish-tool narrowing, and error-message extraction.
+- `src/agent/tools.js` now checks the OpenAI tool spec array, handler context, handler argument shapes, shell/grep error narrowing, and grep fallback helpers.
 
-The runtime/hooks boundary remains deferred. `runtime.js` still needs a separate slice because it pulls additional context/deadline/hook checking noise and owns the typed handoff between model-emitted tool calls and these handlers.
+The measured pragma-on budget for this slice was 103 local type errors across runtime/tools. The fixes are JSDoc annotations, typed accumulators, zero-cost casts, and local narrowing helpers; no `@ts-ignore`, `.js -> .ts` conversion, build step, CLI shim change, package version change, or runtime behavior change is part of this rollout.
 
 ## Deferred decisions
 
@@ -79,7 +79,7 @@ These remain outside PR-A and the current PR-B boundary slices:
 
 - enabling `checkJs` globally;
 - converting provider/router/runtime/tools/hooks files to `.ts`;
-- typechecking runtime/hooks JavaScript in the current boundary slices;
+- typechecking runtime/tools/hooks JavaScript in this provider-boundary slice;
 - adding a `dist/` build step;
 - changing `bin/lazyglm.js`;
 - changing `package.json` `files`, `bin`, `engines`, or version;
