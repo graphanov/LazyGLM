@@ -61,6 +61,18 @@ The second boundary rollout adds `src/agent/provider.js` to the configured typec
 
 The runtime/tools/hooks boundary remains deferred. This PR intentionally keeps package behavior unchanged: no `.js -> .ts` conversion, no `dist/`, no CLI shim changes, and no package version or publish-flow changes.
 
+#### PR-B3 — runtime/tools boundary
+
+The third boundary rollout adds the two remaining named core runtime boundary files, `src/agent/runtime.js` and `src/agent/tools.js`, to the configured typecheck surface:
+
+- `checkJs` remains disabled globally.
+- `include` adds only `src/agent/runtime.js` and `src/agent/tools.js` beside the existing router/provider boundary and TypeScript contract files.
+- Both files use file-level `// @ts-check` plus JSDoc imports from `src/types/index.ts`.
+- `src/agent/runtime.js` now checks `runAgent` inputs/results, hook-engine usage, tool execution records, token accounting, finish-tool narrowing, and error-message extraction.
+- `src/agent/tools.js` now checks the OpenAI tool spec array, handler context, handler argument shapes, shell/grep error narrowing, and grep fallback helpers.
+
+The measured pragma-on budget for this slice was 103 local type errors across runtime/tools. The fixes are JSDoc annotations, typed accumulators, zero-cost casts, and local narrowing helpers; no `@ts-ignore`, `.js -> .ts` conversion, build step, CLI shim change, package version change, or runtime behavior change is part of this rollout.
+
 ## Deferred decisions
 
 These remain outside PR-A and the current PR-B boundary slices:

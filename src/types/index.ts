@@ -107,6 +107,34 @@ export interface ToolResult {
   error?: string | null;
 }
 
+export interface ToolDeadline {
+  signal?: AbortSignal;
+  throwIfExpired?: () => void;
+  remainingMs?: () => number;
+}
+
+export interface ToolRuntimeContext {
+  engine?: HookEngineContract;
+  ctx?: unknown;
+  log?: (record: Record<string, unknown>) => void | Promise<void>;
+  deadline?: ToolDeadline;
+  signal?: AbortSignal;
+}
+
+export interface ToolHandlerContext {
+  cwd: string;
+  runtime?: ToolRuntimeContext;
+}
+
+export type FinishToolResult = { __finish: true; summary: string };
+
+export type ToolHandlerResult = string | FinishToolResult;
+
+export type ToolHandler = (
+  args: any,
+  ctx: ToolHandlerContext,
+) => ToolHandlerResult | Promise<ToolHandlerResult>;
+
 export interface ChatCompletion {
   content: string | null;
   reasoning?: string | null;
