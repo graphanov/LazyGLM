@@ -275,6 +275,31 @@ test("compaction decisions accumulate across multiple compactions", async () => 
   assert.match(block, /The plan is to thread hook injects through the existing callback\./);
 });
 
+test("a user override in a later compaction evicts decisions persisted from an earlier pass", async () => {
+  // Regression for the P2 finding: a decision stored in compaction 1 must be
+  // evicted when a later dropped slice contains a user override. Without this,
+  // "I decided to use Postgres" (persisted) survives "Actually use SQLite" in a
+  // later compaction and keeps surfacing in handoff digests after the rejection.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  pushRecentTail(ctx, "first");
+
+  await ctx.maybeCompact(); // pass 1: persists the Postgres decision
+
+  // Pass 2 dropped slice: a user override with no assistant decision before it.
+  ctx.push({ role: "user", content: "Actually use SQLite instead." });
+  pushRecentTail(ctx, "second");
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.equal(ctx.compactionCount, 2);
+  assert.doesNotMatch(block, /Postgres/i, "a decision persisted in an earlier pass must be evicted by a later override");
+});
+
 // --- assistantMessageFrom (preserved-thinking replay) ---
 
 test("assistantMessageFrom preserves reasoning_content verbatim and serializes tool_calls to wire form", () => {

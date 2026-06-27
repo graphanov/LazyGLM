@@ -118,7 +118,12 @@ export class Context {
     const tail = rest.slice(tailStart);
     const dropped = rest.slice(1, tailStart); // everything between task and recent tail
 
-    const newDecisions = extractDecisions(dropped);
+    const { decisions: newDecisions, overridden } = extractDecisions(dropped);
+    // An override in the current dropped slice supersedes decisions retained
+    // from earlier compactions too: a user correction ("Actually use SQLite")
+    // must evict a choice ("I decided to use Postgres") persisted in a prior
+    // pass, or the rejected decision keeps leaking into later handoff digests.
+    if (overridden) this.decisions.length = 0;
     for (const decision of newDecisions) {
       if (!this.decisions.includes(decision)) this.addDecision(decision);
     }
@@ -217,15 +222,18 @@ function extractSentences(text) {
 function extractDecisions(dropped) {
   const decisions = [];
   const seen = new Set();
+  let overridden = false;
 
   for (const m of dropped) {
     // A user turn that reverses an earlier assistant decision. Once an override
     // appears, assistant decisions captured before it are superseded: drop them
     // so the handoff does not keep surfacing a rejected choice (e.g. assistant
     // "I decided to use Postgres." then user "Actually use SQLite"). Decisions
-    // emitted after the override are retained.
+    // emitted after the override are retained. `overridden` also lets the caller
+    // evict decisions persisted from earlier compaction passes.
     if (m.role === "user" && typeof m.content === "string" && OVERRIDE_CUES.some((c) => c.test(m.content))) {
       if (decisions.length) decisions.length = 0;
+      overridden = true;
       continue;
     }
     if (m.role !== "assistant") continue;
@@ -241,7 +249,7 @@ function extractDecisions(dropped) {
     }
   }
 
-  return decisions;
+  return { decisions, overridden };
 }
 
 /**
