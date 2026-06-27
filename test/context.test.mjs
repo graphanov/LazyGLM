@@ -615,6 +615,54 @@ test("neutral instead-of command request does not drop decisions", async () => {
   );
 });
 
+test("neutral use instead-of command request does not drop decisions", async () => {
+  // `Use npm test instead of npm run test` has replacement grammar, but the
+  // replaced target is not an active prior decision, so retained rationale stays.
+  const ctx = new Context({ budget: 1 });
+  ctx.addDecision("I decided to use Postgres for persistence.");
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "user", content: "Use `npm test` instead of `npm run test`." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.match(
+    block,
+    /I decided to use Postgres for persistence\./,
+    "a use instead-of command request must not evict unrelated decisions",
+  );
+});
+
+test("choice instead-of wording drops superseded decisions", async () => {
+  // Regression for the P2 finding: `Use SQLite instead of Postgres` names the
+  // old active choice after `instead of`, so it must evict the Postgres rationale.
+  for (const persistOldDecision of [false, true]) {
+    const ctx = new Context({ budget: 1 });
+    ctx.setSystem("system prompt");
+    ctx.push({ role: "user", content: "the task" });
+    if (persistOldDecision) {
+      ctx.addDecision("I decided to use Postgres for persistence.");
+    } else {
+      ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+    }
+    ctx.push({ role: "user", content: "Use SQLite instead of Postgres." });
+    pushRecentTail(ctx, "filler", 13);
+
+    await ctx.maybeCompact();
+    const summary = latestCompactionSummary(ctx);
+    const block = decisionsBlock(summary);
+
+    assert.doesNotMatch(
+      block,
+      /Postgres/i,
+      `choice instead-of wording must evict superseded decisions; persisted=${persistOldDecision}`,
+    );
+  }
+});
+
 test("use-based instead wording drops superseded decisions", async () => {
   // Keep explicit replacement wording active after narrowing plain instead:
   // choosing a different tool/approach "instead" is still an override.

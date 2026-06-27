@@ -230,6 +230,7 @@ const NEGATED_REPLACEMENT_CUE = /\b(?:do not|don't|dont)\s+(?:replace|use|switch
 const PRESERVE_CHOICE_CUE = /\b(?:keep|preserve|retain|stick with|stay with|leave)\b|\b(?:same|current|existing|prior|previous)\b.*\b(?:choice|decision|approach|plan)\b/i;
 const REPLACE_DECISION_CUE = /\breplace\b.*\b(?:decision|choice|approach|rationale)\b|\b(?:decision|choice|approach|rationale)\b.*\breplace\b/i;
 const INSTEAD_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\b.*\binstead\b(?!\s+of\b)|\binstead\b(?!\s+of\b).*\b(?:use|switch\s+to|change\s+to|prefer|go with)\b/i;
+const INSTEAD_OF_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\s+([^.;,\n]+?)\s+instead\s+of\s+([^.;,\n]+?)(?=[.;,\n]|$)/i;
 const ACTUALLY_REPLACEMENT_CUE = /\bactually\b.*\b(?:use|switch to|change to|prefer|go with)\b/i;
 const RATHER_REPLACEMENT_CUE = /\brather\b.*\b(?:use|switch to|change to|prefer|go with)\b/i;
 const SECOND_THOUGHT_REPLACEMENT_CUE = /\bon second thought\b.*\b(?:use|switch to|change to|prefer|go with|replace|decision|choice|approach|plan|design|rationale)\b/i;
@@ -316,6 +317,12 @@ function decisionsMentionChoice(decisions, target) {
   return decisions.some((decision) => normalizeChoiceTarget(decision).includes(target));
 }
 
+function isInsteadOfOldChoiceOverride(content, activeDecisions = []) {
+  const match = INSTEAD_OF_REPLACEMENT_CUE.exec(content);
+  const replacedTarget = normalizeChoiceTarget(match?.[2]);
+  return decisionsMentionChoice(activeDecisions, replacedTarget);
+}
+
 function isNegatedReplacementOverride(content, activeDecisions = []) {
   const negatedTarget = firstChoiceTarget(content, NEGATED_REPLACEMENT_TARGET_CUES);
   const preservedTarget = firstChoiceTarget(content, PRESERVE_TARGET_CUES);
@@ -341,6 +348,7 @@ function isOverrideTurn(m, activeDecisions = []) {
   if (m.role !== "user" || typeof m.content !== "string") return false;
   if (isPreserveChoiceTurn(m.content, activeDecisions)) return false;
   if (isNegatedReplacementOverride(m.content, activeDecisions)) return true;
+  if (isInsteadOfOldChoiceOverride(m.content, activeDecisions)) return true;
   return OVERRIDE_CUES.some((cue) => cue.test(m.content));
 }
 
