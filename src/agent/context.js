@@ -290,7 +290,7 @@ function hasPositiveReplacementCue(content) {
 function normalizeChoiceTarget(value) {
   return String(value || "")
     .replace(/[`"']/g, "")
-    .replace(/^\s*(?:the|a|an|current|existing|prior|previous|same)\s+/i, "")
+    .replace(/^\s*(?:(?:the|a|an|current|existing|prior|previous|same)\s+)+/i, "")
     .replace(/\s+/g, " ")
     .replace(/[.!?;:,]+$/g, "")
     .trim()
