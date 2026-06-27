@@ -251,10 +251,12 @@ test("compaction does not drop decisions on a neutral user turn", async () => {
 });
 
 test("post-compact inject lands immediately after summary when system exists", async () => {
-  const ctx = new Context({ budget: 1 });
+  // Use messages large enough to exceed a small budget, but with a budget big
+  // enough to leave headroom for the PostCompact inject after compaction.
+  const ctx = new Context({ budget: 2000 });
   ctx.setSystem("system prompt");
   ctx.push({ role: "user", content: "the task" });
-  pushRecentTail(ctx, "middle", 20);
+  pushRecentTail(ctx, "X".repeat(500), 20);
 
   await ctx.maybeCompact({ onCompact: async () => ["injected handoff context"] });
   const summaryIdx = ctx.messages.findIndex((m) => /Compacted transcript/.test(m.content || ""));
@@ -265,9 +267,9 @@ test("post-compact inject lands immediately after summary when system exists", a
 });
 
 test("post-compact inject lands immediately after summary when system is absent", async () => {
-  const ctx = new Context({ budget: 1 });
+  const ctx = new Context({ budget: 2000 });
   ctx.push({ role: "user", content: "the task" });
-  pushRecentTail(ctx, "middle", 20);
+  pushRecentTail(ctx, "X".repeat(500), 20);
 
   await ctx.maybeCompact({ onCompact: async () => ["injected context"] });
   const summaryIdx = ctx.messages.findIndex((m) => /Compacted transcript/.test(m.content || ""));
@@ -276,6 +278,38 @@ test("post-compact inject lands immediately after summary when system is absent"
   assert.equal(ctx.messages[0].role, "user");
   assert.equal(summaryIdx, 1, "summary should follow the pinned task without a system prompt");
   assert.equal(injectIdx, 2, "inject should follow the summary without hardcoded system-present indexing");
+});
+
+test("post-compact inject is bounded to remaining token headroom", async () => {
+  // A PostCompact hook that returns a very large inject must not push the
+  // compacted window back over budget. The inject is truncated to the
+  // remaining token headroom so the next chat() call stays in budget.
+  const ctx = new Context({ budget: 2000 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  pushRecentTail(ctx, "X".repeat(500), 20);
+
+  const oversized = "Y".repeat(10_000);
+  await ctx.maybeCompact({ onCompact: async () => [oversized] });
+
+  assert.ok(ctx.estimateTokens() <= ctx.budget, "compacted window + inject must not exceed budget");
+  const injectMsg = ctx.messages.find((m) => m.role === "system" && m.content.includes("Y"));
+  assert.ok(injectMsg, "bounded inject should still be present");
+  assert.ok(injectMsg.content.endsWith("…"), "truncated inject should end with ellipsis");
+});
+
+test("post-compact inject is omitted when headroom is zero", async () => {
+  // When the compacted window already fills the budget, a PostCompact inject
+  // has no headroom and must be omitted rather than pushed in full.
+  const ctx = new Context({ budget: 1 }); // tiny budget → compacted tail already at budget
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  pushRecentTail(ctx, "X".repeat(50), 14);
+
+  await ctx.maybeCompact({ onCompact: async () => ["injected context that has no room"] });
+
+  const hasInject = ctx.messages.some((m) => m.content === "injected context that has no room");
+  assert.equal(hasInject, false, "inject must be omitted when there is no token headroom");
 });
 
 test("compaction decisions accumulate across multiple compactions", async () => {
@@ -424,10 +458,10 @@ test("resetToSystemPrompt drops compaction summaries and one-shot injects", asyn
   // system-role message. Compaction summaries and PostCompact injects are
   // system-role messages too, but they are scoped to the current compacted
   // conversation and must not steer a fresh/replayed transcript.
-  const ctx = new Context({ budget: 1 });
+  const ctx = new Context({ budget: 2000 }); // large enough to leave headroom for the inject
   ctx.setSystem("system prompt");
   ctx.push({ role: "user", content: "the task" });
-  pushRecentTail(ctx, "middle", 20);
+  pushRecentTail(ctx, "X".repeat(500), 20);
 
   await ctx.maybeCompact({ onCompact: async () => ["temporary handoff context"] });
   ctx.addDecision("I decided to use Postgres for persistence.");

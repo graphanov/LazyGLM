@@ -183,9 +183,20 @@ export class Context {
       // PostCompact injects are one-shot context for the current window.
       // They are NOT persisted across subsequent compactions (buildDigest has
       // no system-role branch). Decisions persist separately via this.decisions.
+      //
+      // Bound the inject to the remaining token headroom so a sizeable
+      // PostCompact hook result does not push the compacted window back over
+      // budget — without a second check the next chat() call can exceed the
+      // provider context window even though compaction just ran.
+      let injectContent = injects.join("\n\n");
+      const postCompactTokens = this.estimateTokens();
+      const headroomChars = Math.max(0, (this.budget - postCompactTokens) * CHARS_PER_TOKEN);
+      if (injectContent.length > headroomChars) {
+        injectContent = headroomChars > 1 ? injectContent.slice(0, headroomChars - 1).trimEnd() + "…" : "";
+      }
       const summaryIdx = this.messages.indexOf(summary);
-      if (summaryIdx >= 0) {
-        this.messages.splice(summaryIdx + 1, 0, { role: "system", content: injects.join("\n\n") });
+      if (summaryIdx >= 0 && injectContent) {
+        this.messages.splice(summaryIdx + 1, 0, { role: "system", content: injectContent });
       }
     }
     return true;
