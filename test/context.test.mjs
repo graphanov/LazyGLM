@@ -534,26 +534,31 @@ test("neutral actually request does not drop decisions", async () => {
   );
 });
 
-test("neutral actually use verification command does not drop decisions", async () => {
+test("neutral actually use tool/action requests do not drop decisions", async () => {
   // Regression for the P2 finding: `actually ... use` is only a replacement when
-  // it changes the approach. A verification-command request should not clear a
+  // it changes the approach. Routine tool/action requests should not clear a
   // retained unrelated decision.
-  const ctx = new Context({ budget: 1 });
-  ctx.addDecision("I decided to use Postgres for persistence.");
-  ctx.setSystem("system prompt");
-  ctx.push({ role: "user", content: "the task" });
-  ctx.push({ role: "user", content: "Actually, use npm test to verify." });
-  pushRecentTail(ctx, "filler", 13);
+  for (const request of [
+    "Actually, use npm test to verify.",
+    "Actually use patch_file to update the README.",
+  ]) {
+    const ctx = new Context({ budget: 1 });
+    ctx.addDecision("I decided to use Postgres for persistence.");
+    ctx.setSystem("system prompt");
+    ctx.push({ role: "user", content: "the task" });
+    ctx.push({ role: "user", content: request });
+    pushRecentTail(ctx, "filler", 13);
 
-  await ctx.maybeCompact();
-  const summary = latestCompactionSummary(ctx);
-  const block = decisionsBlock(summary);
+    await ctx.maybeCompact();
+    const summary = latestCompactionSummary(ctx);
+    const block = decisionsBlock(summary);
 
-  assert.match(
-    block,
-    /I decided to use Postgres for persistence\./,
-    "an actually-use verification command must not evict decisions",
-  );
+    assert.match(
+      block,
+      /I decided to use Postgres for persistence\./,
+      `an actually-use tool/action request must not evict decisions: ${request}`,
+    );
+  }
 });
 
 test("neutral replace edit request does not drop decisions", async () => {

@@ -242,7 +242,7 @@ const NEGATED_REPLACEMENT_TARGET_CUES = [
 const PRESERVE_TARGET_CUES = [
   /\b(?:keep|preserve|retain|stick with|stay with|leave)\s+([^.;,\n]+?)(?=[.;,\n]|$)/i,
 ];
-const NEUTRAL_ACTION_USE_CUE = /\bactually\b.*\buse\s+(?:`[^`]+`|[^.;,\n]+?)\s+to\s+(?:verify|test|run|check|build|lint|format|inspect)\b/i;
+const NEUTRAL_ACTION_USE_CUE = /\bactually\b.*\buse\s+(?:`[^`]+`|[^.;,\n]+?)\s+to\s+(?:verify|test|run|check|build|lint|format|inspect|update|edit|modify|write|patch|create|delete|read|open)\b/i;
 const COMMANDISH_REPLACEMENT_TARGET_CUE = /^(?:`[^`]+`|(?:npm|pnpm|yarn|node|npx|git|gh|python3?|pytest|go|cargo|make|cmake|bash|sh)\b|.*\b(?:test|tests|lint|typecheck|build|format|verify|check)\b)/i;
 const PRONOUN_CHOICE_TARGETS = new Set(["it", "that", "this", "them"]);
 
