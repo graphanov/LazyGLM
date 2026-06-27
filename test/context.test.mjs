@@ -578,6 +578,8 @@ test("negated replacement wording does not drop decisions", async () => {
   for (const preserveMessage of [
     "Don't replace Postgres; keep it.",
     "Actually, do not switch to SQLite; keep Postgres.",
+    "Actually, do not use SQLite; keep Postgres.",
+    "Do not use SQLite instead; keep Postgres.",
   ]) {
     const ctx = new Context({ budget: 1 });
     ctx.setSystem("system prompt");

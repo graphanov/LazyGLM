@@ -224,7 +224,7 @@ const DECISION_CUES = [
 // cleared the Decisions & rationale block in multi-compaction sessions.
 const CHANGE_TO_CUE = /\bchange\b.*\bto\b/i;
 const NEGATED_CHANGE_TO_CUE = /\b(?:no|not|without)\s+change\b.*\bto\b|\b(?:do not|don't)\s+change\b.*\bto\b/i;
-const NEGATED_REPLACEMENT_CUE = /\b(?:do not|don't|dont)\s+(?:replace|switch\s+to|change\s+to|prefer|go with)\b|\b(?:no|not|without)\s+(?:replace|replacement|switch\s+to|change\s+to|preference)\b/i;
+const NEGATED_REPLACEMENT_CUE = /\b(?:do not|don't|dont)\s+(?:replace|use|switch\s+to|change\s+to|prefer|go with)\b|\b(?:no|not|without)\s+(?:replace|replacement|use|switch\s+to|change\s+to|preference)\b/i;
 const PRESERVE_CHOICE_CUE = /\b(?:keep|preserve|retain|stick with|stay with|leave)\b|\b(?:same|current|existing|prior|previous)\b.*\b(?:choice|decision|approach|plan)\b/i;
 const REPLACE_DECISION_CUE = /\breplace\b.*\b(?:decision|choice|approach|rationale)\b|\b(?:decision|choice|approach|rationale)\b.*\breplace\b/i;
 
@@ -255,7 +255,7 @@ const OVERRIDE_CUES = [
 
 function isPreserveChoiceTurn(content) {
   // "No change to ..." and "do not change to ..." preserve the current choice;
-  // negated replacement wording does too when paired with explicit keep/retain
+  // negated replacement/use wording does too when paired with explicit keep/retain
   // language ("Don't replace Postgres; keep it"). These must not clear the
   // durable Decisions & rationale store.
   return NEGATED_CHANGE_TO_CUE.test(content)
