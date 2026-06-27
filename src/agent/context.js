@@ -228,12 +228,14 @@ const NEGATED_REPLACEMENT_CUE = /\b(?:do not|don't|dont)\s+(?:replace|use|switch
 const PRESERVE_CHOICE_CUE = /\b(?:keep|preserve|retain|stick with|stay with|leave)\b|\b(?:same|current|existing|prior|previous)\b.*\b(?:choice|decision|approach|plan)\b/i;
 const REPLACE_DECISION_CUE = /\breplace\b.*\b(?:decision|choice|approach|rationale)\b|\b(?:decision|choice|approach|rationale)\b.*\breplace\b/i;
 const INSTEAD_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\b.*\binstead\b(?!\s+of\b)|\binstead\b(?!\s+of\b).*\b(?:use|switch\s+to|change\s+to|prefer|go with)\b/i;
+const ACTUALLY_REPLACEMENT_CUE = /\bactually\b.*\b(?:use|switch to|change to|prefer|go with)\b/i;
+const RATHER_REPLACEMENT_CUE = /\brather\b.*\b(?:use|switch to|change to|prefer|go with)\b/i;
 
 const OVERRIDE_CUES = [
   // `actually` is only an override when it introduces a replacement target;
   // standalone "Actually, please run tests" is a neutral request. `replace` is
   // intentionally excluded here because normal edit requests also say replace.
-  /\bactually\b.*\b(?:use|switch to|change to|prefer|go with)\b/i,
+  ACTUALLY_REPLACEMENT_CUE,
   // Plain /\binstead\b/i was too broad: command substitutions like
   // "run npm test instead of npm run test" are not decision reversals.
   INSTEAD_REPLACEMENT_CUE,
@@ -252,17 +254,29 @@ const OVERRIDE_CUES = [
   /\bnever ?mind\b/i,
   /\bscrap\b/i,
   /\bredo\b/i,
-  /\brather\b/i,
+  // Plain /\brather\b/i was too broad: preserve-current phrasing like
+  // "I'd rather keep Postgres" must not evict the retained rationale.
+  RATHER_REPLACEMENT_CUE,
   /\brevert\b/i,
 ];
+
+function hasPositiveReplacementCue(content) {
+  return ACTUALLY_REPLACEMENT_CUE.test(content)
+    || INSTEAD_REPLACEMENT_CUE.test(content)
+    || CHANGE_TO_CUE.test(content)
+    || REPLACE_DECISION_CUE.test(content)
+    || RATHER_REPLACEMENT_CUE.test(content);
+}
 
 function isPreserveChoiceTurn(content) {
   // "No change to ..." and "do not change to ..." preserve the current choice;
   // negated replacement/use wording does too when paired with explicit keep/retain
-  // language ("Don't replace Postgres; keep it"). These must not clear the
-  // durable Decisions & rationale store.
+  // language ("Don't replace Postgres; keep it"). Preserve-current phrasing
+  // without a positive replacement target ("I'd rather keep Postgres") also
+  // must not clear the durable Decisions & rationale store.
   return NEGATED_CHANGE_TO_CUE.test(content)
-    || (NEGATED_REPLACEMENT_CUE.test(content) && PRESERVE_CHOICE_CUE.test(content));
+    || (NEGATED_REPLACEMENT_CUE.test(content) && PRESERVE_CHOICE_CUE.test(content))
+    || (PRESERVE_CHOICE_CUE.test(content) && !hasPositiveReplacementCue(content));
 }
 
 function isOverrideTurn(m) {

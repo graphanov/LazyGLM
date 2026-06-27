@@ -571,6 +571,50 @@ test("use-based instead wording drops superseded decisions", async () => {
   assert.doesNotMatch(block, /Postgres/i, "use-based instead wording must evict superseded decisions");
 });
 
+test("rather preserve-current wording does not drop decisions", async () => {
+  // Regression for the P2 finding: plain /\brather\b/i matched preference
+  // reaffirmations ("I'd rather keep Postgres"), clearing retained rationale
+  // even though the user preserved the current choice.
+  for (const preserveMessage of [
+    "I'd rather keep Postgres.",
+    "On second thought, keep Postgres.",
+  ]) {
+    const ctx = new Context({ budget: 1 });
+    ctx.setSystem("system prompt");
+    ctx.push({ role: "user", content: "the task" });
+    ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+    ctx.push({ role: "user", content: preserveMessage });
+    pushRecentTail(ctx, "filler", 13);
+
+    await ctx.maybeCompact();
+    const summary = latestCompactionSummary(ctx);
+    const block = decisionsBlock(summary);
+
+    assert.match(
+      block,
+      /I decided to use Postgres for persistence\./,
+      `preserve-current wording must not evict decisions: ${preserveMessage}`,
+    );
+  }
+});
+
+test("rather replacement wording drops superseded decisions", async () => {
+  // Keep explicit rather-based replacement wording active after narrowing plain
+  // rather: "I'd rather use SQLite" is still an override.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  ctx.push({ role: "user", content: "I'd rather use SQLite." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.doesNotMatch(block, /Postgres/i, "rather replacement wording must evict superseded decisions");
+});
+
 test("decision replacement wording drops superseded decisions", async () => {
   // Keep explicit decision-reversal wording active after narrowing plain replace
   // requests: replacing a prior decision is still an override.
