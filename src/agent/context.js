@@ -235,15 +235,16 @@ const SECOND_THOUGHT_REPLACEMENT_CUE = /\bon second thought\b.*\b(?:use|switch t
 const NEVERMIND_REPLACEMENT_CUE = /\bnever ?mind\b.*\b(?:use|switch to|change to|prefer|go with|replace|decision|choice|approach|plan|design|rationale)\b/i;
 const DISCARD_DECISION_CUE = /\b(?:scrap|redo|revert)\b.*\b(?:decision|choice|approach|plan|design|rationale)\b|\b(?:decision|choice|approach|plan|design|rationale)\b.*\b(?:scrap|redo|revert)\b/i;
 const NEGATED_REPLACEMENT_TARGET_CUES = [
-  /\b(?:do not|don't|dont)\s+(?:use|replace|prefer|go with)\s+([^.;,\n]+?)(?=\s+(?:because\b|since\b|as\b|instead\b|(?:but|and)\s+(?:use|switch|change|prefer|go with)\b)|[.;,\n]|$)/i,
-  /\b(?:do not|don't|dont)\s+(?:switch|change)\s+to\s+([^.;,\n]+?)(?=\s+(?:because\b|since\b|as\b|instead\b|(?:but|and)\s+(?:use|switch|change|prefer|go with)\b)|[.;,\n]|$)/i,
-  /\b(?:no|not|without)\s+(?:replacement|use|switch\s+to|change\s+to|preference)\s+(?:of\s+|for\s+)?([^.;,\n]+?)(?=\s+(?:because\b|since\b|as\b|instead\b|(?:but|and)\s+(?:use|switch|change|prefer|go with)\b)|[.;,\n]|$)/i,
+  /\b(?:do not|don't|dont)\s+(?:use|replace|prefer|go with)\s+([^.;,\n]+?)(?=\s+(?:because\b|since\b|as\b|instead\b|(?:but|and)\s+(?:use|switch|change|prefer|go with|keep\s+going|continue|carry\s+on|move\s+on|proceed)\b)|[.;,\n]|$)/i,
+  /\b(?:do not|don't|dont)\s+(?:switch|change)\s+to\s+([^.;,\n]+?)(?=\s+(?:because\b|since\b|as\b|instead\b|(?:but|and)\s+(?:use|switch|change|prefer|go with|keep\s+going|continue|carry\s+on|move\s+on|proceed)\b)|[.;,\n]|$)/i,
+  /\b(?:no|not|without)\s+(?:replacement|use|switch\s+to|change\s+to|preference)\s+(?:of\s+|for\s+)?([^.;,\n]+?)(?=\s+(?:because\b|since\b|as\b|instead\b|(?:but|and)\s+(?:use|switch|change|prefer|go with|keep\s+going|continue|carry\s+on|move\s+on|proceed)\b)|[.;,\n]|$)/i,
 ];
 const PRESERVE_TARGET_CUES = [
   /\b(?:keep|preserve|retain|stick with|stay with|leave)\s+([^.;,\n]+?)(?=[.;,\n]|$)/i,
 ];
 const NEUTRAL_ACTION_USE_CUE = /\bactually\b.*\buse\s+(`[^`]+`|[^.;,\n]+?)\s+to\s+(?:verify|test|run|check|build|lint|format|inspect|update|edit|modify|write|patch|create|delete|read|open)\b/i;
 const COMMANDISH_REPLACEMENT_TARGET_CUE = /^(?:`(?:(?:npm|pnpm|yarn|node|npx|git|gh|python3?|pytest|go|cargo|make|cmake|bash|sh)\s+[^`]+|[a-z][a-z0-9]*_[a-z0-9_]+)`|(?:npm|pnpm|yarn|node|npx|git|gh|python3?|pytest|go|cargo|make|cmake|bash|sh)\s+\S+|[a-z][a-z0-9]*_[a-z0-9_]+\b)/i;
+const ONE_WORD_TOOL_ACTION_TARGET_CUE = /^(?:`)?(?:rg|ripgrep|tsc|eslint|prettier|biome|ruff|mypy|grep|fd|jq)(?:`)?$/;
 const ARTICLE_ACTION_TARGET_CUE = /^(?:`)?(?:the|a|an|this|that|these|those)\s+\S+/i;
 const PRONOUN_CHOICE_TARGETS = new Set(["it", "that", "this", "them"]);
 
@@ -328,7 +329,11 @@ function isNeutralShortInsteadTurn(content) {
 
 function isNeutralActionUseTurn(content) {
   const target = NEUTRAL_ACTION_USE_CUE.exec(content)?.[1]?.trim() || "";
-  return Boolean(target && (COMMANDISH_REPLACEMENT_TARGET_CUE.test(target) || ARTICLE_ACTION_TARGET_CUE.test(target)));
+  return Boolean(target && (
+    COMMANDISH_REPLACEMENT_TARGET_CUE.test(target)
+      || ONE_WORD_TOOL_ACTION_TARGET_CUE.test(target)
+      || ARTICLE_ACTION_TARGET_CUE.test(target)
+  ));
 }
 
 function isPronounChoiceTarget(target) {

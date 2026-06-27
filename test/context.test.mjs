@@ -543,6 +543,8 @@ test("neutral actually use tool/action requests do not drop decisions", async ()
     "Actually use patch_file to update the README.",
     "Actually, use the test suite to verify.",
     "Actually, use the README to update docs.",
+    "Actually use rg to inspect references.",
+    "Actually use tsc to verify.",
   ]) {
     const ctx = new Context({ budget: 1 });
     ctx.addDecision("I decided to use Postgres for persistence.");
@@ -1054,6 +1056,8 @@ test("negated old-choice replacement drops superseded decisions", async () => {
     "Do not use Postgres; keep going.",
     "Do not use Postgres.",
     "Do not use Postgres but use SQLite.",
+    "Do not use Postgres and keep going.",
+    "Do not use Postgres but keep going.",
     "Do not use Postgres because it requires a server",
   ]) {
     for (const persistOldDecision of [false, true]) {
