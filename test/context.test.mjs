@@ -725,6 +725,23 @@ test("neutral short instead command request does not drop decisions", async () =
   );
 });
 
+test("bare CLI-language short instead drops superseded decisions", async () => {
+  // Bare CLI names such as Go can be technology choices; only command-shaped
+  // targets like `npm test` should be neutral command substitutions.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Rust for the CLI." });
+  ctx.push({ role: "user", content: "Use Go instead." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.doesNotMatch(block, /Rust/i, "a bare CLI-language replacement must evict superseded decisions");
+});
+
 test("short instead database choice with test noun drops superseded decisions", async () => {
   // Regression for the P2 finding: `test` inside a noun phrase like "SQLite
   // test database" is not enough to classify the replacement target as a
@@ -787,6 +804,24 @@ test("choice instead-of wording drops superseded decisions", async () => {
       );
     }
   }
+});
+
+test("choice instead-of target matching preserves substring-unrelated decisions", async () => {
+  // `go` must not match the `go` substring in Mongo.
+  const ctx = new Context({ budget: 1 });
+  ctx.addDecision("I decided to use Mongo for persistence.");
+  ctx.addDecision("I decided to use Go for the CLI.");
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "user", content: "Use Rust instead of Go." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.match(block, /I decided to use Mongo for persistence\./, "substring-unrelated decisions should survive targeted overrides");
+  assert.doesNotMatch(block, /I decided to use Go for the CLI\./, "the named old choice should be evicted");
 });
 
 test("choice instead-of with unrelated keep wording drops superseded decisions", async () => {

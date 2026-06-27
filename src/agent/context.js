@@ -243,7 +243,7 @@ const PRESERVE_TARGET_CUES = [
   /\b(?:keep|preserve|retain|stick with|stay with|leave)\s+([^.;,\n]+?)(?=[.;,\n]|$)/i,
 ];
 const NEUTRAL_ACTION_USE_CUE = /\bactually\b.*\buse\s+(`[^`]+`|[^.;,\n]+?)\s+to\s+(?:verify|test|run|check|build|lint|format|inspect|update|edit|modify|write|patch|create|delete|read|open)\b/i;
-const COMMANDISH_REPLACEMENT_TARGET_CUE = /^(?:`[^`]+`|(?:npm|pnpm|yarn|node|npx|git|gh|python3?|pytest|go|cargo|make|cmake|bash|sh)\b|[a-z][a-z0-9]*_[a-z0-9_]+\b)/i;
+const COMMANDISH_REPLACEMENT_TARGET_CUE = /^(?:`[^`]+`|(?:npm|pnpm|yarn|node|npx|git|gh|python3?|pytest|go|cargo|make|cmake|bash|sh)\s+\S+|[a-z][a-z0-9]*_[a-z0-9_]+\b)/i;
 const PRONOUN_CHOICE_TARGETS = new Set(["it", "that", "this", "them"]);
 
 const OVERRIDE_CUES = [
@@ -335,7 +335,10 @@ function isPronounChoiceTarget(target) {
 }
 
 function decisionMentionsTarget(decision, target) {
-  return Boolean(target) && normalizeChoiceTarget(decision).includes(target);
+  const normalizedTarget = normalizeChoiceTarget(target);
+  if (!normalizedTarget) return false;
+  const targetPattern = normalizedTarget.split(/\s+/).map(escapeRegExp).join("\\s+");
+  return new RegExp(`\\b${targetPattern}\\b`, "i").test(normalizeChoiceTarget(decision));
 }
 
 function decisionAffirmsTarget(decision, target) {
