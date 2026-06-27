@@ -25,8 +25,11 @@ export interface ProviderCatalogConfig {
 }
 
 export interface ModelCatalogEntry {
+  tier?: string;
   aliases?: Partial<Record<Provider, string>>;
   context?: number;
+  context_window?: number;
+  description?: string;
   notes?: string;
 }
 
@@ -39,6 +42,8 @@ export interface ModelCatalog {
   default_provider?: Provider;
   current?: {
     model?: string;
+    provider?: Provider;
+    model_context_window?: number;
     model_reasoning_effort?: ReasoningEffort;
   };
   models?: Record<string, ModelCatalogEntry>;

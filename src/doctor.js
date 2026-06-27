@@ -8,6 +8,7 @@ import { loadPlugins } from "./plugins/index.js";
 import { loadSkills, listSkillNames } from "./skills/index.js";
 import { loadUserConfig } from "./config.js";
 import { parseMcpServers, mcpServersSummary } from "./mcp/config.js";
+import { CONTEXT_BUDGET_FACTOR, resolveContextBudget } from "./agent/router.js";
 import { readJson } from "./util.js";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
@@ -98,6 +99,21 @@ export async function doctor({ cwd } = {}) {
     const roleCount = Object.keys(catalog.roles || {}).length;
     const modelCount = Object.keys(catalog.models || {}).length;
     ok("catalog", `v${catalog.version} | ${modelCount} models, ${roleCount} routing roles | default: ${catalog.current.model} via ${catalog.current.provider}`);
+  }
+
+  // context budget: catalog-derived soft budget, with env override support.
+  const contextModel = cfg.model || cfg.modelId;
+  const contextBudget = resolveContextBudget(contextModel, catalog);
+  const contextWindow = catalog.models?.[contextModel]?.context_window || catalog.models?.[contextModel]?.context;
+  const hasContextOverride = !!process.env.LAZYGLM_CONTEXT_BUDGET;
+  if (contextWindow) {
+    const percent = Math.round(CONTEXT_BUDGET_FACTOR * 100);
+    const source = hasContextOverride
+      ? `env override; ${contextModel}'s documented window is ${contextWindow} tokens`
+      : `${percent}% of ${contextModel}'s ${contextWindow} token window`;
+    ok("context", `context budget: ${contextBudget} tokens (${source})`);
+  } else {
+    warn("context", `context budget: ${contextBudget} tokens (no catalog context window for ${contextModel})`);
   }
 
   // routing sanity: verify roles resolve to models

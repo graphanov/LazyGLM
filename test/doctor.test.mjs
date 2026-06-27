@@ -23,12 +23,14 @@ async function withIsolatedHome(fn) {
   const savedKey = process.env.LAZYGLM_API_KEY;
   const savedTimeout = process.env.LAZYGLM_TIMEOUT;
   const savedRetries = process.env.LAZYGLM_MAX_RETRIES;
+  const savedContextBudget = process.env.LAZYGLM_CONTEXT_BUDGET;
   const home = await mkdtemp(join(tmpdir(), "lazyglm-doctor-"));
   try {
     process.env.LAZYGLM_HOME = home;
     process.env.LAZYGLM_PROVIDER = "ollama";
     delete process.env.LAZYGLM_BASE_URL;
     delete process.env.LAZYGLM_API_KEY;
+    delete process.env.LAZYGLM_CONTEXT_BUDGET;
     process.env.LAZYGLM_TIMEOUT = "250";
     process.env.LAZYGLM_MAX_RETRIES = "0";
     resetConfigCache();
@@ -40,6 +42,7 @@ async function withIsolatedHome(fn) {
     restoreEnv("LAZYGLM_API_KEY", savedKey);
     restoreEnv("LAZYGLM_TIMEOUT", savedTimeout);
     restoreEnv("LAZYGLM_MAX_RETRIES", savedRetries);
+    restoreEnv("LAZYGLM_CONTEXT_BUDGET", savedContextBudget);
     resetConfigCache();
     await rm(home, { recursive: true, force: true });
   }
@@ -61,6 +64,17 @@ test("doctor returns an mcp check when no MCP servers are declared", async () =>
     assert.ok(mcp, "doctor must include an 'mcp' check");
     assert.equal(mcp.status, "ok");
     assert.match(mcp.detail, /no MCP servers declared/);
+  });
+});
+
+test("doctor reports catalog-derived context budget and documented window", async () => {
+  await withIsolatedHome(async () => {
+    const res = await doctor({ cwd: tmpdir() });
+    const context = findCheck(res, "context");
+    assert.ok(context, "doctor must include a 'context' check");
+    assert.equal(context.status, "ok");
+    assert.match(context.detail, /context budget: 800000 tokens/);
+    assert.match(context.detail, /glm-5\.2's 1000000 token window/);
   });
 });
 

@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 
 /**
  * @typedef {import("../types/index.js").ModelCatalog} ModelCatalog
+ * @typedef {import("../types/index.js").ModelCatalogEntry} ModelCatalogEntry
  * @typedef {import("../types/index.js").ModelRouteOptions} ModelRouteOptions
  * @typedef {import("../types/index.js").Provider} Provider
  * @typedef {import("../types/index.js").ProviderCatalogConfig} ProviderCatalogConfig
@@ -26,6 +27,8 @@ import { dirname, join } from "node:path";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CATALOG_PATH = join(ROOT, "config", "model-catalog.json");
+export const DEFAULT_CONTEXT_BUDGET = 200_000;
+export const CONTEXT_BUDGET_FACTOR = 0.8;
 const readModelCatalog = /** @type {(path: string, fallback: ModelCatalog) => Promise<ModelCatalog>} */ (
   /** @type {unknown} */ (readJson)
 );
@@ -34,10 +37,61 @@ const readModelCatalog = /** @type {(path: string, fallback: ModelCatalog) => Pr
 let _catalog = null;
 
 /** @returns {Promise<ModelCatalog>} */
-async function loadCatalog() {
+export async function loadCatalog() {
   if (_catalog) return _catalog;
   _catalog = await readModelCatalog(CATALOG_PATH, {});
   return _catalog;
+}
+
+/**
+ * @param {unknown} value
+ * @returns {number | null}
+ */
+function parsePositiveInteger(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const normalized = typeof value === "string" ? value.replace(/_/g, "") : value;
+  const n = Number(normalized);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+}
+
+/**
+ * Resolve the active soft context budget in estimated tokens.
+ *
+ * The model catalog stores documented context windows by canonical model name
+ * (`glm-5.2`). Provider aliases (`z-ai/glm-5.2`) are accepted defensively, but
+ * callers should pass the canonical model when they have it. Token counting
+ * still uses Context's rough char estimate; this resolver only sets the soft
+ * budget from documented catalog capacity.
+ *
+ * @param {string | null | undefined} model
+ * @param {ModelCatalog} [catalog]
+ * @param {Record<string, string | undefined>} [env]
+ * @returns {number}
+ */
+export function resolveContextBudget(model, catalog = {}, env = process.env) {
+  const override = parsePositiveInteger(env?.LAZYGLM_CONTEXT_BUDGET);
+  if (override) return override;
+
+  const entry = findCatalogModelEntry(model, catalog);
+  const contextWindow = parsePositiveInteger(entry?.context_window ?? entry?.context);
+  if (!contextWindow) return DEFAULT_CONTEXT_BUDGET;
+  return Math.floor(contextWindow * CONTEXT_BUDGET_FACTOR);
+}
+
+/**
+ * @param {string | null | undefined} model
+ * @param {ModelCatalog} [catalog]
+ * @returns {ModelCatalogEntry | null}
+ */
+function findCatalogModelEntry(model, catalog = {}) {
+  if (!model) return null;
+  const direct = catalog.models?.[model];
+  if (direct) return direct;
+  for (const entry of Object.values(catalog.models || {})) {
+    const aliases = Object.values(entry?.aliases || {});
+    if (aliases.includes(model)) return entry;
+  }
+  return null;
 }
 
 /**

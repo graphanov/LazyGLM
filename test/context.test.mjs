@@ -58,6 +58,17 @@ test("compaction does not trigger when under budget", async () => {
   assert.equal(ctx.compactionCount, 0);
 });
 
+test("default context budget allows sessions above the old 24K threshold", async () => {
+  const ctx = new Context();
+  assert.equal(ctx.budget, 200_000);
+  ctx.setSystem("sys");
+  ctx.push({ role: "user", content: "task" });
+  ctx.push({ role: "assistant", content: "A".repeat(440_000) }); // roughly 110K tokens.
+  const compacted = await ctx.maybeCompact();
+  assert.equal(compacted, false);
+  assert.equal(ctx.compactionCount, 0);
+});
+
 // --- assistantMessageFrom (preserved-thinking replay) ---
 
 test("assistantMessageFrom preserves reasoning_content verbatim and serializes tool_calls to wire form", () => {

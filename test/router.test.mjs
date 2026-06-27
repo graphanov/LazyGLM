@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pickModel, detectRole, resolveModelId } from "../src/agent/router.js";
+import { pickModel, detectRole, resolveModelId, resolveContextBudget } from "../src/agent/router.js";
 import { resolveProviderConfig } from "../src/agent/provider.js";
 import { resetConfigCache } from "../src/config.js";
 
@@ -71,6 +71,34 @@ test("detectRole honors explicit role override", () => {
 test("resolveModelId falls back to bare name for unknown providers", () => {
   const catalog = { models: { "glm-5.2": { aliases: { nous: "z-ai/glm-5.2" } } } };
   assert.equal(resolveModelId("glm-5.2", "custom", catalog), "glm-5.2");
+});
+
+test("resolveContextBudget derives glm-5.2 budget from catalog context window", () => {
+  const catalog = { models: { "glm-5.2": { context_window: 1_000_000 } } };
+  assert.equal(resolveContextBudget("glm-5.2", catalog, {}), 800_000);
+});
+
+test("resolveContextBudget derives lower-window model budgets from the same factor", () => {
+  const catalog = { models: { "glm-4.7": { context_window: 200_000 } } };
+  assert.equal(resolveContextBudget("glm-4.7", catalog, {}), 160_000);
+});
+
+test("resolveContextBudget accepts provider aliases defensively", () => {
+  const catalog = {
+    models: {
+      "glm-5.2": { context_window: 1_000_000, aliases: { nous: "z-ai/glm-5.2" } },
+    },
+  };
+  assert.equal(resolveContextBudget("z-ai/glm-5.2", catalog, {}), 800_000);
+});
+
+test("resolveContextBudget supports absolute env override", () => {
+  const catalog = { models: { "glm-5.2": { context_window: 1_000_000 } } };
+  assert.equal(resolveContextBudget("glm-5.2", catalog, { LAZYGLM_CONTEXT_BUDGET: "300_000" }), 300_000);
+});
+
+test("resolveContextBudget falls back when catalog window is missing", () => {
+  assert.equal(resolveContextBudget("unknown", { models: {} }, {}), 200_000);
 });
 
 test("resolveProviderConfig rejects an unknown explicit provider before fetch", async () => {

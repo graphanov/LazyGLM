@@ -7,6 +7,7 @@ import * as readline from "node:readline";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { chat, resolveProviderConfig, shouldPreserveThinking } from "./agent/provider.js";
+import { loadCatalog, resolveContextBudget } from "./agent/router.js";
 import { TOOL_SPECS, TOOL_HANDLERS } from "./agent/tools.js";
 import { Context, assistantMessageFrom } from "./agent/context.js";
 import { HookEngine } from "./hooks/engine.js";
@@ -382,6 +383,7 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
     process.exit(1);
   }
   let currentModel = providerConfig.modelId;
+  let contextBudget = resolveContextBudget(providerConfig.model, await loadCatalog());
 
   // 3. Auto-init the project dir silently (.lazyglm/ + AGENTS.md) if missing
   if (!existsSync(join(dir, ".lazyglm")) || !existsSync(join(dir, "AGENTS.md"))) {
@@ -398,7 +400,7 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
 
   // 5. Context + system prompt
   const gi = gitInfo(dir);
-  const ctx = new Context({ model: currentModel, budget: 24_000, preserveThinking: shouldPreserveThinking(providerConfig.provider) });
+  const ctx = new Context({ model: currentModel, budget: contextBudget, preserveThinking: shouldPreserveThinking(providerConfig.provider) });
   const startRes = await engine.fire("SessionStart", {});
   const system = buildSystemPrompt({ cwd: dir, git: gi, model: currentModel, injects: startRes.injects });
   ctx.setSystem(system);
@@ -504,7 +506,9 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
           const nc = await resolveProviderConfig({ model: argStr, provider: flags.provider, role: "default" });
           providerConfig = nc;
           currentModel = nc.modelId;
+          contextBudget = resolveContextBudget(nc.model, await loadCatalog());
           ctx.model = currentModel;
+          ctx.budget = contextBudget;
           // A /model switch can change the provider (e.g. zai → ollama), which
           // flips whether reasoning_content is on the wire. Keep the budget
           // estimator in sync so compaction decisions match the new payload.

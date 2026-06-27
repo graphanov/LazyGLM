@@ -10,7 +10,7 @@
 //     thrashing after a compaction.
 import { nowIso, truncate } from "../util.js";
 
-const CHARS_PER_TOKEN = 4; // rough estimate
+const CHARS_PER_TOKEN = 4; // rough cross-model estimate; budget windows come from the catalog.
 
 /**
  * Build a wire-format assistant message from a provider chat() response,
@@ -43,7 +43,7 @@ export function assistantMessageFrom(resp) {
 }
 
 export class Context {
-  constructor({ model = "", budget = 24_000, preserveThinking = true } = {}) {
+  constructor({ model = "", budget = 200_000, preserveThinking = true } = {}) {
     this.model = model;
     this.budget = budget; // soft token budget for the rolling window
     // Whether reasoning_content counts toward the budget. It only occupies the

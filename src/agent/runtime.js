@@ -4,7 +4,7 @@
 import { join, dirname } from "node:path";
 import { appendFile } from "node:fs/promises";
 import { chat, resolveProviderConfig, shouldPreserveThinking } from "./provider.js";
-import { detectRole } from "./router.js";
+import { detectRole, loadCatalog, resolveContextBudget } from "./router.js";
 import { TOOL_SPECS, TOOL_HANDLERS } from "./tools.js";
 import { Context, assistantMessageFrom } from "./context.js";
 import { HookEngine } from "../hooks/engine.js";
@@ -49,7 +49,7 @@ export async function runAgent(opts) {
     plugins = [],
     hooks,
     maxTurns = 80,
-    budget = 24_000,
+    budget,
     temperature,
     systemPromptExtra = "",
     role,
@@ -75,6 +75,7 @@ export async function runAgent(opts) {
   if (!resolvedModel) {
     throw new Error("No GLM model resolved. Set LAZYGLM_MODEL, pass --model, or configure config/model-catalog.json.");
   }
+  const contextBudget = budget ?? resolveContextBudget(providerConfig.model || model || resolvedModel, await loadCatalog());
 
   const engine = hooks || new HookEngine({ cwd, log: (m) => onEvent({ type: "log", message: m }) });
   for (const p of plugins) engine.register(p);
@@ -84,7 +85,7 @@ export async function runAgent(opts) {
   await ensureDir(dirname(transcriptPath));
   engine.setMeta({ model: resolvedModel, transcriptPath, permissionMode });
 
-  const ctx = new Context({ model: resolvedModel, budget, preserveThinking: shouldPreserveThinking(providerConfig.provider) });
+  const ctx = new Context({ model: resolvedModel, budget: contextBudget, preserveThinking: shouldPreserveThinking(providerConfig.provider) });
   const filesWritten = new Set();
   const toolCalls = [];
   let totalReasoningTokens = 0;
