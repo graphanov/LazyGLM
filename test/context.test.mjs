@@ -215,6 +215,25 @@ test("compaction keeps decisions emitted after a user override", async () => {
   assert.match(block, /I decided to keep the parser dependency-free\./, "later decision must be retained");
 });
 
+test("override allows a later reaffirmation of the same decision text", async () => {
+  // Regression for the P2 finding: duplicate suppression is scoped to the
+  // current effective decision list. If an override clears a pre-correction
+  // decision, the same normalized text can be valid again when the assistant
+  // reaffirms it after the correction.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use SQLite for persistence." });
+  ctx.push({ role: "user", content: "Actually use SQLite instead." });
+  ctx.push({ role: "assistant", content: "I decided to use SQLite for persistence." });
+  pushRecentTail(ctx);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+  assert.match(block, /I decided to use SQLite for persistence\./, "a post-override reaffirmation must not be hidden by stale duplicate cache");
+});
+
 test("compaction does not drop decisions on a neutral user turn", async () => {
   // A user turn without a reversal cue must not clear decisions — guards
   // against false-positive overrides on ordinary conversational messages.

@@ -293,7 +293,8 @@ function extractDecisions(dropped) {
     // emitted after the override are retained. `overridden` also lets the caller
     // evict decisions persisted from earlier compaction passes.
     if (isOverrideTurn(m)) {
-      if (decisions.length) decisions.length = 0;
+      decisions.length = 0;
+      seen.clear();
       overridden = true;
       continue;
     }
