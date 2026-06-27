@@ -414,10 +414,21 @@ function isNeutralReplacementTarget(target) {
   // lowercase tech names (svelte, react).
   if (ARTICLE_ACTION_TARGET_CUE.test(target)) {
     const afterArticle = target.replace(/^(?:`)?(?:the|a|an|this|that|these|those)\s+/i, "");
-    const firstWord = afterArticle.split(/\s/)[0] || "";
+    const words = afterArticle.split(/\s/).filter(Boolean);
+    const firstWord = words[0] || "";
     if (/^[A-Z][a-z]/.test(firstWord)) return false;
     if (/^[A-Z]{2,}$/.test(firstWord)) return true;
     if (GENERIC_ARTIFACT_NOUNS.has(firstWord.toLowerCase())) return true;
+    // An adjective/modifier before a generic artifact noun ("unit test suite",
+    // "full config file", "single report") is still a routine artifact reference.
+    // Only the first word was checked, so "the unit test suite" fell through and
+    // was wrongly treated as a technology swap. The head noun (last word) is the
+    // grammatical anchor: when it is a generic artifact noun the whole phrase
+    // names a routine artifact, while a technology-bearing phrase ("a SQLite test
+    // database", "a svelte frontend") has a non-generic head and stays a real
+    // replacement target.
+    const lastWord = words[words.length - 1] || "";
+    if (GENERIC_ARTIFACT_NOUNS.has(lastWord.toLowerCase())) return true;
     return false;
   }
   // A bare lowercase word that is a generic artifact noun ("tests", "config",

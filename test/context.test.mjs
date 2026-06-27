@@ -664,6 +664,38 @@ test("neutral search/find tool-action requests do not drop decisions", async () 
   }
 });
 
+test("adjectival neutral action targets do not drop decisions", async () => {
+  // Regression for the P2 finding: when an adjective precedes a generic artifact
+  // noun ("Actually use the unit test suite to verify"), only the first word
+  // ("unit") was checked against GENERIC_ARTIFACT_NOUNS. It was not listed, so
+  // the turn was treated as a broad decision override and cleared all retained
+  // rationale. A generic noun anywhere in the article-prefixed phrase still
+  // marks the target as a routine artifact reference.
+  for (const request of [
+    "Actually use the unit test suite to verify.",
+    "Actually, use the full test suite to run checks.",
+    "Actually use a single config file to update settings.",
+    "Actually, use the existing report to check results.",
+  ]) {
+    const ctx = new Context({ budget: 1 });
+    ctx.addDecision("I decided to use Postgres for persistence.");
+    ctx.setSystem("system prompt");
+    ctx.push({ role: "user", content: "the task" });
+    ctx.push({ role: "user", content: request });
+    pushRecentTail(ctx, "filler", 13);
+
+    await ctx.maybeCompact();
+    const summary = latestCompactionSummary(ctx);
+    const block = decisionsBlock(summary);
+
+    assert.match(
+      block,
+      /I decided to use Postgres for persistence\./,
+      `an adjectival neutral action target must not evict decisions: ${request}`,
+    );
+  }
+});
+
 test("article-prefixed technology swap drops superseded decisions", async () => {
   // Regression for the P2 finding: "Actually use a Svelte frontend to build the
   // UI" was classified as neutral because ARTICLE_ACTION_TARGET_CUE matched the
