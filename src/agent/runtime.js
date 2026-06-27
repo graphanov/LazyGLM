@@ -1,3 +1,5 @@
+// @ts-check
+
 // The GLM agent runtime: a tool-use loop that drives a GLM model through
 // read/write/patch/shell tools with the full hook lifecycle firing around
 // every action. This is the clean-room replacement for the Codex CLI runner.
@@ -11,6 +13,20 @@ import { HookEngine } from "../hooks/engine.js";
 import { gitInfo, truncate, ensureDir, nowIso } from "../util.js";
 import { abortReason, composeAbortSignals, isDeadlineError, throwIfAborted, withAbort } from "./deadline.js";
 
+/**
+ * @typedef {import("../types/index.js").ChatUsage} ChatUsage
+ * @typedef {import("../types/index.js").FinishToolResult} FinishToolResult
+ * @typedef {import("../types/index.js").HookEngineContract} HookEngineContract
+ * @typedef {import("../types/index.js").HookEventName} HookEventName
+ * @typedef {import("../types/index.js").RunAgentOptions} RunAgentOptions
+ * @typedef {import("../types/index.js").RunAgentResult} RunAgentResult
+ * @typedef {import("../types/index.js").ToolExecutionRecord} ToolExecutionRecord
+ * @typedef {import("../types/index.js").ToolHandler} ToolHandler
+ *
+ * @typedef {{ isRepo: boolean, branch?: string, root?: string }} RuntimeGitInfo
+ * @typedef {{ cwd: string, git: RuntimeGitInfo, model: string, injects?: string[], extra?: string }} SystemPromptOptions
+ */
+
 const BASE_SYSTEM_PROMPT = `You are LazyGLM, an autonomous software engineering agent driven by a GLM model. You operate inside a real project directory on the user's machine via tools.
 
 WORKING RULES
@@ -23,6 +39,10 @@ WORKING RULES
 
 You have these tools: read_file, write_file, patch_file, list_dir, grep, run_shell, finish.`;
 
+/**
+ * @param {SystemPromptOptions} options
+ * @returns {string}
+ */
 function buildSystemPrompt({ cwd, git, model, injects, extra }) {
   const parts = [BASE_SYSTEM_PROMPT];
   parts.push(
@@ -37,8 +57,8 @@ function buildSystemPrompt({ cwd, git, model, injects, extra }) {
 
 /**
  * Run the GLM agent on a task.
- * @param {object} opts
- * @returns {Promise<{sessionId, turns, tokensIn, tokensOut, compactions, transcriptPath, finished, finishReason, toolCalls}>}
+ * @param {RunAgentOptions} opts
+ * @returns {Promise<RunAgentResult>}
  */
 export async function runAgent(opts) {
   const {
@@ -76,7 +96,9 @@ export async function runAgent(opts) {
     throw new Error("No GLM model resolved. Set LAZYGLM_MODEL, pass --model, or configure config/model-catalog.json.");
   }
 
-  const engine = hooks || new HookEngine({ cwd, log: (m) => onEvent({ type: "log", message: m }) });
+  /** @param {string} message */
+  const hookLog = (message) => onEvent({ type: "log", message });
+  const engine = /** @type {HookEngineContract} */ (hooks || new HookEngine(/** @type {any} */ ({ cwd, log: hookLog })));
   for (const p of plugins) engine.register(p);
 
   const sessionId = engine.sessionId;
@@ -85,30 +107,47 @@ export async function runAgent(opts) {
   engine.setMeta({ model: resolvedModel, transcriptPath, permissionMode });
 
   const ctx = new Context({ model: resolvedModel, budget, preserveThinking: shouldPreserveThinking(providerConfig.provider) });
+  /** @type {Set<string>} */
   const filesWritten = new Set();
+  /** @type {ToolExecutionRecord[]} */
   const toolCalls = [];
   let totalReasoningTokens = 0;
   let totalPromptTokens = 0;
   let totalCompletionTokens = 0;
   let agentTurns = 0;
   let finished = false;
+  /** @type {string | null} */
   let finishSummary = null;
+  /** @type {string | null} */
   let finishReason = null;
+  /** @type {string | null} */
   let errorMessage = null;
   let lastNoToolNudge = false;
 
+  /**
+   * @param {Record<string, unknown>} obj
+   * @returns {Promise<void>}
+   */
   const log = async (obj) => {
     onEvent(obj);
     try {
       await appendFile(transcriptPath, JSON.stringify({ t: nowIso(), ...obj }) + "\n", "utf8");
     } catch {}
   };
+  /**
+   * @param {HookEventName} event
+   * @param {Record<string, unknown>} [fields]
+   */
   const fireRunHook = (event, fields = {}) => engine.fire(event, fields, { signal: runSignal });
+  /**
+   * @param {Record<string, unknown>} fields
+   */
   const fireStopHook = (fields) => {
     if (runSignal?.aborted) return { blocks: [], injects: [], feedbacks: [], results: [] };
     return fireRunHook("Stop", fields);
   };
 
+  /** @returns {RunAgentResult} */
   const buildResult = () => ({
     sessionId,
     turns: agentTurns,
@@ -151,13 +190,15 @@ export async function runAgent(opts) {
     for (let turn = 1; turn <= maxTurns; turn++) {
       checkAbort();
       agentTurns = turn;
-      const compacted = await ctx.maybeCompact({
-        onCompact: async ({ compactionCount }) => {
-          const res = await fireRunHook("PostCompact", { compactionCount });
-          await log({ type: "compact", compactionCount });
-          return res?.injects || [];
-        },
-      });
+      /** @param {{ compactionCount: number }} compactInfo */
+      const onCompact = async ({ compactionCount }) => {
+        const res = await fireRunHook("PostCompact", { compactionCount });
+        await log({ type: "compact", compactionCount });
+        return res?.injects || [];
+      };
+      const compacted = await ctx.maybeCompact(/** @type {any} */ ({
+        onCompact,
+      }));
       void compacted;
 
       let resp;
@@ -185,16 +226,16 @@ export async function runAgent(opts) {
       } catch (err) {
         if (isDeadlineError(err) || runSignal?.aborted) {
           finishReason = "timeout";
-          errorMessage = abortReason(runSignal, err).message;
+          errorMessage = abortReason(runSignal, abortFallback(err)).message;
         } else {
           finishReason = "error";
-          errorMessage = err?.message || String(err);
+          errorMessage = errorMessageOf(err);
         }
         await log({ type: "error", message: errorMessage, turn });
         break;
       }
       ctx.recordUsage(resp.usage);
-      const u = resp.usage || {};
+      const u = /** @type {ChatUsage} */ (resp.usage || {});
       const reasoningTokens = u.completion_tokens_details?.reasoning_tokens || u.reasoning_tokens || 0;
       totalReasoningTokens += reasoningTokens;
       totalPromptTokens += u.prompt_tokens || 0;
@@ -236,9 +277,10 @@ export async function runAgent(opts) {
       let stopToolLoop = false;
       for (const tc of resp.tool_calls) {
         checkAbort();
-        const record = { name: tc.name || "unknown", turn, status: "ok" };
+        const toolName = tc.name || "unknown";
+        const record = /** @type {ToolExecutionRecord} */ ({ name: toolName, turn, status: "ok" });
         toolCalls.push(record);
-        const handler = TOOL_HANDLERS[tc.name];
+        const handler = /** @type {ToolHandler | undefined} */ (TOOL_HANDLERS[toolName]);
         if (!handler) {
           record.status = "error";
           ctx.push({ role: "tool", tool_call_id: tc.id, content: `Error: unknown tool '${tc.name}'. Available: read_file, write_file, patch_file, list_dir, grep, run_shell, finish.` });
@@ -278,16 +320,16 @@ export async function runAgent(opts) {
         } catch (err) {
           if (isDeadlineError(err) || runSignal?.aborted) {
             record.status = "timeout";
-            throw abortReason(runSignal, err);
+            throw abortReason(runSignal, abortFallback(err));
           }
           handlerThrew = true;
-          result = `Error executing ${tc.name}: ${err?.message || err}`;
+          result = `Error executing ${tc.name}: ${errorMessageOf(err)}`;
         }
         if ((tc.name === "write_file" || tc.name === "patch_file") && typeof tc.arguments?.path === "string") {
           filesWritten.add(tc.arguments.path);
         }
 
-        const finishCandidate = !!(result && result.__finish);
+        const finishCandidate = isFinishToolResult(result);
         const candidateSummary = finishCandidate ? result.summary : null;
         if (finishCandidate) {
           resultStr = `finish acknowledged: ${candidateSummary}`;
@@ -341,10 +383,10 @@ export async function runAgent(opts) {
   } catch (err) {
     if (isDeadlineError(err) || runSignal?.aborted) {
       finishReason = "timeout";
-      errorMessage = abortReason(runSignal, err).message;
+      errorMessage = abortReason(runSignal, abortFallback(err)).message;
     } else {
       finishReason = "error";
-      errorMessage = err?.message || String(err);
+      errorMessage = errorMessageOf(err);
     }
     await log({ type: "error", message: errorMessage });
   }
@@ -363,6 +405,35 @@ export async function runAgent(opts) {
   return buildResult();
 }
 
+/**
+ * @param {unknown} result
+ * @returns {result is FinishToolResult}
+ */
+function isFinishToolResult(result) {
+  return !!(result && typeof result === "object" && "__finish" in result && result.__finish);
+}
+
+/**
+ * @param {unknown} err
+ * @returns {string}
+ */
+function errorMessageOf(err) {
+  if (err && typeof err === "object" && "message" in err && err.message) return String(err.message);
+  return String(err);
+}
+
+/**
+ * @param {unknown} err
+ * @returns {Error | undefined}
+ */
+function abortFallback(err) {
+  return /** @type {Error | undefined} */ (err);
+}
+
+/**
+ * @param {string | null | undefined} resultStr
+ * @returns {boolean}
+ */
 function isToolErrorResult(resultStr) {
   return /^Error(?::| executing\b)/i.test(resultStr || "") || /^Command exited\b/i.test(resultStr || "");
 }
