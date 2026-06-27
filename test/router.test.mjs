@@ -109,8 +109,11 @@ test("resolveContextBudget supports absolute env override", () => {
   assert.equal(resolveContextBudget("glm-5.2", catalog, { LAZYGLM_CONTEXT_BUDGET: "300_000" }), 300_000);
 });
 
-test("resolveContextBudget falls back when catalog window is missing", () => {
-  assert.equal(resolveContextBudget("unknown", { models: {} }, {}), 200_000);
+test("resolveContextBudget falls back conservatively when catalog window is missing", () => {
+  // Unknown/custom models (Ollama, OpenAI-compatible shims) often have small
+  // windows (4k/8k). A large fallback would suppress compaction until the
+  // provider rejects the request; keep the conservative default.
+  assert.equal(resolveContextBudget("unknown", { models: {} }, {}), 24_000);
 });
 
 test("resolveProviderConfig rejects an unknown explicit provider before fetch", async () => {

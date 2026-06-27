@@ -27,7 +27,12 @@ import { dirname, join } from "node:path";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CATALOG_PATH = join(ROOT, "config", "model-catalog.json");
-export const DEFAULT_CONTEXT_BUDGET = 200_000;
+// Conservative fallback for models NOT in the catalog (custom LAZYGLM_BASE_URL,
+// Ollama, OpenAI-compatible shims). Many such models have small windows (4k/8k);
+// a 200k fallback would suppress compaction until the provider rejects the
+// request. Known catalog models still get their derived 80% window; users who
+// know their custom model's capacity can set LAZYGLM_CONTEXT_BUDGET explicitly.
+export const DEFAULT_CONTEXT_BUDGET = 24_000;
 export const CONTEXT_BUDGET_FACTOR = 0.8;
 const readModelCatalog = /** @type {(path: string, fallback: ModelCatalog) => Promise<ModelCatalog>} */ (
   /** @type {unknown} */ (readJson)
