@@ -329,7 +329,8 @@ function decisionNegatesTarget(decision, target) {
   if (!target) return false;
   const normalized = normalizeChoiceTarget(decision);
   const escaped = escapeRegExp(target);
-  return new RegExp(`\\b(?:not|never|without|avoid|avoiding|no)\\b(?:\\s+\\w+){0,4}\\s+${escaped}\\b`, "i").test(normalized);
+  // Lookarounds instead of \b so non-word targets (C++, C#, .NET) match.
+  return new RegExp(`(?<![\\w])(?:not|never|without|avoid|avoiding|no)(?:\\s+\\w+){0,4}\\s+${escaped}(?![\\w])`, "i").test(normalized);
 }
 
 function firstChoiceTarget(content, cues) {
@@ -376,7 +377,10 @@ function decisionMentionsTarget(decision, target) {
   const normalizedTarget = normalizeChoiceTarget(target);
   if (!normalizedTarget) return false;
   const targetPattern = normalizedTarget.split(/\s+/).map(escapeRegExp).join("\\s+");
-  return new RegExp(`\\b${targetPattern}\\b`, "i").test(normalizeChoiceTarget(decision));
+  // Use lookarounds instead of \b so targets ending/starting in non-word
+  // characters (C++, C#, F#, .NET) still match. \b only fires between a word
+  // and a non-word char, so it fails after a trailing +/#/. boundary.
+  return new RegExp(`(?<![\\w])${targetPattern}(?![\\w])`, "i").test(normalizeChoiceTarget(decision));
 }
 
 function decisionAffirmsTarget(decision, target) {

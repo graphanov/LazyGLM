@@ -1034,6 +1034,30 @@ test("\"rather than\" replacement does not evict unrelated decisions", async () 
   assert.match(block, /React/i, "unrelated React decision must survive a targeted rather-than override");
 });
 
+test("non-word technology names are matched in override targets", async () => {
+  // Regression for the P2 finding: decisionMentionsTarget used \b...\b which
+  // fails after non-word endpoints (C++, C#, F#, .NET). The rejected decision
+  // survived a targeted "instead of"/"rather than" override and kept surfacing
+  // in handoff digests, steering the agent back to the old choice.
+  for (const overrideMessage of [
+    "Use Rust instead of C++.",
+    "Use Rust rather than C++.",
+  ]) {
+    const ctx = new Context({ budget: 1 });
+    ctx.setSystem("system prompt");
+    ctx.push({ role: "user", content: "the task" });
+    ctx.push({ role: "assistant", content: "I decided to use C++ for the CLI." });
+    ctx.push({ role: "user", content: overrideMessage });
+    pushRecentTail(ctx, "filler", 13);
+
+    await ctx.maybeCompact();
+    const summary = latestCompactionSummary(ctx);
+    const block = decisionsBlock(summary);
+
+    assert.doesNotMatch(block, /C\+\+/i, `non-word target must be evicted: ${overrideMessage}`);
+  }
+});
+
 test("neutral rework wording does not drop decisions", async () => {
   // Guard sibling broad cues: discard/rework words must not clear decisions when
   // they refer to routine work rather than a prior decision or approach.
