@@ -913,6 +913,7 @@ test("negated old-choice replacement drops superseded decisions", async () => {
     "Do not use Postgres; use SQLite.",
     "Do not use Postgres.",
     "Do not use Postgres but use SQLite.",
+    "Do not use Postgres because it requires a server",
   ]) {
     for (const persistOldDecision of [false, true]) {
       const ctx = new Context({ budget: 1 });
