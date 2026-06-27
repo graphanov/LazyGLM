@@ -138,9 +138,7 @@ export class Context {
     // Compaction normally runs right after a new user turn, so the override is
     // typically in the retained tail (not `dropped`); scan the tail for override
     // cues as well so a live correction evicts persisted decisions.
-    const tailOverridden = tail.some(
-      (m) => m.role === "user" && typeof m.content === "string" && OVERRIDE_CUES.some((c) => c.test(m.content)),
-    );
+    const tailOverridden = tail.some(isOverrideTurn);
     if (overridden || tailOverridden) this.decisions.length = 0;
     // When the override is live in the retained tail, every decision extracted
     // from `dropped` predates the correction and is therefore superseded. Skip
@@ -151,7 +149,7 @@ export class Context {
     for (const decision of effectiveNewDecisions) {
       if (!this.decisions.includes(decision)) this.addDecision(decision);
     }
-    const digest = buildDigest(dropped, this.getDecisions());
+    const digest = buildDigest(dropped, this.getDecisions(), { suppressDecisionNotes: tailOverridden });
 
     const summary = {
       role: "system",
@@ -212,7 +210,9 @@ const DECISION_CUES = [
 // instructions ("Do not run tests yet", "No need to update docs") and wrongly
 // cleared the Decisions & rationale block in multi-compaction sessions.
 const OVERRIDE_CUES = [
-  /\bactually\b/i,
+  // `actually` is only an override when it introduces a replacement target;
+  // standalone "Actually, please run tests" is a neutral request.
+  /\bactually\b.*\b(?:use|switch to|change to|replace|prefer|go with)\b/i,
   /\binstead\b/i,
   /\bchange\b.*\bto\b/i,
   // Note: /\bswitch\b/i was removed — it matched neutral discussion of switch
@@ -230,6 +230,14 @@ const OVERRIDE_CUES = [
   /\brather\b/i,
   /\brevert\b/i,
 ];
+
+function isOverrideTurn(m) {
+  return m.role === "user" && typeof m.content === "string" && OVERRIDE_CUES.some((c) => c.test(m.content));
+}
+
+function isDecisionSentence(text) {
+  return DECISION_CUES.some((cue) => cue.test(text));
+}
 
 function normalizeDecision(text) {
   const s = String(text || "").replace(/\s+/g, " ").trim();
@@ -262,7 +270,7 @@ function extractDecisions(dropped) {
     // "I decided to use Postgres." then user "Actually use SQLite"). Decisions
     // emitted after the override are retained. `overridden` also lets the caller
     // evict decisions persisted from earlier compaction passes.
-    if (m.role === "user" && typeof m.content === "string" && OVERRIDE_CUES.some((c) => c.test(m.content))) {
+    if (isOverrideTurn(m)) {
       if (decisions.length) decisions.length = 0;
       overridden = true;
       continue;
@@ -273,7 +281,7 @@ function extractDecisions(dropped) {
     for (const sentence of extractSentences(m.content)) {
       const decision = normalizeDecision(sentence);
       if (!decision) continue;
-      if (!DECISION_CUES.some((cue) => cue.test(decision))) continue;
+      if (!isDecisionSentence(decision)) continue;
       if (seen.has(decision)) continue;
       seen.add(decision);
       decisions.push(decision);
@@ -288,14 +296,31 @@ function extractDecisions(dropped) {
  * retains operational memory (what it already did) after compaction — without
  * spending an extra LLM call on summarization.
  */
-function buildDigest(dropped, prevDecisions = []) {
+function buildDigest(dropped, prevDecisions = [], { suppressDecisionNotes = false } = {}) {
   const filesWritten = new Set();
   const filesPatched = new Set();
   const commands = [];
   const errors = [];
-  let notes = "";
+  let notes = [];
+  let notesLength = 0;
+
+  const appendNote = (text) => {
+    if (notesLength >= 800) return;
+    const isDecision = isDecisionSentence(text);
+    if (suppressDecisionNotes && isDecision) return;
+    notes.push({ text, isDecision });
+    notesLength += text.length + 1;
+  };
 
   for (const m of dropped) {
+    if (isOverrideTurn(m)) {
+      // If a user correction is in the dropped slice, decision sentences before
+      // it are superseded not only in Decisions & rationale but also in Agent
+      // notes. Keep non-decision operational notes; drop only the rejected
+      // decision sentences so the handoff does not contradict the correction.
+      notes = notes.filter((note) => !note.isDecision);
+      notesLength = notes.reduce((n, note) => n + note.text.length + 1, 0);
+    }
     if (m.role === "assistant") {
       if (Array.isArray(m.tool_calls)) {
         for (const tc of m.tool_calls) {
@@ -306,8 +331,13 @@ function buildDigest(dropped, prevDecisions = []) {
           else if (fn.name === "run_shell" && args.command) commands.push(truncate(args.command, 80));
         }
       }
-      if (typeof m.content === "string" && m.content.trim() && notes.length < 800) {
-        notes += " " + m.content.trim();
+      if (typeof m.content === "string" && m.content.trim() && notesLength < 800) {
+        for (const sentence of extractSentences(m.content)) {
+          const note = String(sentence || "").replace(/\s+/g, " ").trim();
+          if (!note) continue;
+          appendNote(note);
+          if (notesLength >= 800) break;
+        }
       }
     }
     if (m.role === "tool" && typeof m.content === "string") {
@@ -322,7 +352,8 @@ function buildDigest(dropped, prevDecisions = []) {
   if (filesPatched.size) parts.push(`Files modified: ${[...filesPatched].join(", ")}`);
   if (commands.length) parts.push(`Commands run: ${commands.slice(-8).join(" | ")}`);
   if (errors.length) parts.push(`Errors encountered: ${errors.slice(-6).join(" | ")}`);
-  if (notes.trim()) parts.push(`Agent notes: ${truncate(notes.trim(), 600)}`);
+  const notesText = notes.map((note) => note.text).join(" ").trim();
+  if (notesText) parts.push(`Agent notes: ${truncate(notesText, 600)}`);
   if (prevDecisions.length) {
     parts.push(`Decisions & rationale:\n${prevDecisions.map((d, i) => `${i + 1}. ${d}`).join("\n")}`);
   }

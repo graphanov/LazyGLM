@@ -190,6 +190,11 @@ test("compaction drops a reversed decision when a user override follows it", asy
   const summary = latestCompactionSummary(ctx);
   const block = decisionsBlock(summary);
   assert.doesNotMatch(block, /Postgres/i, "a decision reversed by a later user turn must not persist in the digest");
+  assert.doesNotMatch(
+    summary.content,
+    /I decided to use Postgres for persistence\./,
+    "a reversed decision must not survive via Agent notes either",
+  );
 });
 
 test("compaction keeps decisions emitted after a user override", async () => {
@@ -437,6 +442,29 @@ test("neutral switch statement discussion does not drop decisions", async () => 
     block,
     /I decided to use Postgres for persistence\./,
     "a neutral switch statement message must not evict decisions",
+  );
+});
+
+test("neutral actually request does not drop decisions", async () => {
+  // Regression for the P2 finding: standalone /\bactually\b/i matched ordinary
+  // follow-up requests ("Actually, please run the full test suite") and wrongly
+  // cleared the Decisions & rationale block in multi-compaction sessions.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  // A neutral request that contains "Actually" but does not reverse any decision.
+  ctx.push({ role: "user", content: "Actually, please run the full test suite before finishing." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.match(
+    block,
+    /I decided to use Postgres for persistence\./,
+    "a neutral actually message must not evict decisions",
   );
 });
 
