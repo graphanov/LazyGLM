@@ -760,6 +760,7 @@ test("choice instead-of wording drops superseded decisions", async () => {
   for (const overrideMessage of [
     "Use SQLite instead of Postgres.",
     "Use SQLite instead of Postgres because it is simpler.",
+    "Use SQLite instead of Postgres and update tests.",
     "Use SQLite instead of the current Postgres.",
     "Use SQLite instead of using Postgres.",
   ]) {
@@ -1005,6 +1006,7 @@ test("negated old-choice replacement drops superseded decisions", async () => {
   // freshly dropped decisions and decisions persisted from an earlier compaction.
   for (const overrideMessage of [
     "Do not use Postgres; use SQLite.",
+    "Do not use Postgres; keep going.",
     "Do not use Postgres.",
     "Do not use Postgres but use SQLite.",
     "Do not use Postgres because it requires a server",
