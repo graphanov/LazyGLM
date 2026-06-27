@@ -651,12 +651,18 @@ function isPreserveChoiceTurn(content, activeDecisions = []) {
 
 function decisionOverrideForTurn(m, activeDecisions = []) {
   if (m.role !== "user" || typeof m.content !== "string") return false;
-  const targets = targetedOverrideTargets(m.content, activeDecisions);
+  // Collapse whitespace so multiline/pasted user turns like "Actually,\nuse
+  // SQLite." match the same override cues as their single-line equivalents.
+  // Regex cues use `.*` without dotAll and the bare-imperative cue is
+  // anchored with ^…$, so raw newlines would silently bypass override
+  // handling and leave superseded decisions in the compaction digest.
+  const content = m.content.replace(/\s+/g, " ").trim();
+  const targets = targetedOverrideTargets(content, activeDecisions);
   if (targets.length) return { all: false, targets };
-  if (isPreserveChoiceTurn(m.content, activeDecisions)) return false;
-  if (isNeutralShortInsteadTurn(m.content)) return null;
-  if (isNeutralRatherUseTurn(m.content)) return null;
-  if (OVERRIDE_CUES.some((cue) => cue.test(m.content))) return { all: true, targets: [] };
+  if (isPreserveChoiceTurn(content, activeDecisions)) return false;
+  if (isNeutralShortInsteadTurn(content)) return null;
+  if (isNeutralRatherUseTurn(content)) return null;
+  if (OVERRIDE_CUES.some((cue) => cue.test(content))) return { all: true, targets: [] };
   return null;
 }
 

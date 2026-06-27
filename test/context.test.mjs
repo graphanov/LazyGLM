@@ -1753,3 +1753,27 @@ test("estimateTokens ignores reasoning_content when preserveThinking is false (s
     "reasoning_content must count again once preserveThinking is enabled",
   );
 });
+
+test("multiline override corrections evict superseded decisions", async () => {
+  // Regression for the P2 finding: override cues use `.*` without dotAll and
+  // the bare-imperative cue is anchored with ^…$, so a pasted/multiline user
+  // correction like "Actually,\nuse SQLite." was treated as neutral and left
+  // the stale Postgres decision in the compaction digest. User content must be
+  // whitespace-normalized before override matching.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  ctx.push({ role: "user", content: "Actually,\nuse SQLite." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.doesNotMatch(
+    block,
+    /Postgres/i,
+    "a multiline 'Actually,\\nuse SQLite.' correction must evict the superseded Postgres decision",
+  );
+});
