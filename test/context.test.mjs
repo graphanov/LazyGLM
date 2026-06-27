@@ -1034,6 +1034,33 @@ test("negated old-choice replacement drops superseded decisions", async () => {
   }
 });
 
+test("negated old-choice replacement preserves already-negated decisions", async () => {
+  // Reaffirming a negative constraint should not remove the prior negative
+  // decision just because it mentions the same target.
+  for (const persistOldDecision of [false, true]) {
+    const ctx = new Context({ budget: 1 });
+    ctx.setSystem("system prompt");
+    ctx.push({ role: "user", content: "the task" });
+    if (persistOldDecision) {
+      ctx.addDecision("I decided not to use Postgres for persistence.");
+    } else {
+      ctx.push({ role: "assistant", content: "I decided not to use Postgres for persistence." });
+    }
+    ctx.push({ role: "user", content: "Do not use Postgres; use SQLite." });
+    pushRecentTail(ctx, "filler", 13);
+
+    await ctx.maybeCompact();
+    const summary = latestCompactionSummary(ctx);
+    const block = decisionsBlock(summary);
+
+    assert.match(
+      block,
+      /I decided not to use Postgres for persistence\./,
+      `an already-negated decision should survive a reaffirming negated replacement; persisted=${persistOldDecision}`,
+    );
+  }
+});
+
 test("targeted negated replacement preserves unrelated decisions", async () => {
   const ctx = new Context({ budget: 1 });
   ctx.addDecision("I decided to keep the parser dependency-free.");

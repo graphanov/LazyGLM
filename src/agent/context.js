@@ -300,6 +300,17 @@ function normalizeChoiceTarget(value) {
     .toLowerCase();
 }
 
+function escapeRegExp(value) {
+  return String(value).replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
+}
+
+function decisionNegatesTarget(decision, target) {
+  if (!target) return false;
+  const normalized = normalizeChoiceTarget(decision);
+  const escaped = escapeRegExp(target);
+  return new RegExp(`\\b(?:not|never|without|avoid|avoiding|no)\\b(?:\\s+\\w+){0,4}\\s+${escaped}\\b`, "i").test(normalized);
+}
+
 function firstChoiceTarget(content, cues) {
   for (const cue of cues) {
     const match = cue.exec(content);
@@ -327,13 +338,17 @@ function decisionMentionsTarget(decision, target) {
   return Boolean(target) && normalizeChoiceTarget(decision).includes(target);
 }
 
+function decisionAffirmsTarget(decision, target) {
+  return decisionMentionsTarget(decision, target) && !decisionNegatesTarget(decision, target);
+}
+
 function decisionsMentionChoice(decisions, target) {
   if (!target || isPronounChoiceTarget(target)) return false;
-  return decisions.some((decision) => decisionMentionsTarget(decision, target));
+  return decisions.some((decision) => decisionAffirmsTarget(decision, target));
 }
 
 function decisionMatchesTargets(decision, targets = []) {
-  return targets.some((target) => decisionMentionsTarget(decision, target));
+  return targets.some((target) => decisionAffirmsTarget(decision, target));
 }
 
 function mergeDecisionOverride(existing, next) {
