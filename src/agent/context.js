@@ -342,22 +342,17 @@ function firstChoiceTarget(content, cues) {
   return "";
 }
 
-function isNeutralShortInsteadTurn(content) {
-  const target = SHORT_INSTEAD_REPLACEMENT_TARGET_CUE.exec(content)?.[1]?.trim() || "";
-  return Boolean(target && COMMANDISH_REPLACEMENT_TARGET_CUE.test(target));
-}
-
-function isNeutralActionUseTurn(content) {
-  const target = NEUTRAL_ACTION_USE_CUE.exec(content)?.[1]?.trim() || "";
+function isNeutralReplacementTarget(target) {
   if (!target) return false;
   if (COMMANDISH_REPLACEMENT_TARGET_CUE.test(target)
       || ONE_WORD_TOOL_ACTION_TARGET_CUE.test(target)) return true;
   // An article-prefixed target is neutral when it names a generic artifact
-  // ("the test suite", "a config file") or an all-caps file/acronym ("the
-  // README", "the JSON schema"). A technology/approach name after the article
-  // ("a Svelte frontend", "the Rust port", "a svelte frontend") is a real
-  // replacement target that should evict a prior decision, not preserve it.
-  // Title-case-only detection missed lowercase tech names (svelte, react).
+  // ("the test suite", "a config file", "the existing test command") or an
+  // all-caps file/acronym ("the README", "the JSON schema"). A technology or
+  // approach name after the article ("a Svelte frontend", "the Rust port",
+  // "a svelte frontend") is a real replacement target that should evict a
+  // prior decision, not preserve it. Title-case-only detection missed
+  // lowercase tech names (svelte, react).
   if (ARTICLE_ACTION_TARGET_CUE.test(target)) {
     const afterArticle = target.replace(/^(?:`)?(?:the|a|an|this|that|these|those)\s+/i, "");
     const firstWord = afterArticle.split(/\s/)[0] || "";
@@ -366,7 +361,20 @@ function isNeutralActionUseTurn(content) {
     if (GENERIC_ARTIFACT_NOUNS.has(firstWord.toLowerCase())) return true;
     return false;
   }
+  // A bare lowercase word that is a generic artifact noun ("tests", "config",
+  // "script") is a routine command substitution, not a technology choice.
+  if (GENERIC_ARTIFACT_NOUNS.has(target.toLowerCase())) return true;
   return false;
+}
+
+function isNeutralShortInsteadTurn(content) {
+  const target = SHORT_INSTEAD_REPLACEMENT_TARGET_CUE.exec(content)?.[1]?.trim() || "";
+  return isNeutralReplacementTarget(target);
+}
+
+function isNeutralActionUseTurn(content) {
+  const target = NEUTRAL_ACTION_USE_CUE.exec(content)?.[1]?.trim() || "";
+  return isNeutralReplacementTarget(target);
 }
 
 function isPronounChoiceTarget(target) {

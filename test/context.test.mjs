@@ -797,6 +797,35 @@ test("neutral short instead command request does not drop decisions", async () =
   }
 });
 
+test("neutral short instead generic-target request does not drop decisions", async () => {
+  // `Use the existing test command instead.` / `Use the test script instead.`
+  // have replacement grammar with an article-prefixed generic artifact target
+  // that is not a technology choice, so retained rationale must stay.
+  for (const request of [
+    "Use the existing test command instead.",
+    "Use the test script instead.",
+    "Use the current config instead.",
+    "Use the README instead.",
+  ]) {
+    const ctx = new Context({ budget: 1 });
+    ctx.addDecision("I decided to use Postgres for persistence.");
+    ctx.setSystem("system prompt");
+    ctx.push({ role: "user", content: "the task" });
+    ctx.push({ role: "user", content: request });
+    pushRecentTail(ctx, "filler", 13);
+
+    await ctx.maybeCompact();
+    const summary = latestCompactionSummary(ctx);
+    const block = decisionsBlock(summary);
+
+    assert.match(
+      block,
+      /I decided to use Postgres for persistence\./,
+      `a generic-artifact short instead request must not evict unrelated decisions: ${request}`,
+    );
+  }
+});
+
 test("bare or identifier short instead drops superseded decisions", async () => {
   // Bare CLI names such as Go can be technology choices; only command-shaped
   // targets like `npm test` should be neutral command substitutions. Backticks
