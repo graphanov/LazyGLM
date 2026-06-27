@@ -532,6 +532,33 @@ test("negated change-to wording does not drop decisions", async () => {
   );
 });
 
+test("negated replacement wording does not drop decisions", async () => {
+  // Regression for the P2 finding: /\breplace\b/i and the `actually ... switch
+  // to` replacement cue matched preserve-current wording such as "Don't replace
+  // Postgres; keep it", clearing rationale the user explicitly kept.
+  for (const preserveMessage of [
+    "Don't replace Postgres; keep it.",
+    "Actually, do not switch to SQLite; keep Postgres.",
+  ]) {
+    const ctx = new Context({ budget: 1 });
+    ctx.setSystem("system prompt");
+    ctx.push({ role: "user", content: "the task" });
+    ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+    ctx.push({ role: "user", content: preserveMessage });
+    pushRecentTail(ctx, "filler", 13);
+
+    await ctx.maybeCompact();
+    const summary = latestCompactionSummary(ctx);
+    const block = decisionsBlock(summary);
+
+    assert.match(
+      block,
+      /I decided to use Postgres for persistence\./,
+      `negated replacement preserve wording must not evict decisions: ${preserveMessage}`,
+    );
+  }
+});
+
 test("default context budget stays conservative for unknown models", async () => {
   // The bare Context() default applies when no catalog budget is resolved
   // (unknown/custom model). It must stay conservative so small-window models
