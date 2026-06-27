@@ -5,9 +5,9 @@
 //   - The original task message is PINNED — never dropped — so the agent never
 //     loses sight of what it was asked to do.
 //   - The dropped middle is replaced by a deterministic digest (files written,
-//     commands run, errors hit, agent notes), not a generic placeholder. This
-//     is the operational memory that stops the agent from re-doing work or
-//     thrashing after a compaction.
+//     commands run, errors hit, agent notes, and decisions/rationale), not a
+//     generic placeholder. This is the operational memory that stops the agent
+//     from re-doing work or thrashing after a compaction.
 import { nowIso, truncate } from "../util.js";
 
 const CHARS_PER_TOKEN = 4; // rough cross-model estimate; budget windows come from the catalog.
@@ -55,6 +55,7 @@ export class Context {
     this.compactionCount = 0;
     this.totalTokensIn = 0;
     this.totalTokensOut = 0;
+    this.decisions = [];
   }
 
   setSystem(text) {
@@ -66,6 +67,42 @@ export class Context {
 
   push(msg) {
     this.messages.push(msg);
+  }
+
+  addDecision(text) {
+    const decision = normalizeDecision(text);
+    if (!decision) return;
+    this.decisions.push(decision);
+    if (this.decisions.length > 12) this.decisions.shift();
+  }
+
+  getDecisions() {
+    return [...this.decisions];
+  }
+
+  /**
+   * Reset the conversation to an empty transcript. Clears messages, the
+   * per-context decision store, and compaction counters — used by REPL
+   * /clear and /resume so a stale `decisions` array does not leak rationale
+   * from a prior session into the next compaction digest.
+   */
+  reset() {
+    this.messages = [];
+    this.decisions = [];
+    this.compactionCount = 0;
+  }
+
+  /**
+   * Reset the conversation while preserving only the original system prompt.
+   * Compaction summaries and PostCompact injects are also `system` messages,
+   * but they are scoped to the current compacted conversation and must not
+   * survive REPL /clear or /resume into a fresh transcript.
+   */
+  resetToSystemPrompt() {
+    const system = this.messages.find((m) => m.role === "system");
+    this.messages = system ? [system] : [];
+    this.decisions = [];
+    this.compactionCount = 0;
   }
 
   estimateTokens() {
@@ -85,7 +122,7 @@ export class Context {
    * Compact if over budget. Preserves:
    *   - the system prompt
    *   - the original task message (PINNED — never dropped)
-   *   - a deterministic digest of the dropped middle (files/commands/errors/notes)
+   *   - a deterministic digest of the dropped middle (files/commands/errors/notes/decisions)
    *   - the most recent `keepRecent` messages
    * Fires `onCompact` so the hook engine can react. Returns true if compaction occurred.
    */
@@ -106,7 +143,25 @@ export class Context {
     const tail = rest.slice(tailStart);
     const dropped = rest.slice(1, tailStart); // everything between task and recent tail
 
-    const digest = buildDigest(dropped);
+    const existingDecisions = this.getDecisions();
+    const { decisions: newDecisions, override: droppedOverride } = extractDecisions(dropped, existingDecisions);
+    // Overrides can be broad ("Actually use SQLite") or targeted ("Use SQLite
+    // instead of Postgres"). Broad overrides clear all prior rationale; targeted
+    // ones only evict decisions that mention the rejected choice so unrelated
+    // handoff context survives.
+    let retainedExistingDecisions = applyDecisionOverride(existingDecisions, droppedOverride);
+    const tailOverride = collectDecisionOverrides(tail, [...retainedExistingDecisions, ...newDecisions]);
+    retainedExistingDecisions = applyDecisionOverride(retainedExistingDecisions, tailOverride);
+    const effectiveNewDecisions = applyDecisionOverride(newDecisions, tailOverride);
+
+    this.decisions.length = 0;
+    for (const decision of [...retainedExistingDecisions, ...effectiveNewDecisions]) {
+      if (!this.decisions.includes(decision)) this.addDecision(decision);
+    }
+    const digest = buildDigest(dropped, this.getDecisions(), {
+      suppressDecisionNotes: Boolean(tailOverride?.all),
+      suppressedDecisionTargets: tailOverride?.targets || [],
+    });
 
     const summary = {
       role: "system",
@@ -119,7 +174,31 @@ export class Context {
 
     this.messages = [system, taskMsg, summary, ...tail].filter(Boolean);
     this.compactionCount += 1;
-    if (onCompact) await onCompact({ compactionCount: this.compactionCount, droppedTokens: tokens });
+    let injects = [];
+    if (onCompact) {
+      const res = await onCompact({ compactionCount: this.compactionCount, droppedTokens: tokens });
+      if (Array.isArray(res)) injects = res;
+    }
+    if (injects.length) {
+      // PostCompact injects are one-shot context for the current window.
+      // They are NOT persisted across subsequent compactions (buildDigest has
+      // no system-role branch). Decisions persist separately via this.decisions.
+      //
+      // Bound the inject to the remaining token headroom so a sizeable
+      // PostCompact hook result does not push the compacted window back over
+      // budget — without a second check the next chat() call can exceed the
+      // provider context window even though compaction just ran.
+      let injectContent = injects.join("\n\n");
+      const postCompactTokens = this.estimateTokens();
+      const headroomChars = Math.max(0, (this.budget - postCompactTokens) * CHARS_PER_TOKEN);
+      if (injectContent.length > headroomChars) {
+        injectContent = headroomChars > 1 ? injectContent.slice(0, headroomChars - 1).trimEnd() + "…" : "";
+      }
+      const summaryIdx = this.messages.indexOf(summary);
+      if (summaryIdx >= 0 && injectContent) {
+        this.messages.splice(summaryIdx + 1, 0, { role: "system", content: injectContent });
+      }
+    }
     return true;
   }
 
@@ -136,19 +215,582 @@ function safeParse(s) {
   try { return JSON.parse(s); } catch { return {}; }
 }
 
+const DECISION_CUES = [
+  /\bdecided?\b/i,
+  /\bchose\b/i,
+  /\bthe (?:plan|approach|design) is\b/i,
+  /\brationale\b/i,
+  /\bgoing with\b.*\bbecause\b/i,
+];
+
+// Cues that a user turn reverses a prior assistant decision. A user message
+// matching one of these in the dropped region causes preceding assistant
+// decisions to be treated as superseded, so the handoff does not keep
+// surfacing a rejected choice after the user's correction is gone.
+//
+// These are narrowed to explicit correction/replacement phrasing. Broad
+// negation cues (\bnot\b, \bdon'?t\b) were removed: they matched neutral
+// instructions ("Do not run tests yet", "No need to update docs") and wrongly
+// cleared the Decisions & rationale block in multi-compaction sessions.
+const CHANGE_TO_CUE = /\bchange\b.*\b(?:decision|choice|approach|rationale|plan(?!\.[\w-])|design(?!\.[\w-]))\b.*\bto\b|\b(?:decision|choice|approach|rationale|plan(?!\.[\w-])|design(?!\.[\w-]))\b.*\bchange\b.*\bto\b/i;
+const NEGATED_CHANGE_TO_CUE = /\b(?:no|not|without)\s+change\b.*\bto\b|\b(?:do not|don't)\s+change\b.*\bto\b/i;
+const NEGATED_REPLACEMENT_CUE = /\b(?:do not|don't|dont)\s+(?:replace|use|switch\s+to|change\s+to|prefer|go with)\b|\b(?:no|not|without)\s+(?:replace|replacement|use|switch\s+to|change\s+to|preference)\b/i;
+const PRESERVE_CHOICE_CUE = /\b(?:keep|preserve|retain|stick with|stay with|leave)\b|\b(?:same|current|existing|prior|previous)\b.*\b(?:choice|decision|approach|plan)\b/i;
+// "Rather than use SQLite, keep Postgres" — the rather...use pattern fires
+// hasPositiveReplacementCue and broad-clears even though the user is
+// explicitly keeping the current choice. This cue detects when a rather-than
+// clause is paired with an explicit keep/preserve target so isPreserveChoiceTurn
+// can treat it as a preserve instead of a broad override. Group 1 = rejected
+// target (the one after "rather than"), group 2 = kept target. When the rejected
+// target is also an active decision, it must be evicted even though the kept
+// target is preserved, otherwise the digest retains contradictory entries.
+// The kept target (group 2) stops at punctuation or a rationale boundary
+// (because/since/as/...) so "keep Postgres because it is already wired"
+// captures "Postgres" rather than the full rationale; otherwise the captured
+// target would not match the active decision and the turn would fall through
+// to RATHER_REPLACEMENT_CUE, broad-clearing the kept rationale.
+const RATHER_THAN_PRESERVE_CUE = /\brather\s+than\b\s+([^.;,\n]+?)\s*,\s*(?:keep|preserve|retain|stick\s+with|stay\s+with|leave)\s+([^.;,\n]+?)(?=\s+(?:because|since|as|in|for|on|during|when|while|where|under|with|to)\b|[.;,\n]|$)/i;
+const REPLACE_DECISION_CUE = /\breplace\b.*\b(?:decision|choice|approach|rationale)\b|\b(?:decision|choice|approach|rationale)\b.*\breplace\b/i;
+const INSTEAD_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\b.*\binstead\b(?!\s+of\b)|\binstead\b(?!\s+of\b).*\b(?:use|switch\s+to|change\s+to|prefer|go with)\b/i;
+const SHORT_INSTEAD_REPLACEMENT_TARGET_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\s+([^.;,\n]+?)\s+instead\b(?!\s+of\b)/i;
+const INSTEAD_OF_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\s+([^.;,\n]+?)\s+instead\s+of\s+([^.;,\n]+?)(?=\s+(?:because|since|as|in|for|on|during|when|while|where|under|with|to)\b|\s+(?:but|and)\s+(?:(?:do not|don't|dont|not|never)\s+)?(?:keep|preserve|retain|stick with|stay with|leave|update|edit|modify|write|patch|create|delete|read|open|run|rerun|test|verify|check|build|lint|format|fix)\b|[.;,\n]|$)/i;
+// Leading-order: "Instead of Postgres, use SQLite" — the old target appears
+// first (after "instead of"), the new target follows the verb. INSTEAD_OF above
+// only recognizes verb-first order ("use SQLite instead of Postgres"), so the
+// reversed phrasing slipped through and the rejected decision stayed in the
+// handoff digest. Group 1 = old target, group 2 = new target.
+const LEADING_INSTEAD_OF_REPLACEMENT_CUE = /\binstead\s+of\s+([^.;,\n]+?)\s*,?\s+(?:use|switch\s+to|change\s+to|prefer|go\s+with)\s+([^.;,\n]+?)(?=\s+(?:because|since|as|in|for|on|during|when|while|where|under|with|to)\b|\s+(?:but|and)\s+(?:(?:do not|don't|dont|not|never)\s+)?(?:keep|preserve|retain|stick with|stay with|leave|update|edit|modify|write|patch|create|delete|read|open|run|rerun|test|verify|check|build|lint|format|fix)\b|[.;,\n]|$)/i;
+const ACTUALLY_REPLACEMENT_CUE = /\bactually\b.*\b(?:use|switch to|change to|prefer|go with)\b/i;
+const RATHER_REPLACEMENT_CUE = /\brather\b.*\b(?:use|switch to|change to|prefer|go with)\b/i;
+// Targeted "use X rather than Y" form: RATHER_REPLACEMENT_CUE only matches the
+// reversed "rather ... use" order, so a direct correction like "Use SQLite
+// rather than Postgres." slipped through and left the rejected Postgres
+// decision in the handoff digest. This cue names both targets so the old one
+// (the second capture group) can be evicted precisely, mirroring
+// INSTEAD_OF_REPLACEMENT_CUE for the "instead of" phrasing.
+const RATHER_THAN_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go\s+with)\s+([^.;,\n]+?)\s+rather\s+than\s+([^.;,\n]+?)(?=\s+(?:because|since|as|in|for|on|during|when|while|where|under|with|to)\b|\s+(?:but|and)\s+(?:(?:do not|don't|dont|not|never)\s+)?(?:keep|preserve|retain|stick with|stay with|leave|update|edit|modify|write|patch|create|delete|read|open|run|rerun|test|verify|check|build|lint|format|fix)\b|[.;,\n]|$)/i;
+// Leading-order: "Rather than Postgres, use SQLite" — the old target appears
+// first (after "rather than"), the new target follows the verb. RATHER_THAN above
+// only recognizes verb-first order ("use SQLite rather than Postgres"), so the
+// reversed phrasing slipped through to broad-clear and dropped unrelated decisions.
+// Group 1 = old target, group 2 = new target.
+const LEADING_RATHER_THAN_REPLACEMENT_CUE = /\brather\s+than\s+([^.;,\n]+?)\s*,?\s+(?:use|switch\s+to|change\s+to|prefer|go\s+with)\s+([^.;,\n]+?)(?=\s+(?:because|since|as|in|for|on|during|when|while|where|under|with|to)\b|\s+(?:but|and)\s+(?:(?:do not|don't|dont|not|never)\s+)?(?:keep|preserve|retain|stick with|stay with|leave|update|edit|modify|write|patch|create|delete|read|open|run|rerun|test|verify|check|build|lint|format|fix)\b|[.;,\n]|$)/i;
+const SECOND_THOUGHT_REPLACEMENT_CUE = /\bon second thought\b.*\b(?:use|switch to|change to|prefer|go with|replace|scrap|redo|revert)\b/i;
+const NEVERMIND_REPLACEMENT_CUE = /\bnever ?mind\b.*\b(?:use|switch to|change to|prefer|go with|replace|decision|choice|approach|plan|design|rationale)\b/i;
+// Bare imperative choice replacement: "Use SQLite.", "Switch to Redis.", "Prefer Bun."
+// without an instead/rather/actually qualifier. This only evicts prior decisions
+// that affirm a *different* technology choice via the USE_CHOICE_FROM_DECISION_CUE
+// below, so it is safe from false positives on first-time choices and neutral
+// action requests ("use the test suite to verify" → isNeutralReplacementTarget).
+const BARE_CHOICE_IMPERATIVE_CUE = /^\s*(?:use|switch\s+to|change\s+to|prefer|go\s+with)\s+([^.;,\n]+?)\s*(?:because\s+|since\s+|but\s+|and\s+|for\s+|to\s+|in\s+)[^.;,\n]*[.;,\n]?\s*$|^\s*(?:use|switch\s+to|change\s+to|prefer|go\s+with)\s+([^.;,\n]+?)[.;,\n]?\s*$/i;
+// Extract a technology choice from an assistant decision sentence: "I decided to
+// use Postgres for persistence" → "Postgres", "chose SQLite" → "SQLite". The
+// decision text is the affirming statement; this captures the choice it names.
+const USE_CHOICE_FROM_DECISION_CUE = /\b(?:decided?\s+to\s+)?(?:use|using|chose|choosing|prefer|preferring|going\s+with|go\s+with|switch(?:ing)?\s+to|chang(?:e|ing)\s+to)\s+([^.;,\n]+?)(?=\s+(?:for|because|since|as|to|in|on|during|when|while|where|under|with|but|and)\b|[.;,\n]|$)/i;
+const DISCARD_DECISION_CUE = /\b(?:scrap|redo|revert)\b.*\b(?:decision|choice|approach|plan|design|rationale)\b|\b(?:decision|choice|approach|plan|design|rationale)\b.*\b(?:scrap|redo|revert)\b/i;
+const NEGATED_REPLACEMENT_TARGET_CUES = [
+  /\b(?:do not|don't|dont|never|avoid|avoiding)\s+(?:use|replace|prefer|go with)\s+([^.;,\n]+?)(?=\s+(?:because\b|since\b|as\b|instead\b|(?:but|and)\s+(?:use|switch|change|prefer|go with|keep\s+going|continue|carry\s+on|move\s+on|proceed)\b)|[.;,\n]|$)/i,
+  /\b(?:do not|don't|dont|never|avoid|avoiding)\s+(?:switch|change)\s+to\s+([^.;,\n]+?)(?=\s+(?:because\b|since\b|as\b|instead\b|(?:but|and)\s+(?:use|switch|change|prefer|go with|keep\s+going|continue|carry\s+on|move\s+on|proceed)\b)|[.;,\n]|$)/i,
+  /\b(?:no|not|without)\s+(?:replacement|use|switch\s+to|change\s+to|preference)\s+(?:of\s+|for\s+)?([^.;,\n]+?)(?=\s+(?:because\b|since\b|as\b|instead\b|(?:but|and)\s+(?:use|switch|change|prefer|go with|keep\s+going|continue|carry\s+on|move\s+on|proceed)\b)|[.;,\n]|$)/i,
+  // Bare "Avoid Postgres" / "Never Postgres" without a use/replace verb:
+  // the negation verb alone names the rejected target. Only fires when the
+  // target is an active decision so neutral "avoid the loop" does not evict.
+  /\b(?:avoid|avoiding|never)\s+([^.;,\n]+?)(?=\s+(?:because\b|since\b|as\b|instead\b|(?:but|and)\s+(?:use|switch|change|prefer|go with|keep\s+going|continue|carry\s+on|move\s+on|proceed)\b)|[.;,\n]|$)/i,
+];
+const PRESERVE_TARGET_CUES = [
+  /\b(?:keep|preserve|retain|stick with|stay with|leave)\s+([^.;,\n]+?)(?=[.;,\n]|$)/i,
+];
+const NEUTRAL_ACTION_USE_CUE = /\bactually\b.*\buse\s+(`[^`]+`|[^.;,\n]+?)\s+to\s+(?:verify|test|run|check|build|lint|format|inspect|update|edit|modify|write|patch|create|delete|read|open|search|find|look)\b/i;
+const COMMANDISH_REPLACEMENT_TARGET_CUE = /^(?:`(?:(?:npm|pnpm|yarn|node|npx|git|gh|python3?|pytest|go|cargo|make|cmake|bash|sh)\s+[^`]+|[a-z][a-z0-9]*_[a-z0-9_]+)`|(?:npm|pnpm|yarn|node|npx|git|gh|python3?|pytest|go|cargo|make|cmake|bash|sh)\s+\S+|[a-z][a-z0-9]*_[a-z0-9_]+\b)/i;
+const ONE_WORD_TOOL_ACTION_TARGET_CUE = /^(?:`)?(?:rg|ripgrep|tsc|eslint|prettier|biome|ruff|mypy|grep|fd|jq)(?:`)?$/;
+const ARTICLE_ACTION_TARGET_CUE = /^(?:`)?(?:the|a|an|this|that|these|those)\s+\S+/i;
+const PRONOUN_CHOICE_TARGETS = new Set(["it", "that", "this", "them"]);
+// Generic artifact/tool nouns that name what you use for a task, not a
+// technology choice. Used to keep "actually use the test suite to verify"
+// neutral while letting lowercase tech names ("svelte", "react") evict.
+const GENERIC_ARTIFACT_NOUNS = new Set([
+  "test", "tests", "suite", "config", "configuration", "file", "files",
+  "schema", "code", "docs", "documentation", "log", "logs", "output",
+  "build", "results", "report", "summary", "diff", "patch", "commit",
+  "script", "command", "tool", "tools", "package", "module", "library",
+  "setup", "approach", "method", "process", "environment", "directory",
+  "folder", "path", "branch", "version", "existing", "current",
+  "previous", "same", "latest", "fixture", "stubs", "binary",
+  // Design/architecture concepts that are not technology choices. Previously
+  // caught by an uppercase-only guard in bareUseReplacementTargets; now
+  // listed explicitly so lowercase tech names (postgres, node, svelte) can
+  // pass while these generic concepts still do not.
+  "factory", "pattern", "patterns", "singleton", "builder", "adapter",
+  "proxy", "observer", "decorator", "facade", "strategy", "iterator",
+  "middleware", "abstraction", "layer", "mixin", "trait", "wrapper",
+  "handler", "strategy", "component", "hook",
+]);
+
+const OVERRIDE_CUES = [
+  // `actually` is only an override when it introduces a replacement target;
+  // standalone "Actually, please run tests" is a neutral request. `replace` is
+  // intentionally excluded here because normal edit requests also say replace.
+  ACTUALLY_REPLACEMENT_CUE,
+  // Plain /\binstead\b/i was too broad: command substitutions like
+  // "run npm test instead of npm run test" are not decision reversals.
+  INSTEAD_REPLACEMENT_CUE,
+  // Plain /\bchange\b.*\bto\b/i was too broad: ordinary edits like
+  // "change the README heading to LazyGLM" are not decision reversals.
+  CHANGE_TO_CUE,
+  // Note: /\bswitch\b/i was removed — it matched neutral discussion of switch
+  // statements ("the switch statement still fails") and wrongly cleared the
+  // Decisions & rationale block, the same false-positive class that removed
+  // /\bwait\b/, /\bnot\b/, and /\bdon'?t\b/.
+  // Plain /\breplace\b/i is also too broad: ordinary editing requests like
+  // "replace the README placeholder" are not decision reversals.
+  REPLACE_DECISION_CUE,
+  // Note: /\bwait\b/i was removed — it matched neutral instructions ("please wait
+  // for CI before finalizing") and wrongly cleared the Decisions & rationale
+  // block, the same false-positive class that removed /\bnot\b/ and /\bdon'?t\b/.
+  SECOND_THOUGHT_REPLACEMENT_CUE,
+  NEVERMIND_REPLACEMENT_CUE,
+  // Discard/rework verbs are only overrides when tied to decision/plan nouns;
+  // "redo the test run" or "revert the README heading" must not clear rationale.
+  DISCARD_DECISION_CUE,
+  // Plain /\brather\b/i was too broad: preserve-current phrasing like
+  // "I'd rather keep Postgres" must not evict the retained rationale.
+  RATHER_REPLACEMENT_CUE,
+];
+
+function hasPositiveReplacementCue(content) {
+  return ACTUALLY_REPLACEMENT_CUE.test(content)
+    || INSTEAD_REPLACEMENT_CUE.test(content)
+    || CHANGE_TO_CUE.test(content)
+    || REPLACE_DECISION_CUE.test(content)
+    || RATHER_REPLACEMENT_CUE.test(content)
+    || SECOND_THOUGHT_REPLACEMENT_CUE.test(content)
+    || NEVERMIND_REPLACEMENT_CUE.test(content)
+    || DISCARD_DECISION_CUE.test(content);
+}
+
+function normalizeChoiceTarget(value) {
+  return String(value || "")
+    .replace(/[`"']/g, "")
+    .replace(/^\s*(?:(?:the|a|an|current|existing|prior|previous|same)\s+)+/i, "")
+    .replace(/^\s*(?:using|use|running|run|switching\s+to|switch\s+to|changing\s+to|change\s+to|choosing|choose|preferring|prefer|going\s+with|go\s+with)\s+/i, "")
+    .replace(/^\s*(?:(?:the|a|an|current|existing|prior|previous|same)\s+)+/i, "")
+    .replace(/\s+/g, " ")
+    .replace(/[.!?;:,]+$/g, "")
+    .trim()
+    .toLowerCase();
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
+}
+
+function decisionNegatesTarget(decision, target) {
+  if (!target) return false;
+  const normalized = normalizeChoiceTarget(decision);
+  const escaped = escapeRegExp(target);
+  // Lookarounds instead of \b so non-word targets (C++, C#, .NET) match.
+  return new RegExp(`(?<![\\w])(?:not|never|without|avoid|avoiding|no)(?:\\s+\\w+){0,4}\\s+${escaped}(?![\\w])`, "i").test(normalized);
+}
+
+function firstChoiceTarget(content, cues) {
+  for (const cue of cues) {
+    const match = cue.exec(content);
+    const target = normalizeChoiceTarget(match?.[1]);
+    if (target) return target;
+  }
+  return "";
+}
+
+function isNeutralReplacementTarget(target) {
+  if (!target) return false;
+  if (COMMANDISH_REPLACEMENT_TARGET_CUE.test(target)
+      || ONE_WORD_TOOL_ACTION_TARGET_CUE.test(target)) return true;
+  // An article-prefixed target is neutral when it names a generic artifact
+  // ("the test suite", "a config file", "the existing test command") or an
+  // all-caps file/acronym ("the README", "the JSON schema"). A technology or
+  // approach name after the article ("a Svelte frontend", "the Rust port",
+  // "a svelte frontend") is a real replacement target that should evict a
+  // prior decision, not preserve it. Title-case-only detection missed
+  // lowercase tech names (svelte, react).
+  if (ARTICLE_ACTION_TARGET_CUE.test(target)) {
+    const afterArticle = target.replace(/^(?:`)?(?:the|a|an|this|that|these|those)\s+/i, "");
+    const words = afterArticle.split(/\s/).filter(Boolean);
+    const firstWord = words[0] || "";
+    if (/^[A-Z][a-z]/.test(firstWord)) return false;
+    if (/^[A-Z]{2,}$/.test(firstWord)) return true;
+    if (GENERIC_ARTIFACT_NOUNS.has(firstWord.toLowerCase())) return true;
+    // An adjective/modifier before a generic artifact noun ("unit test suite",
+    // "full config file", "single report") is still a routine artifact reference.
+    // Only the first word was checked, so "the unit test suite" fell through and
+    // was wrongly treated as a technology swap. The head noun (last word) is the
+    // grammatical anchor: when it is a generic artifact noun the whole phrase
+    // names a routine artifact, while a technology-bearing phrase ("a SQLite test
+    // database", "a svelte frontend") has a non-generic head and stays a real
+    // replacement target.
+    const lastWord = words[words.length - 1] || "";
+    if (GENERIC_ARTIFACT_NOUNS.has(lastWord.toLowerCase())) return true;
+    return false;
+  }
+  // A bare lowercase word that is a generic artifact noun ("tests", "config",
+  // "script") is a routine command substitution, not a technology choice.
+  if (GENERIC_ARTIFACT_NOUNS.has(target.toLowerCase())) return true;
+  return false;
+}
+
+function isNeutralShortInsteadTurn(content) {
+  const target = SHORT_INSTEAD_REPLACEMENT_TARGET_CUE.exec(content)?.[1]?.trim() || "";
+  return isNeutralReplacementTarget(target);
+}
+
+function isNeutralActionUseTurn(content) {
+  const target = NEUTRAL_ACTION_USE_CUE.exec(content)?.[1]?.trim() || "";
+  return isNeutralReplacementTarget(target);
+}
+
+// Reversed "rather ... use X" form: RATHER_REPLACEMENT_CUE matches this order,
+// so a routine command substitution like "Rather than npm test, use npm run
+// lint." would otherwise fall through to OVERRIDE_CUES and broad-clear every
+// persisted decision. When the replacement target after "use" is a neutral
+// command-like target, treat the turn as neutral (mirrors isNeutralShortInsteadTurn
+// / isNeutralActionUseTurn for the instead/actually forms).
+const RATHER_USE_REPLACEMENT_TARGET_CUE = /\brather\b[^.;\n]*\b(?:use|switch\s+to|change\s+to|prefer|go\s+with)\s+([^.;\n]+?)(?=\s+(?:because|since|as|in|for|on|during|when|while|where|under|with)\b|[.;\n]|$)/i;
+function isNeutralRatherUseTurn(content) {
+  if (!RATHER_REPLACEMENT_CUE.test(content)) return false;
+  const target = RATHER_USE_REPLACEMENT_TARGET_CUE.exec(content)?.[1]?.trim() || "";
+  return isNeutralReplacementTarget(target);
+}
+
+function isPronounChoiceTarget(target) {
+  return PRONOUN_CHOICE_TARGETS.has(target);
+}
+
+function decisionMentionsTarget(decision, target) {
+  const normalizedTarget = normalizeChoiceTarget(target);
+  if (!normalizedTarget) return false;
+  const targetPattern = normalizedTarget.split(/\s+/).map(escapeRegExp).join("\\s+");
+  // Use lookarounds instead of \b so targets ending/starting in non-word
+  // characters (C++, C#, F#, .NET) still match. \b only fires between a word
+  // and a non-word char, so it fails after a trailing +/#/. boundary.
+  return new RegExp(`(?<![\\w])${targetPattern}(?![\\w])`, "i").test(normalizeChoiceTarget(decision));
+}
+
+function decisionAffirmsTarget(decision, target) {
+  return decisionMentionsTarget(decision, target) && !decisionNegatesTarget(decision, target);
+}
+
+function decisionsMentionChoice(decisions, target) {
+  if (!target || isPronounChoiceTarget(target)) return false;
+  return decisions.some((decision) => decisionAffirmsTarget(decision, target));
+}
+
+function decisionMatchesTargets(decision, targets = []) {
+  return targets.some((target) => decisionAffirmsTarget(decision, target));
+}
+
+function mergeDecisionOverride(existing, next) {
+  if (!next) return existing;
+  if (!existing) return next.all ? { all: true, targets: [] } : { all: false, targets: [...new Set(next.targets)] };
+  if (existing.all || next.all) return { all: true, targets: [] };
+  return { all: false, targets: [...new Set([...existing.targets, ...next.targets])] };
+}
+
+function applyDecisionOverride(decisions, override) {
+  if (!override) return [...decisions];
+  if (override.all) return [];
+  return decisions.filter((decision) => !decisionMatchesTargets(decision, override.targets));
+}
+
+function decisionRemovedByOverride(decision, override) {
+  if (!override) return false;
+  if (override.all) return true;
+  return decisionMatchesTargets(decision, override.targets);
+}
+
+function insteadOfOldChoiceTargets(content, activeDecisions = []) {
+  const match = INSTEAD_OF_REPLACEMENT_CUE.exec(content);
+  const replacedTarget = normalizeChoiceTarget(match?.[2]);
+  return decisionsMentionChoice(activeDecisions, replacedTarget) ? [replacedTarget] : [];
+}
+
+// Leading-order "Instead of Postgres, use SQLite": the old target is in group 1
+// (after "instead of"), not group 2. Same eviction logic as insteadOfOldChoiceTargets
+// but reads the reversed cue's first capture group.
+function leadingInsteadOfOldChoiceTargets(content, activeDecisions = []) {
+  const match = LEADING_INSTEAD_OF_REPLACEMENT_CUE.exec(content);
+  const replacedTarget = normalizeChoiceTarget(match?.[1]);
+  return decisionsMentionChoice(activeDecisions, replacedTarget) ? [replacedTarget] : [];
+}
+
+function ratherThanOldChoiceTargets(content, activeDecisions = []) {
+  const match = RATHER_THAN_REPLACEMENT_CUE.exec(content);
+  const replacedTarget = normalizeChoiceTarget(match?.[2]);
+  return decisionsMentionChoice(activeDecisions, replacedTarget) ? [replacedTarget] : [];
+}
+
+// Leading-order "Rather than Postgres, use SQLite": the old target is in group 1
+// (after "rather than"), not group 2. Same eviction logic as ratherThanOldChoiceTargets
+// but reads the leading cue's first capture group.
+function leadingRatherThanOldChoiceTargets(content, activeDecisions = []) {
+  const match = LEADING_RATHER_THAN_REPLACEMENT_CUE.exec(content);
+  const replacedTarget = normalizeChoiceTarget(match?.[1]);
+  return decisionsMentionChoice(activeDecisions, replacedTarget) ? [replacedTarget] : [];
+}
+
+// "Rather than use SQLite, keep Postgres" — the user explicitly preserves Postgres,
+// but if SQLite is also an active decision it must be evicted. Without this, the
+// digest retains contradictory entries for both choices. RATHER_THAN_PRESERVE_CUE
+// group 1 = rejected target, group 2 = kept target. Only evict the rejected target
+// when it is an active decision, so the preserve path still works when the rejected
+// choice was never persisted.
+function ratherThanPreserveRejectedTargets(content, activeDecisions = []) {
+  const match = RATHER_THAN_PRESERVE_CUE.exec(content);
+  const rejectedTarget = normalizeChoiceTarget(match?.[1]);
+  return decisionsMentionChoice(activeDecisions, rejectedTarget) ? [rejectedTarget] : [];
+}
+
+// A terse imperative like "Use SQLite." or "Switch to Redis." with no
+// instead/rather/actually qualifier. It is an override only when an active
+// decision affirms a *different* technology choice — the new target names what
+// to use instead, and the prior decision's affirmed choice is the rejected one.
+// This mirrors the targeted eviction path so the superseded decision is evicted
+// precisely without clearing unrelated decisions.
+function bareUseReplacementTargets(content, activeDecisions = []) {
+  // Skip when an explicit qualifier is present: those are handled by the
+  // instead-of / rather-than / actually / second-thought / nevermind / discard
+  // paths above, which name the old target explicitly. The bare path only
+  // catches terse corrections like "Use SQLite." with no qualifier at all.
+  if (/\b(?:instead|rather|actually|second thought|never ?mind|scrap|redo|revert|replace)\b/i.test(content)) return [];
+  const match = BARE_CHOICE_IMPERATIVE_CUE.exec(content);
+  const rawTarget = match?.[1] || match?.[2] || "";
+  const newTarget = normalizeChoiceTarget(rawTarget);
+  if (!newTarget) return [];
+  // Neutral action targets ("use the test suite to verify", "use npm run test")
+  // are routine requests, not technology overrides.
+  if (isNeutralReplacementTarget(rawTarget.trim())) return [];
+  if (GENERIC_ARTIFACT_NOUNS.has(newTarget)) return [];
+  // Find prior decisions that affirm a *different* technology choice. A decision
+  // like "I decided to use Postgres for persistence." affirms Postgres; if the
+  // user now says "Use SQLite." the Postgres decision is superseded. But a bare
+  // imperative with no qualifier is ambiguous when multiple unrelated tech choices
+  // exist: "Use SQLite." should not evict "I decided to use Vitest for tests" just
+  // because it is a different technology. Only evict when exactly one different
+  // technology choice is active, so the correction is unambiguous. When multiple
+  // unrelated choices exist, the user must name the old target explicitly
+  // (instead-of / rather-than) or the turn falls through to the neutral path.
+  const candidateTargets = [];
+  for (const decision of activeDecisions) {
+    const choiceMatch = USE_CHOICE_FROM_DECISION_CUE.exec(decision);
+    if (!choiceMatch) continue;
+    const rawOldTarget = choiceMatch[1].trim();
+    const oldTarget = normalizeChoiceTarget(rawOldTarget);
+    if (!oldTarget || oldTarget === newTarget) continue;
+    // Skip generic concepts extracted from "use the factory pattern" or "use an
+    // event-driven approach". Do not require uppercase: lowercase tech names
+    // (postgres, node, svelte) are valid technology choices, not generic nouns.
+    const firstWord = oldTarget.split(/\s+/)[0];
+    if (GENERIC_ARTIFACT_NOUNS.has(firstWord)) continue;
+    // Only evict when the old decision actually affirms the old choice (not a
+    // negation like "decided not to use Postgres").
+    if (decisionAffirmsTarget(decision, oldTarget)) candidateTargets.push(oldTarget);
+  }
+  // A bare imperative is ambiguous when more than one different tech choice is
+  // active: "Use SQLite." could target persistence, testing, or any other domain.
+  // Returning [] here lets the turn fall through to the neutral path rather than
+  // evicting unrelated rationale. The user must use instead-of / rather-than to
+  // name the old target explicitly when multiple choices are active.
+  if (candidateTargets.length !== 1) return [];
+  return candidateTargets;
+}
+
+function isNegatedReplacementOverride(content, activeDecisions = []) {
+  return negatedReplacementOverrideTargets(content, activeDecisions).length > 0;
+}
+
+function negatedReplacementOverrideTargets(content, activeDecisions = []) {
+  const negatedTarget = firstChoiceTarget(content, NEGATED_REPLACEMENT_TARGET_CUES);
+  const preservedTarget = firstChoiceTarget(content, PRESERVE_TARGET_CUES);
+  if (!decisionsMentionChoice(activeDecisions, negatedTarget)) return [];
+  if (preservedTarget && (negatedTarget === preservedTarget || isPronounChoiceTarget(preservedTarget))) return [];
+  if (isNegatedReplaceOnlyTurn(content) && isKeepGoingTarget(preservedTarget)) return [];
+  return [negatedTarget];
+}
+
+function isKeepGoingTarget(target) {
+  return /^(?:going|working|on|at it)$/i.test(target);
+}
+
+function isNegatedReplaceOnlyTurn(content) {
+  return /\b(?:do not|don't|dont)\s+replace\b|\b(?:no|not|without)\s+replacement\b/i.test(content);
+}
+
+function targetedOverrideTargets(content, activeDecisions = []) {
+  return [...new Set([
+    ...negatedReplacementOverrideTargets(content, activeDecisions),
+    ...insteadOfOldChoiceTargets(content, activeDecisions),
+    ...leadingInsteadOfOldChoiceTargets(content, activeDecisions),
+    ...ratherThanOldChoiceTargets(content, activeDecisions),
+    ...leadingRatherThanOldChoiceTargets(content, activeDecisions),
+    ...ratherThanPreserveRejectedTargets(content, activeDecisions),
+    ...bareUseReplacementTargets(content, activeDecisions),
+  ])];
+}
+
+function isPreserveChoiceTurn(content, activeDecisions = []) {
+  // "No change to ..." and "do not change to ..." preserve the current choice;
+  // negated replacement/use wording does too when paired with explicit keep/retain
+  // language ("Don't replace Postgres; keep it"). If the negated target matches
+  // an active prior decision while keep/retain names a different target, the user
+  // is rejecting the old choice and the decision must be evicted instead.
+  if (isNegatedReplacementOverride(content, activeDecisions)) return false;
+  if (isNeutralActionUseTurn(content)) return true;
+  // "Rather than use SQLite, keep Postgres" — the rather...use pattern would
+  // otherwise fire as a broad override, but the explicit keep target means the
+  // user wants to retain the current choice. Only preserve when the kept target
+  // matches an active decision so we don't misfire on unrelated preserve phrasing.
+  // Note: the rejected target (group 1) is evicted via ratherThanPreserveRejectedTargets
+  // in targetedOverrideTargets; this preserve check only governs whether the kept
+  // target survives. RATHER_THAN_PRESERVE_CUE group 2 = kept target.
+  const ratherPreserveMatch = RATHER_THAN_PRESERVE_CUE.exec(content);
+  if (ratherPreserveMatch) {
+    const keptTarget = normalizeChoiceTarget(ratherPreserveMatch[2]);
+    if (keptTarget && decisionsMentionChoice(activeDecisions, keptTarget)) return true;
+  }
+  return NEGATED_CHANGE_TO_CUE.test(content)
+    || (NEGATED_REPLACEMENT_CUE.test(content) && PRESERVE_CHOICE_CUE.test(content))
+    || (PRESERVE_CHOICE_CUE.test(content) && !hasPositiveReplacementCue(content));
+}
+
+function decisionOverrideForTurn(m, activeDecisions = []) {
+  if (m.role !== "user" || typeof m.content !== "string") return false;
+  // Collapse whitespace so multiline/pasted user turns like "Actually,\nuse
+  // SQLite." match the same override cues as their single-line equivalents.
+  // Regex cues use `.*` without dotAll and the bare-imperative cue is
+  // anchored with ^…$, so raw newlines would silently bypass override
+  // handling and leave superseded decisions in the compaction digest.
+  const content = m.content.replace(/\s+/g, " ").trim();
+  const targets = targetedOverrideTargets(content, activeDecisions);
+  if (targets.length) return { all: false, targets };
+  if (isPreserveChoiceTurn(content, activeDecisions)) return false;
+  if (isNeutralShortInsteadTurn(content)) return null;
+  if (isNeutralRatherUseTurn(content)) return null;
+  if (OVERRIDE_CUES.some((cue) => cue.test(content))) return { all: true, targets: [] };
+  return null;
+}
+
+function collectDecisionOverrides(messages, activeDecisions = []) {
+  let override = null;
+  let visibleDecisions = [...activeDecisions];
+  for (const m of messages) {
+    const turnOverride = decisionOverrideForTurn(m, visibleDecisions);
+    if (turnOverride) {
+      override = mergeDecisionOverride(override, turnOverride);
+      visibleDecisions = applyDecisionOverride(visibleDecisions, turnOverride);
+      continue;
+    }
+    if (m.role !== "assistant" || typeof m.content !== "string") continue;
+    for (const sentence of extractSentences(m.content)) {
+      const decision = normalizeDecision(sentence);
+      if (decision && isDecisionSentence(decision) && !visibleDecisions.includes(decision)) visibleDecisions.push(decision);
+    }
+  }
+  return override;
+}
+
+function isDecisionSentence(text) {
+  return DECISION_CUES.some((cue) => cue.test(text));
+}
+
+function normalizeDecision(text) {
+  const s = String(text || "").replace(/\s+/g, " ").trim();
+  if (s.length <= 200) return s;
+  // Keep decisions on a single line: the shared truncate() appends a newline
+  // plus marker, which would split a numbered digest entry. Use an inline
+  // ellipsis here so each decision stays one digest line.
+  return s.slice(0, 197) + "…";
+}
+
+function extractSentences(text) {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  if (!normalized) return [];
+  // Split on [.!?] only at a real sentence boundary: a period directly followed
+  // by a non-space char (e.g. "src/context.js", "v2.1.3", "3.14", "config.json")
+  // is an intra-token period, not a boundary. A terminator counts only at
+  // end-of-string or when followed by whitespace.
+  return normalized.match(/.+?(?:[.!?](?=\s|$)|$)(?:\s|$)*/gsu) || [normalized];
+}
+
+function extractDecisions(dropped, existingDecisions = []) {
+  let activeExistingDecisions = [...existingDecisions];
+  let decisions = [];
+  const seen = new Set();
+  let override = null;
+
+  for (const m of dropped) {
+    // A user turn that reverses an earlier assistant decision. Once an override
+    // appears, assistant decisions captured before it are superseded: drop them
+    // so the handoff does not keep surfacing a rejected choice (e.g. assistant
+    // "I decided to use Postgres." then user "Actually use SQLite"). Decisions
+    // emitted after the override are retained. The returned override also lets
+    // the caller evict decisions persisted from earlier compaction passes.
+    const activeDecisions = [...activeExistingDecisions, ...decisions];
+    const turnOverride = decisionOverrideForTurn(m, activeDecisions);
+    if (turnOverride) {
+      activeExistingDecisions = applyDecisionOverride(activeExistingDecisions, turnOverride);
+      decisions = applyDecisionOverride(decisions, turnOverride);
+      seen.clear();
+      for (const decision of decisions) seen.add(decision);
+      override = mergeDecisionOverride(override, turnOverride);
+      continue;
+    }
+    if (m.role !== "assistant") continue;
+    if (typeof m.content !== "string") continue;
+
+    for (const sentence of extractSentences(m.content)) {
+      const decision = normalizeDecision(sentence);
+      if (!decision) continue;
+      if (!isDecisionSentence(decision)) continue;
+      if (seen.has(decision)) continue;
+      seen.add(decision);
+      decisions.push(decision);
+    }
+  }
+
+  return { decisions, override };
+}
+
 /**
  * Build a deterministic digest of a slice of dropped messages so the agent
  * retains operational memory (what it already did) after compaction — without
  * spending an extra LLM call on summarization.
  */
-function buildDigest(dropped) {
+function buildDigest(dropped, prevDecisions = [], { suppressDecisionNotes = false, suppressedDecisionTargets = [] } = {}) {
   const filesWritten = new Set();
   const filesPatched = new Set();
   const commands = [];
   const errors = [];
-  let notes = "";
+  let notes = [];
+  let notesLength = 0;
+
+  const appendNote = (text) => {
+    if (notesLength >= 800) return;
+    const isDecision = isDecisionSentence(text);
+    if (suppressDecisionNotes && isDecision) return;
+    if (isDecision && decisionMatchesTargets(text, suppressedDecisionTargets)) return;
+    notes.push({ text, isDecision });
+    notesLength += text.length + 1;
+  };
 
   for (const m of dropped) {
+    const activeDecisionNotes = notes.filter((note) => note.isDecision).map((note) => note.text);
+    const noteOverride = decisionOverrideForTurn(m, activeDecisionNotes);
+    if (noteOverride) {
+      // If a user correction is in the dropped slice, decision sentences before
+      // it are superseded not only in Decisions & rationale but also in Agent
+      // notes. Keep non-decision operational notes; drop only the rejected
+      // decision sentences so the handoff does not contradict the correction.
+      notes = notes.filter((note) => !note.isDecision || !decisionRemovedByOverride(note.text, noteOverride));
+      notesLength = notes.reduce((n, note) => n + note.text.length + 1, 0);
+    }
     if (m.role === "assistant") {
       if (Array.isArray(m.tool_calls)) {
         for (const tc of m.tool_calls) {
@@ -159,8 +801,13 @@ function buildDigest(dropped) {
           else if (fn.name === "run_shell" && args.command) commands.push(truncate(args.command, 80));
         }
       }
-      if (typeof m.content === "string" && m.content.trim() && notes.length < 800) {
-        notes += " " + m.content.trim();
+      if (typeof m.content === "string" && m.content.trim() && notesLength < 800) {
+        for (const sentence of extractSentences(m.content)) {
+          const note = String(sentence || "").replace(/\s+/g, " ").trim();
+          if (!note) continue;
+          appendNote(note);
+          if (notesLength >= 800) break;
+        }
       }
     }
     if (m.role === "tool" && typeof m.content === "string") {
@@ -175,6 +822,10 @@ function buildDigest(dropped) {
   if (filesPatched.size) parts.push(`Files modified: ${[...filesPatched].join(", ")}`);
   if (commands.length) parts.push(`Commands run: ${commands.slice(-8).join(" | ")}`);
   if (errors.length) parts.push(`Errors encountered: ${errors.slice(-6).join(" | ")}`);
-  if (notes.trim()) parts.push(`Agent notes: ${truncate(notes.trim(), 600)}`);
+  const notesText = notes.map((note) => note.text).join(" ").trim();
+  if (notesText) parts.push(`Agent notes: ${truncate(notesText, 600)}`);
+  if (prevDecisions.length) {
+    parts.push(`Decisions & rationale:\n${prevDecisions.map((d, i) => `${i + 1}. ${d}`).join("\n")}`);
+  }
   return parts.length ? parts.join("\n") : "(no notable actions recorded in the compacted region)";
 }

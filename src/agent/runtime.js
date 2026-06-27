@@ -193,8 +193,9 @@ export async function runAgent(opts) {
       agentTurns = turn;
       /** @param {{ compactionCount: number }} compactInfo */
       const onCompact = async ({ compactionCount }) => {
-        await fireRunHook("PostCompact", { compactionCount });
+        const res = await fireRunHook("PostCompact", { compactionCount });
         await log({ type: "compact", compactionCount });
+        return res?.injects || [];
       };
       const compacted = await ctx.maybeCompact(/** @type {any} */ ({
         onCompact,

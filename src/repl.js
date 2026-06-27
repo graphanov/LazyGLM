@@ -517,7 +517,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
       case "quit":
         return "exit";
       case "clear":
-        ctx.messages = ctx.messages.filter((m) => m.role === "system");
+        ctx.resetToSystemPrompt();
         console.log(`${DIM}   (context cleared)${RESET}`);
         return;
       case "model": {
@@ -600,8 +600,9 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
         const did = await ctx.maybeCompact({
           force: true,
           onCompact: async ({ compactionCount }) => {
-            await engine.fire("PostCompact", { compactionCount });
+            const res = await engine.fire("PostCompact", { compactionCount });
             await appendEvent(session, { type: "compact", compactionCount });
+            return res?.injects || [];
           },
         });
         console.log(did ? `${DIM}   (compacted: ~${before} → ${ctx.estimateTokens()} tokens)${RESET}` : `${DIM}   (nothing to compact yet)${RESET}`);
@@ -633,7 +634,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
           console.log(`${YELLOW}   could not load ${pick.id}${RESET}`);
           return;
         }
-        ctx.messages = ctx.messages.filter((m) => m.role === "system");
+        ctx.resetToSystemPrompt();
         replayIntoContext(events, ctx);
         restoreTelemetry(events);
         session = { id: pick.id, path: pick.path, model: pick.model, provider: pick.provider };
@@ -701,8 +702,9 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
       resetTurnDivider(`repl:${turn}`);
       await ctx.maybeCompact({
         onCompact: async ({ compactionCount }) => {
-          await engine.fire("PostCompact", { compactionCount });
+          const res = await engine.fire("PostCompact", { compactionCount });
           await appendEvent(session, { type: "compact", compactionCount });
+          return res?.injects || [];
         },
       });
 
