@@ -92,6 +92,19 @@ export class Context {
     this.compactionCount = 0;
   }
 
+  /**
+   * Reset the conversation while preserving only the original system prompt.
+   * Compaction summaries and PostCompact injects are also `system` messages,
+   * but they are scoped to the current compacted conversation and must not
+   * survive REPL /clear or /resume into a fresh transcript.
+   */
+  resetToSystemPrompt() {
+    const system = this.messages.find((m) => m.role === "system");
+    this.messages = system ? [system] : [];
+    this.decisions = [];
+    this.compactionCount = 0;
+  }
+
   estimateTokens() {
     let chars = 0;
     for (const m of this.messages) {
@@ -209,12 +222,15 @@ const DECISION_CUES = [
 // negation cues (\bnot\b, \bdon'?t\b) were removed: they matched neutral
 // instructions ("Do not run tests yet", "No need to update docs") and wrongly
 // cleared the Decisions & rationale block in multi-compaction sessions.
+const CHANGE_TO_CUE = /\bchange\b.*\bto\b/i;
+const NEGATED_CHANGE_TO_CUE = /\b(?:no|not|without)\s+change\b.*\bto\b|\b(?:do not|don't)\s+change\b.*\bto\b/i;
+
 const OVERRIDE_CUES = [
   // `actually` is only an override when it introduces a replacement target;
   // standalone "Actually, please run tests" is a neutral request.
   /\bactually\b.*\b(?:use|switch to|change to|replace|prefer|go with)\b/i,
   /\binstead\b/i,
-  /\bchange\b.*\bto\b/i,
+  CHANGE_TO_CUE,
   // Note: /\bswitch\b/i was removed — it matched neutral discussion of switch
   // statements ("the switch statement still fails") and wrongly cleared the
   // Decisions & rationale block, the same false-positive class that removed
@@ -232,7 +248,13 @@ const OVERRIDE_CUES = [
 ];
 
 function isOverrideTurn(m) {
-  return m.role === "user" && typeof m.content === "string" && OVERRIDE_CUES.some((c) => c.test(m.content));
+  if (m.role !== "user" || typeof m.content !== "string") return false;
+  return OVERRIDE_CUES.some((cue) => {
+    // "No change to ..." and "do not change to ..." preserve the current
+    // choice; they must not clear the durable Decisions & rationale store.
+    if (cue === CHANGE_TO_CUE && NEGATED_CHANGE_TO_CUE.test(m.content)) return false;
+    return cue.test(m.content);
+  });
 }
 
 function isDecisionSentence(text) {

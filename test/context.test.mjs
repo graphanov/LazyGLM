@@ -376,6 +376,29 @@ test("Context.reset clears decisions alongside messages", () => {
   assert.equal(ctx.compactionCount, 0, "reset() must reset compactionCount");
 });
 
+test("resetToSystemPrompt drops compaction summaries and one-shot injects", async () => {
+  // Regression for the P2 finding: /clear and /resume used to keep every
+  // system-role message. Compaction summaries and PostCompact injects are
+  // system-role messages too, but they are scoped to the current compacted
+  // conversation and must not steer a fresh/replayed transcript.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  pushRecentTail(ctx, "middle", 20);
+
+  await ctx.maybeCompact({ onCompact: async () => ["temporary handoff context"] });
+  ctx.addDecision("I decided to use Postgres for persistence.");
+
+  assert.ok(ctx.messages.some((m) => /Compacted transcript/.test(m.content || "")), "summary should exist before reset");
+  assert.ok(ctx.messages.some((m) => m.content === "temporary handoff context"), "inject should exist before reset");
+
+  ctx.resetToSystemPrompt();
+
+  assert.deepEqual(ctx.messages, [{ role: "system", content: "system prompt" }]);
+  assert.deepEqual(ctx.getDecisions(), [], "resetToSystemPrompt must clear the decision store");
+  assert.equal(ctx.compactionCount, 0, "resetToSystemPrompt must reset compactionCount");
+});
+
 test("neutral negation user turn does not drop decisions", async () => {
   // Regression for the P2 finding: broad negation cues like /\bnot\b/i and
   // /\bdon'?t\b/i matched ordinary messages ("Do not run tests yet"), wrongly
@@ -465,6 +488,28 @@ test("neutral actually request does not drop decisions", async () => {
     block,
     /I decided to use Postgres for persistence\./,
     "a neutral actually message must not evict decisions",
+  );
+});
+
+test("negated change-to wording does not drop decisions", async () => {
+  // Regression for the P2 finding: /\bchange\b.*\bto\b/i matched "No change
+  // to the Postgres decision", clearing persisted rationale even though the
+  // user explicitly preserved the prior choice.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  ctx.push({ role: "user", content: "No change to the Postgres decision; keep going." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.match(
+    block,
+    /I decided to use Postgres for persistence\./,
+    "a negated change-to message must not evict decisions",
   );
 });
 

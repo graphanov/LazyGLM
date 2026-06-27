@@ -517,9 +517,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
       case "quit":
         return "exit";
       case "clear":
-        ctx.messages = ctx.messages.filter((m) => m.role === "system");
-        ctx.decisions.length = 0;
-        ctx.compactionCount = 0;
+        ctx.resetToSystemPrompt();
         console.log(`${DIM}   (context cleared)${RESET}`);
         return;
       case "model": {
@@ -636,9 +634,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
           console.log(`${YELLOW}   could not load ${pick.id}${RESET}`);
           return;
         }
-        ctx.messages = ctx.messages.filter((m) => m.role === "system");
-        ctx.decisions.length = 0;
-        ctx.compactionCount = 0;
+        ctx.resetToSystemPrompt();
         replayIntoContext(events, ctx);
         restoreTelemetry(events);
         session = { id: pick.id, path: pick.path, model: pick.model, provider: pick.provider };
