@@ -58,6 +58,20 @@ test("compaction does not trigger when under budget", async () => {
   assert.equal(ctx.compactionCount, 0);
 });
 
+test("default context budget stays conservative for unknown models", async () => {
+  // The bare Context() default applies when no catalog budget is resolved
+  // (unknown/custom model). It must stay conservative so small-window models
+  // (Ollama, OpenAI-compatible shims) still compact before provider rejection.
+  const ctx = new Context();
+  assert.equal(ctx.budget, 24_000);
+  ctx.setSystem("sys");
+  ctx.push({ role: "user", content: "task" });
+  ctx.push({ role: "assistant", content: "A".repeat(60_000) }); // ~15K tokens, under budget.
+  const compacted = await ctx.maybeCompact();
+  assert.equal(compacted, false);
+  assert.equal(ctx.compactionCount, 0);
+});
+
 // --- assistantMessageFrom (preserved-thinking replay) ---
 
 test("assistantMessageFrom preserves reasoning_content verbatim and serializes tool_calls to wire form", () => {
