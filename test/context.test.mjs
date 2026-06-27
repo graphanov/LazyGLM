@@ -660,6 +660,27 @@ test("neutral use instead-of command request does not drop decisions", async () 
   );
 });
 
+test("neutral short instead command request does not drop decisions", async () => {
+  // `Use npm test instead` is a routine command substitution; without a named
+  // old choice it must not broad-clear unrelated persisted rationale.
+  const ctx = new Context({ budget: 1 });
+  ctx.addDecision("I decided to use Postgres for persistence.");
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "user", content: "Use npm test instead." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.match(
+    block,
+    /I decided to use Postgres for persistence\./,
+    "a short command substitution must not evict unrelated decisions",
+  );
+});
+
 test("choice instead-of wording drops superseded decisions", async () => {
   // Regression for the P2 finding: `Use SQLite instead of Postgres` names the
   // old active choice after `instead of`, so it must evict the Postgres rationale.

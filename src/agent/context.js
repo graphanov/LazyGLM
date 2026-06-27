@@ -228,6 +228,7 @@ const POSITIVE_REPLACEMENT_AFTER_NEGATION_CUE = /\b(?:do not|don't|dont)\s+(?:us
 const PRESERVE_CHOICE_CUE = /\b(?:keep|preserve|retain|stick with|stay with|leave)\b|\b(?:same|current|existing|prior|previous)\b.*\b(?:choice|decision|approach|plan)\b/i;
 const REPLACE_DECISION_CUE = /\breplace\b.*\b(?:decision|choice|approach|rationale)\b|\b(?:decision|choice|approach|rationale)\b.*\breplace\b/i;
 const INSTEAD_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\b.*\binstead\b(?!\s+of\b)|\binstead\b(?!\s+of\b).*\b(?:use|switch\s+to|change\s+to|prefer|go with)\b/i;
+const SHORT_INSTEAD_REPLACEMENT_TARGET_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\s+([^.;,\n]+?)\s+instead\b(?!\s+of\b)/i;
 const INSTEAD_OF_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\s+([^.;,\n]+?)\s+instead\s+of\s+([^.;,\n]+?)(?=\s+(?:because|since|as)\b|[.;,\n]|$)/i;
 const ACTUALLY_REPLACEMENT_CUE = /\bactually\b.*\b(?:use|switch to|change to|prefer|go with)\b/i;
 const RATHER_REPLACEMENT_CUE = /\brather\b.*\b(?:use|switch to|change to|prefer|go with)\b/i;
@@ -243,6 +244,7 @@ const PRESERVE_TARGET_CUES = [
   /\b(?:keep|preserve|retain|stick with|stay with|leave)\s+([^.;,\n]+?)(?=[.;,\n]|$)/i,
 ];
 const NEUTRAL_ACTION_USE_CUE = /\bactually\b.*\buse\s+(?:`[^`]+`|[^.;,\n]+?)\s+to\s+(?:verify|test|run|check|build|lint|format|inspect)\b/i;
+const COMMANDISH_REPLACEMENT_TARGET_CUE = /^(?:`[^`]+`|(?:npm|pnpm|yarn|node|npx|git|gh|python3?|pytest|go|cargo|make|cmake|bash|sh)\b|.*\b(?:test|tests|lint|typecheck|build|format|verify|check)\b)/i;
 const PRONOUN_CHOICE_TARGETS = new Set(["it", "that", "this", "them"]);
 
 const OVERRIDE_CUES = [
@@ -304,6 +306,11 @@ function firstChoiceTarget(content, cues) {
     if (target) return target;
   }
   return "";
+}
+
+function isNeutralShortInsteadTurn(content) {
+  const target = SHORT_INSTEAD_REPLACEMENT_TARGET_CUE.exec(content)?.[1]?.trim() || "";
+  return Boolean(target && COMMANDISH_REPLACEMENT_TARGET_CUE.test(target));
 }
 
 function isPronounChoiceTarget(target) {
@@ -384,6 +391,7 @@ function isPreserveChoiceTurn(content, activeDecisions = []) {
 function decisionOverrideForTurn(m, activeDecisions = []) {
   if (m.role !== "user" || typeof m.content !== "string") return false;
   if (isPreserveChoiceTurn(m.content, activeDecisions)) return false;
+  if (isNeutralShortInsteadTurn(m.content)) return null;
   const targets = targetedOverrideTargets(m.content, activeDecisions);
   if (targets.length) return { all: false, targets };
   if (OVERRIDE_CUES.some((cue) => cue.test(m.content))) return { all: true, targets: [] };
