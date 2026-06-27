@@ -153,8 +153,9 @@ export async function runAgent(opts) {
       agentTurns = turn;
       const compacted = await ctx.maybeCompact({
         onCompact: async ({ compactionCount }) => {
-          await fireRunHook("PostCompact", { compactionCount });
+          const res = await fireRunHook("PostCompact", { compactionCount });
           await log({ type: "compact", compactionCount });
+          return res?.injects || [];
         },
       });
       void compacted;

@@ -554,8 +554,9 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
         const did = await ctx.maybeCompact({
           force: true,
           onCompact: async ({ compactionCount }) => {
-            await engine.fire("PostCompact", { compactionCount });
+            const res = await engine.fire("PostCompact", { compactionCount });
             await appendEvent(session, { type: "compact", compactionCount });
+            return res?.injects || [];
           },
         });
         console.log(did ? `${DIM}   (compacted: ~${before} → ${ctx.estimateTokens()} tokens)${RESET}` : `${DIM}   (nothing to compact yet)${RESET}`);
@@ -654,8 +655,9 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
       resetTurnDivider(`repl:${turn}`);
       await ctx.maybeCompact({
         onCompact: async ({ compactionCount }) => {
-          await engine.fire("PostCompact", { compactionCount });
+          const res = await engine.fire("PostCompact", { compactionCount });
           await appendEvent(session, { type: "compact", compactionCount });
+          return res?.injects || [];
         },
       });
 

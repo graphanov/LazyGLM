@@ -67,6 +67,43 @@ Claude Code or Codex CLI. To make GLM feel native, LazyGLM needs to own the loop
 That makes `npx lazyglm run "task"` and `lazyglm` real end-to-end exercises of
 LazyGLM itself, not smoke tests around another agent.
 
+### Compaction handoff digest
+
+`src/agent/context.js` compacts by pinning the original user task and replacing
+the dropped transcript middle with a deterministic digest. The digest is plain
+text and currently emits sections in this order when data exists:
+
+1. `Files created`
+2. `Files modified`
+3. `Commands run`
+4. `Errors encountered`
+5. `Agent notes`
+6. `Decisions & rationale`
+
+`Decisions & rationale` is the lightweight handoff layer for decision-relevant
+context. It is extracted without an extra model call by scanning only dropped
+assistant text, never tool output or system messages. A sentence is retained
+when it matches one of these cues:
+
+- `decide` or `decided`;
+- `chose`;
+- `the plan is`, `the approach is`, or `the design is`;
+- `rationale`;
+- `going with ... because ...`.
+
+Each retained decision is normalized to one line, truncated to 200 characters,
+deduplicated during extraction, and stored on the `Context` instance. The store
+keeps at most 12 decisions, so multi-compaction sessions retain prior rationale
+without unbounded summary growth. Because the store lives outside the message
+window, decisions from earlier compactions survive later transcript drops.
+
+`PostCompact` hook injects are separate from decision retention. If a hook
+returns inject text, the runtime inserts it immediately after the compaction
+summary for the current context window. That injected system message is
+one-shot: later compactions do not persist or re-digest it because the digest
+does not scan system messages. Durable rationale should go through the
+deterministic decisions path, not hook injects.
+
 ## Architecture
 
 ```text

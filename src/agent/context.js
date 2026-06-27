@@ -5,9 +5,9 @@
 //   - The original task message is PINNED — never dropped — so the agent never
 //     loses sight of what it was asked to do.
 //   - The dropped middle is replaced by a deterministic digest (files written,
-//     commands run, errors hit, agent notes), not a generic placeholder. This
-//     is the operational memory that stops the agent from re-doing work or
-//     thrashing after a compaction.
+//     commands run, errors hit, agent notes, and decisions/rationale), not a
+//     generic placeholder. This is the operational memory that stops the agent
+//     from re-doing work or thrashing after a compaction.
 import { nowIso, truncate } from "../util.js";
 
 const CHARS_PER_TOKEN = 4; // rough estimate
@@ -55,6 +55,7 @@ export class Context {
     this.compactionCount = 0;
     this.totalTokensIn = 0;
     this.totalTokensOut = 0;
+    this.decisions = [];
   }
 
   setSystem(text) {
@@ -66,6 +67,17 @@ export class Context {
 
   push(msg) {
     this.messages.push(msg);
+  }
+
+  addDecision(text) {
+    const decision = normalizeDecision(text);
+    if (!decision) return;
+    this.decisions.push(decision);
+    if (this.decisions.length > 12) this.decisions.shift();
+  }
+
+  getDecisions() {
+    return [...this.decisions];
   }
 
   estimateTokens() {
@@ -85,7 +97,7 @@ export class Context {
    * Compact if over budget. Preserves:
    *   - the system prompt
    *   - the original task message (PINNED — never dropped)
-   *   - a deterministic digest of the dropped middle (files/commands/errors/notes)
+   *   - a deterministic digest of the dropped middle (files/commands/errors/notes/decisions)
    *   - the most recent `keepRecent` messages
    * Fires `onCompact` so the hook engine can react. Returns true if compaction occurred.
    */
@@ -106,7 +118,11 @@ export class Context {
     const tail = rest.slice(tailStart);
     const dropped = rest.slice(1, tailStart); // everything between task and recent tail
 
-    const digest = buildDigest(dropped);
+    const newDecisions = extractDecisions(dropped);
+    for (const decision of newDecisions) {
+      if (!this.decisions.includes(decision)) this.addDecision(decision);
+    }
+    const digest = buildDigest(dropped, this.getDecisions());
 
     const summary = {
       role: "system",
@@ -119,7 +135,20 @@ export class Context {
 
     this.messages = [system, taskMsg, summary, ...tail].filter(Boolean);
     this.compactionCount += 1;
-    if (onCompact) await onCompact({ compactionCount: this.compactionCount, droppedTokens: tokens });
+    let injects = [];
+    if (onCompact) {
+      const res = await onCompact({ compactionCount: this.compactionCount, droppedTokens: tokens });
+      if (Array.isArray(res)) injects = res;
+    }
+    if (injects.length) {
+      // PostCompact injects are one-shot context for the current window.
+      // They are NOT persisted across subsequent compactions (buildDigest has
+      // no system-role branch). Decisions persist separately via this.decisions.
+      const summaryIdx = this.messages.indexOf(summary);
+      if (summaryIdx >= 0) {
+        this.messages.splice(summaryIdx + 1, 0, { role: "system", content: injects.join("\n\n") });
+      }
+    }
     return true;
   }
 
@@ -136,12 +165,51 @@ function safeParse(s) {
   try { return JSON.parse(s); } catch { return {}; }
 }
 
+const DECISION_CUES = [
+  /\bdecided?\b/i,
+  /\bchose\b/i,
+  /\bthe (?:plan|approach|design) is\b/i,
+  /\brationale\b/i,
+  /\bgoing with\b.*\bbecause\b/i,
+];
+
+function normalizeDecision(text) {
+  return truncate(String(text || "").replace(/\s+/g, " ").trim(), 200);
+}
+
+function extractSentences(text) {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  if (!normalized) return [];
+  return normalized.match(/[^.!?]+[.!?]?(?=\s|$)/g) || [normalized];
+}
+
+function extractDecisions(dropped) {
+  const decisions = [];
+  const seen = new Set();
+
+  for (const m of dropped) {
+    if (m.role !== "assistant") continue;
+    if (typeof m.content !== "string") continue;
+
+    for (const sentence of extractSentences(m.content)) {
+      const decision = normalizeDecision(sentence);
+      if (!decision) continue;
+      if (!DECISION_CUES.some((cue) => cue.test(decision))) continue;
+      if (seen.has(decision)) continue;
+      seen.add(decision);
+      decisions.push(decision);
+    }
+  }
+
+  return decisions;
+}
+
 /**
  * Build a deterministic digest of a slice of dropped messages so the agent
  * retains operational memory (what it already did) after compaction — without
  * spending an extra LLM call on summarization.
  */
-function buildDigest(dropped) {
+function buildDigest(dropped, prevDecisions = []) {
   const filesWritten = new Set();
   const filesPatched = new Set();
   const commands = [];
@@ -176,5 +244,8 @@ function buildDigest(dropped) {
   if (commands.length) parts.push(`Commands run: ${commands.slice(-8).join(" | ")}`);
   if (errors.length) parts.push(`Errors encountered: ${errors.slice(-6).join(" | ")}`);
   if (notes.trim()) parts.push(`Agent notes: ${truncate(notes.trim(), 600)}`);
+  if (prevDecisions.length) {
+    parts.push(`Decisions & rationale:\n${prevDecisions.map((d, i) => `${i + 1}. ${d}`).join("\n")}`);
+  }
   return parts.length ? parts.join("\n") : "(no notable actions recorded in the compacted region)";
 }

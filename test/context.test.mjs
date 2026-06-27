@@ -2,6 +2,23 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Context, assistantMessageFrom } from "../src/agent/context.js";
 
+function latestCompactionSummary(ctx) {
+  const summaries = ctx.messages.filter((m) => m.role === "system" && /Compacted transcript/.test(m.content || ""));
+  return summaries[summaries.length - 1];
+}
+
+function decisionsBlock(summary) {
+  const marker = "Decisions & rationale:\n";
+  const content = summary?.content || "";
+  const idx = content.indexOf(marker);
+  if (idx < 0) return "";
+  return content.slice(idx + marker.length).split("\n\nThe user's original task")[0];
+}
+
+function pushRecentTail(ctx, prefix = "recent", count = 14) {
+  for (let i = 0; i < count; i++) ctx.push({ role: "assistant", content: `${prefix} ${i}` });
+}
+
 test("compaction preserves the original task message", async () => {
   const ctx = new Context({ budget: 1 }); // tiny budget → forces compaction
   ctx.setSystem("system prompt");
@@ -56,6 +73,119 @@ test("compaction does not trigger when under budget", async () => {
   const compacted = await ctx.maybeCompact();
   assert.equal(compacted, false);
   assert.equal(ctx.compactionCount, 0);
+});
+
+test("compaction digest retains explicit assistant decisions", async () => {
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  pushRecentTail(ctx);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  assert.ok(summary, "compaction summary should exist");
+  assert.match(decisionsBlock(summary), /I decided to use Postgres for persistence\./);
+});
+
+test("compaction digest retains because-based rationale", async () => {
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "Going with Postgres because it handles concurrent writes." });
+  pushRecentTail(ctx);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  assert.match(decisionsBlock(summary), /Going with Postgres because it handles concurrent writes\./);
+});
+
+test("compaction decisions skip generic implementation notes", async () => {
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I'll use write_file to create the config." });
+  pushRecentTail(ctx);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  assert.equal(decisionsBlock(summary), "", "generic tool-use notes should not become decisions");
+});
+
+test("compaction decisions require because for going-with phrasing", async () => {
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "Going with the existing approach to keep it simple." });
+  pushRecentTail(ctx);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  assert.equal(decisionsBlock(summary), "", "going-with phrasing without because should not become a decision");
+});
+
+test("compaction decision extraction ignores tool messages", async () => {
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "tool", content: "decided to skip failing test" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  pushRecentTail(ctx);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+  assert.match(block, /I decided to use Postgres for persistence\./);
+  assert.doesNotMatch(block, /decided to skip failing test/);
+});
+
+test("post-compact inject lands immediately after summary when system exists", async () => {
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  pushRecentTail(ctx, "middle", 20);
+
+  await ctx.maybeCompact({ onCompact: async () => ["injected handoff context"] });
+  const summaryIdx = ctx.messages.findIndex((m) => /Compacted transcript/.test(m.content || ""));
+  const injectIdx = ctx.messages.findIndex((m) => m.role === "system" && m.content === "injected handoff context");
+
+  assert.ok(summaryIdx >= 0, "summary should exist");
+  assert.equal(injectIdx, summaryIdx + 1, "inject should be placed immediately after summary");
+});
+
+test("post-compact inject lands immediately after summary when system is absent", async () => {
+  const ctx = new Context({ budget: 1 });
+  ctx.push({ role: "user", content: "the task" });
+  pushRecentTail(ctx, "middle", 20);
+
+  await ctx.maybeCompact({ onCompact: async () => ["injected context"] });
+  const summaryIdx = ctx.messages.findIndex((m) => /Compacted transcript/.test(m.content || ""));
+  const injectIdx = ctx.messages.findIndex((m) => m.role === "system" && m.content === "injected context");
+
+  assert.equal(ctx.messages[0].role, "user");
+  assert.equal(summaryIdx, 1, "summary should follow the pinned task without a system prompt");
+  assert.equal(injectIdx, 2, "inject should follow the summary without hardcoded system-present indexing");
+});
+
+test("compaction decisions accumulate across multiple compactions", async () => {
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to keep the parser dependency-free." });
+  pushRecentTail(ctx, "first");
+
+  await ctx.maybeCompact();
+
+  ctx.push({ role: "assistant", content: "The plan is to thread hook injects through the existing callback." });
+  pushRecentTail(ctx, "second");
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.equal(ctx.compactionCount, 2);
+  assert.match(block, /I decided to keep the parser dependency-free\./);
+  assert.match(block, /The plan is to thread hook injects through the existing callback\./);
 });
 
 // --- assistantMessageFrom (preserved-thinking replay) ---
