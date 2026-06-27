@@ -222,7 +222,7 @@ const DECISION_CUES = [
 // negation cues (\bnot\b, \bdon'?t\b) were removed: they matched neutral
 // instructions ("Do not run tests yet", "No need to update docs") and wrongly
 // cleared the Decisions & rationale block in multi-compaction sessions.
-const CHANGE_TO_CUE = /\bchange\b.*\bto\b/i;
+const CHANGE_TO_CUE = /\bchange\b.*\b(?:decision|choice|approach|plan|design|rationale)\b.*\bto\b|\b(?:decision|choice|approach|plan|design|rationale)\b.*\bchange\b.*\bto\b/i;
 const NEGATED_CHANGE_TO_CUE = /\b(?:no|not|without)\s+change\b.*\bto\b|\b(?:do not|don't)\s+change\b.*\bto\b/i;
 const NEGATED_REPLACEMENT_CUE = /\b(?:do not|don't|dont)\s+(?:replace|use|switch\s+to|change\s+to|prefer|go with)\b|\b(?:no|not|without)\s+(?:replace|replacement|use|switch\s+to|change\s+to|preference)\b/i;
 const PRESERVE_CHOICE_CUE = /\b(?:keep|preserve|retain|stick with|stay with|leave)\b|\b(?:same|current|existing|prior|previous)\b.*\b(?:choice|decision|approach|plan)\b/i;
@@ -230,6 +230,9 @@ const REPLACE_DECISION_CUE = /\breplace\b.*\b(?:decision|choice|approach|rationa
 const INSTEAD_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\b.*\binstead\b(?!\s+of\b)|\binstead\b(?!\s+of\b).*\b(?:use|switch\s+to|change\s+to|prefer|go with)\b/i;
 const ACTUALLY_REPLACEMENT_CUE = /\bactually\b.*\b(?:use|switch to|change to|prefer|go with)\b/i;
 const RATHER_REPLACEMENT_CUE = /\brather\b.*\b(?:use|switch to|change to|prefer|go with)\b/i;
+const SECOND_THOUGHT_REPLACEMENT_CUE = /\bon second thought\b.*\b(?:use|switch to|change to|prefer|go with|replace|decision|choice|approach|plan|design|rationale)\b/i;
+const NEVERMIND_REPLACEMENT_CUE = /\bnever ?mind\b.*\b(?:use|switch to|change to|prefer|go with|replace|decision|choice|approach|plan|design|rationale)\b/i;
+const DISCARD_DECISION_CUE = /\b(?:scrap|redo|revert)\b.*\b(?:decision|choice|approach|plan|design|rationale)\b|\b(?:decision|choice|approach|plan|design|rationale)\b.*\b(?:scrap|redo|revert)\b/i;
 
 const OVERRIDE_CUES = [
   // `actually` is only an override when it introduces a replacement target;
@@ -239,6 +242,8 @@ const OVERRIDE_CUES = [
   // Plain /\binstead\b/i was too broad: command substitutions like
   // "run npm test instead of npm run test" are not decision reversals.
   INSTEAD_REPLACEMENT_CUE,
+  // Plain /\bchange\b.*\bto\b/i was too broad: ordinary edits like
+  // "change the README heading to LazyGLM" are not decision reversals.
   CHANGE_TO_CUE,
   // Note: /\bswitch\b/i was removed — it matched neutral discussion of switch
   // statements ("the switch statement still fails") and wrongly cleared the
@@ -250,14 +255,14 @@ const OVERRIDE_CUES = [
   // Note: /\bwait\b/i was removed — it matched neutral instructions ("please wait
   // for CI before finalizing") and wrongly cleared the Decisions & rationale
   // block, the same false-positive class that removed /\bnot\b/ and /\bdon'?t\b/.
-  /\bon second thought\b/i,
-  /\bnever ?mind\b/i,
-  /\bscrap\b/i,
-  /\bredo\b/i,
+  SECOND_THOUGHT_REPLACEMENT_CUE,
+  NEVERMIND_REPLACEMENT_CUE,
+  // Discard/rework verbs are only overrides when tied to decision/plan nouns;
+  // "redo the test run" or "revert the README heading" must not clear rationale.
+  DISCARD_DECISION_CUE,
   // Plain /\brather\b/i was too broad: preserve-current phrasing like
   // "I'd rather keep Postgres" must not evict the retained rationale.
   RATHER_REPLACEMENT_CUE,
-  /\brevert\b/i,
 ];
 
 function hasPositiveReplacementCue(content) {
@@ -265,7 +270,10 @@ function hasPositiveReplacementCue(content) {
     || INSTEAD_REPLACEMENT_CUE.test(content)
     || CHANGE_TO_CUE.test(content)
     || REPLACE_DECISION_CUE.test(content)
-    || RATHER_REPLACEMENT_CUE.test(content);
+    || RATHER_REPLACEMENT_CUE.test(content)
+    || SECOND_THOUGHT_REPLACEMENT_CUE.test(content)
+    || NEVERMIND_REPLACEMENT_CUE.test(content)
+    || DISCARD_DECISION_CUE.test(content);
 }
 
 function isPreserveChoiceTurn(content) {

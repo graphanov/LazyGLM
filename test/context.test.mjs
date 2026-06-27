@@ -532,6 +532,45 @@ test("neutral replace edit request does not drop decisions", async () => {
   );
 });
 
+test("neutral change-to edit request does not drop decisions", async () => {
+  // Regression for the P2 finding: plain /\bchange\b.*\bto\b/i matched ordinary
+  // edit requests ("change the README heading to LazyGLM"), clearing retained
+  // rationale even though the user was not reversing a prior decision.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  ctx.push({ role: "user", content: "Change the README heading to LazyGLM." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.match(
+    block,
+    /I decided to use Postgres for persistence\./,
+    "a neutral change-to edit request must not evict decisions",
+  );
+});
+
+test("decision change-to wording drops superseded decisions", async () => {
+  // Keep explicit decision-reversal wording active after narrowing plain change-to
+  // requests: changing a prior decision is still an override.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  ctx.push({ role: "user", content: "Change the prior decision to SQLite." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.doesNotMatch(block, /Postgres/i, "decision change-to wording must evict superseded decisions");
+});
+
 test("neutral instead-of command request does not drop decisions", async () => {
   // Regression for the P2 finding: plain /\binstead\b/i matched ordinary
   // command substitutions ("run npm test instead of npm run test"), clearing
@@ -613,6 +652,60 @@ test("rather replacement wording drops superseded decisions", async () => {
   const block = decisionsBlock(summary);
 
   assert.doesNotMatch(block, /Postgres/i, "rather replacement wording must evict superseded decisions");
+});
+
+test("neutral rework wording does not drop decisions", async () => {
+  // Guard sibling broad cues: discard/rework words must not clear decisions when
+  // they refer to routine work rather than a prior decision or approach.
+  for (const neutralMessage of [
+    "Redo the failing test run.",
+    "Scrap the temporary debug file.",
+    "Revert the README heading to LazyGLM.",
+    "Never mind, run the tests.",
+    "On second thought, run the tests.",
+  ]) {
+    const ctx = new Context({ budget: 1 });
+    ctx.setSystem("system prompt");
+    ctx.push({ role: "user", content: "the task" });
+    ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+    ctx.push({ role: "user", content: neutralMessage });
+    pushRecentTail(ctx, "filler", 13);
+
+    await ctx.maybeCompact();
+    const summary = latestCompactionSummary(ctx);
+    const block = decisionsBlock(summary);
+
+    assert.match(
+      block,
+      /I decided to use Postgres for persistence\./,
+      `neutral rework wording must not evict decisions: ${neutralMessage}`,
+    );
+  }
+});
+
+test("explicit rework decision wording drops superseded decisions", async () => {
+  // Keep explicit decision/approach discard wording active after narrowing broad
+  // rework verbs: discarding a prior decision is still an override.
+  for (const overrideMessage of [
+    "Never mind, use SQLite.",
+    "On second thought, use SQLite.",
+    "Scrap the current approach.",
+    "Redo the prior decision.",
+    "Revert the decision.",
+  ]) {
+    const ctx = new Context({ budget: 1 });
+    ctx.setSystem("system prompt");
+    ctx.push({ role: "user", content: "the task" });
+    ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+    ctx.push({ role: "user", content: overrideMessage });
+    pushRecentTail(ctx, "filler", 13);
+
+    await ctx.maybeCompact();
+    const summary = latestCompactionSummary(ctx);
+    const block = decisionsBlock(summary);
+
+    assert.doesNotMatch(block, /Postgres/i, `explicit rework decision wording must evict superseded decisions: ${overrideMessage}`);
+  }
 });
 
 test("decision replacement wording drops superseded decisions", async () => {
