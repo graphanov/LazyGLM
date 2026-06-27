@@ -240,8 +240,11 @@ const PRESERVE_CHOICE_CUE = /\b(?:keep|preserve|retain|stick with|stay with|leav
 // hasPositiveReplacementCue and broad-clears even though the user is
 // explicitly keeping the current choice. This cue detects when a rather-than
 // clause is paired with an explicit keep/preserve target so isPreserveChoiceTurn
-// can treat it as a preserve instead of a broad override. Group 1 = kept target.
-const RATHER_THAN_PRESERVE_CUE = /\brather\s+than\b[^.;\n]*,\s*(?:keep|preserve|retain|stick\s+with|stay\s+with|leave)\s+([^.;,\n]+?)(?=[.;,\n]|$)/i;
+// can treat it as a preserve instead of a broad override. Group 1 = rejected
+// target (the one after "rather than"), group 2 = kept target. When the rejected
+// target is also an active decision, it must be evicted even though the kept
+// target is preserved, otherwise the digest retains contradictory entries.
+const RATHER_THAN_PRESERVE_CUE = /\brather\s+than\b\s+([^.;,\n]+?)\s*,\s*(?:keep|preserve|retain|stick\s+with|stay\s+with|leave)\s+([^.;,\n]+?)(?=[.;,\n]|$)/i;
 const REPLACE_DECISION_CUE = /\breplace\b.*\b(?:decision|choice|approach|rationale)\b|\b(?:decision|choice|approach|rationale)\b.*\breplace\b/i;
 const INSTEAD_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\b.*\binstead\b(?!\s+of\b)|\binstead\b(?!\s+of\b).*\b(?:use|switch\s+to|change\s+to|prefer|go with)\b/i;
 const SHORT_INSTEAD_REPLACEMENT_TARGET_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\s+([^.;,\n]+?)\s+instead\b(?!\s+of\b)/i;
@@ -261,6 +264,12 @@ const RATHER_REPLACEMENT_CUE = /\brather\b.*\b(?:use|switch to|change to|prefer|
 // (the second capture group) can be evicted precisely, mirroring
 // INSTEAD_OF_REPLACEMENT_CUE for the "instead of" phrasing.
 const RATHER_THAN_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go\s+with)\s+([^.;,\n]+?)\s+rather\s+than\s+([^.;,\n]+?)(?=\s+(?:because|since|as|in|for|on|during|when|while|where|under|with|to)\b|\s+(?:but|and)\s+(?:(?:do not|don't|dont|not|never)\s+)?(?:keep|preserve|retain|stick with|stay with|leave|update|edit|modify|write|patch|create|delete|read|open|run|rerun|test|verify|check|build|lint|format|fix)\b|[.;,\n]|$)/i;
+// Leading-order: "Rather than Postgres, use SQLite" — the old target appears
+// first (after "rather than"), the new target follows the verb. RATHER_THAN above
+// only recognizes verb-first order ("use SQLite rather than Postgres"), so the
+// reversed phrasing slipped through to broad-clear and dropped unrelated decisions.
+// Group 1 = old target, group 2 = new target.
+const LEADING_RATHER_THAN_REPLACEMENT_CUE = /\brather\s+than\s+([^.;,\n]+?)\s*,?\s+(?:use|switch\s+to|change\s+to|prefer|go\s+with)\s+([^.;,\n]+?)(?=\s+(?:because|since|as|in|for|on|during|when|while|where|under|with|to)\b|\s+(?:but|and)\s+(?:(?:do not|don't|dont|not|never)\s+)?(?:keep|preserve|retain|stick with|stay with|leave|update|edit|modify|write|patch|create|delete|read|open|run|rerun|test|verify|check|build|lint|format|fix)\b|[.;,\n]|$)/i;
 const SECOND_THOUGHT_REPLACEMENT_CUE = /\bon second thought\b.*\b(?:use|switch to|change to|prefer|go with|replace|scrap|redo|revert)\b/i;
 const NEVERMIND_REPLACEMENT_CUE = /\bnever ?mind\b.*\b(?:use|switch to|change to|prefer|go with|replace|decision|choice|approach|plan|design|rationale)\b/i;
 // Bare imperative choice replacement: "Use SQLite.", "Switch to Redis.", "Prefer Bun."
@@ -498,6 +507,27 @@ function ratherThanOldChoiceTargets(content, activeDecisions = []) {
   return decisionsMentionChoice(activeDecisions, replacedTarget) ? [replacedTarget] : [];
 }
 
+// Leading-order "Rather than Postgres, use SQLite": the old target is in group 1
+// (after "rather than"), not group 2. Same eviction logic as ratherThanOldChoiceTargets
+// but reads the leading cue's first capture group.
+function leadingRatherThanOldChoiceTargets(content, activeDecisions = []) {
+  const match = LEADING_RATHER_THAN_REPLACEMENT_CUE.exec(content);
+  const replacedTarget = normalizeChoiceTarget(match?.[1]);
+  return decisionsMentionChoice(activeDecisions, replacedTarget) ? [replacedTarget] : [];
+}
+
+// "Rather than use SQLite, keep Postgres" — the user explicitly preserves Postgres,
+// but if SQLite is also an active decision it must be evicted. Without this, the
+// digest retains contradictory entries for both choices. RATHER_THAN_PRESERVE_CUE
+// group 1 = rejected target, group 2 = kept target. Only evict the rejected target
+// when it is an active decision, so the preserve path still works when the rejected
+// choice was never persisted.
+function ratherThanPreserveRejectedTargets(content, activeDecisions = []) {
+  const match = RATHER_THAN_PRESERVE_CUE.exec(content);
+  const rejectedTarget = normalizeChoiceTarget(match?.[1]);
+  return decisionsMentionChoice(activeDecisions, rejectedTarget) ? [rejectedTarget] : [];
+}
+
 // A terse imperative like "Use SQLite." or "Switch to Redis." with no
 // instead/rather/actually qualifier. It is an override only when an active
 // decision affirms a *different* technology choice — the new target names what
@@ -520,8 +550,14 @@ function bareUseReplacementTargets(content, activeDecisions = []) {
   if (GENERIC_ARTIFACT_NOUNS.has(newTarget)) return [];
   // Find prior decisions that affirm a *different* technology choice. A decision
   // like "I decided to use Postgres for persistence." affirms Postgres; if the
-  // user now says "Use SQLite." the Postgres decision is superseded.
-  const oldTargets = [];
+  // user now says "Use SQLite." the Postgres decision is superseded. But a bare
+  // imperative with no qualifier is ambiguous when multiple unrelated tech choices
+  // exist: "Use SQLite." should not evict "I decided to use Vitest for tests" just
+  // because it is a different technology. Only evict when exactly one different
+  // technology choice is active, so the correction is unambiguous. When multiple
+  // unrelated choices exist, the user must name the old target explicitly
+  // (instead-of / rather-than) or the turn falls through to the neutral path.
+  const candidateTargets = [];
   for (const decision of activeDecisions) {
     const choiceMatch = USE_CHOICE_FROM_DECISION_CUE.exec(decision);
     if (!choiceMatch) continue;
@@ -535,9 +571,15 @@ function bareUseReplacementTargets(content, activeDecisions = []) {
     if (GENERIC_ARTIFACT_NOUNS.has(firstWord)) continue;
     // Only evict when the old decision actually affirms the old choice (not a
     // negation like "decided not to use Postgres").
-    if (decisionAffirmsTarget(decision, oldTarget)) oldTargets.push(oldTarget);
+    if (decisionAffirmsTarget(decision, oldTarget)) candidateTargets.push(oldTarget);
   }
-  return oldTargets;
+  // A bare imperative is ambiguous when more than one different tech choice is
+  // active: "Use SQLite." could target persistence, testing, or any other domain.
+  // Returning [] here lets the turn fall through to the neutral path rather than
+  // evicting unrelated rationale. The user must use instead-of / rather-than to
+  // name the old target explicitly when multiple choices are active.
+  if (candidateTargets.length !== 1) return [];
+  return candidateTargets;
 }
 
 function isNegatedReplacementOverride(content, activeDecisions = []) {
@@ -567,6 +609,8 @@ function targetedOverrideTargets(content, activeDecisions = []) {
     ...insteadOfOldChoiceTargets(content, activeDecisions),
     ...leadingInsteadOfOldChoiceTargets(content, activeDecisions),
     ...ratherThanOldChoiceTargets(content, activeDecisions),
+    ...leadingRatherThanOldChoiceTargets(content, activeDecisions),
+    ...ratherThanPreserveRejectedTargets(content, activeDecisions),
     ...bareUseReplacementTargets(content, activeDecisions),
   ])];
 }
@@ -583,9 +627,12 @@ function isPreserveChoiceTurn(content, activeDecisions = []) {
   // otherwise fire as a broad override, but the explicit keep target means the
   // user wants to retain the current choice. Only preserve when the kept target
   // matches an active decision so we don't misfire on unrelated preserve phrasing.
+  // Note: the rejected target (group 1) is evicted via ratherThanPreserveRejectedTargets
+  // in targetedOverrideTargets; this preserve check only governs whether the kept
+  // target survives. RATHER_THAN_PRESERVE_CUE group 2 = kept target.
   const ratherPreserveMatch = RATHER_THAN_PRESERVE_CUE.exec(content);
   if (ratherPreserveMatch) {
-    const keptTarget = normalizeChoiceTarget(ratherPreserveMatch[1]);
+    const keptTarget = normalizeChoiceTarget(ratherPreserveMatch[2]);
     if (keptTarget && decisionsMentionChoice(activeDecisions, keptTarget)) return true;
   }
   return NEGATED_CHANGE_TO_CUE.test(content)

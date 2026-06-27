@@ -772,6 +772,67 @@ test("bare imperative override evicts lowercase old-choice decision", async () =
   assert.doesNotMatch(block, /postgres/i, "a bare imperative override must evict a lowercase old-choice decision");
 });
 
+test("rather-than preserve evicts the rejected choice when both are active", async () => {
+  // Regression for the P2 finding: "Rather than use SQLite, keep Postgres"
+  // returned a pure preserve when the kept target matched an active decision,
+  // so the rejected SQLite decision survived alongside Postgres, leaving
+  // contradictory entries in the digest.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  ctx.push({ role: "assistant", content: "I also decided to use SQLite for testing." });
+  ctx.push({ role: "user", content: "Rather than use SQLite, keep Postgres." });
+  pushRecentTail(ctx, "filler", 12);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.match(block, /Postgres/i, "an explicit 'keep Postgres' must preserve the Postgres decision");
+  assert.doesNotMatch(block, /SQLite/i, "the rejected SQLite decision must be evicted even while preserving Postgres");
+});
+
+test("leading rather-than replacement targets old choice precisely", async () => {
+  // Regression for the P2 finding: "Rather than Postgres, use SQLite" was not
+  // recognized by ratherThanOldChoiceTargets (verb-first only), so it fell
+  // through to broad-clear and dropped unrelated decisions like React.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  ctx.push({ role: "assistant", content: "I chose React for the frontend." });
+  ctx.push({ role: "user", content: "Rather than Postgres, use SQLite." });
+  pushRecentTail(ctx, "filler", 12);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.doesNotMatch(block, /Postgres/i, "a leading rather-than correction must evict the explicitly named old choice");
+  assert.match(block, /React/i, "an unrelated React decision must survive a targeted rather-than correction");
+});
+
+test("bare imperative does not evict multiple unrelated tech choices", async () => {
+  // Regression for the P2 finding: "Use SQLite." evicted every active decision
+  // whose extracted technology differed from SQLite, so unrelated choices like
+  // Vitest were lost alongside the intended Postgres eviction.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  ctx.push({ role: "assistant", content: "I decided to use Vitest for tests." });
+  ctx.push({ role: "user", content: "Use SQLite." });
+  pushRecentTail(ctx, "filler", 12);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.match(block, /Vitest/i, "an unrelated Vitest decision must survive an ambiguous bare imperative");
+  assert.match(block, /Postgres/i, "an ambiguous bare imperative must not evict any decision when multiple tech choices are active");
+});
+
 test("neutral replace edit request does not drop decisions", async () => {
   // Regression for the P2 finding: plain /\breplace\b/i matched ordinary edit
   // requests ("replace the README placeholder"), clearing persisted rationale
