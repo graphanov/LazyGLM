@@ -875,6 +875,7 @@ test("negated replacement wording does not drop decisions", async () => {
   // Postgres; keep it", clearing rationale the user explicitly kept.
   for (const preserveMessage of [
     "Don't replace Postgres; keep it.",
+    "Don't replace Postgres; keep going.",
     "Actually, do not switch to SQLite; keep Postgres.",
     "Actually, do not use SQLite; keep Postgres.",
     "Do not use SQLite instead; keep Postgres.",
@@ -899,30 +900,36 @@ test("negated replacement wording does not drop decisions", async () => {
 });
 
 test("negated old-choice replacement drops superseded decisions", async () => {
-  // Regression for the P2 finding: "Do not use Postgres; use SQLite" rejects
-  // the old Postgres choice. It must evict both freshly dropped decisions and
-  // decisions persisted from an earlier compaction pass.
-  for (const persistOldDecision of [false, true]) {
-    const ctx = new Context({ budget: 1 });
-    ctx.setSystem("system prompt");
-    ctx.push({ role: "user", content: "the task" });
-    if (persistOldDecision) {
-      ctx.addDecision("I decided to use Postgres for persistence.");
-    } else {
-      ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  // Regression for the P2 finding: negating the active Postgres choice rejects
+  // it, with or without a punctuation-separated replacement. It must evict both
+  // freshly dropped decisions and decisions persisted from an earlier compaction.
+  for (const overrideMessage of [
+    "Do not use Postgres; use SQLite.",
+    "Do not use Postgres.",
+    "Do not use Postgres but use SQLite.",
+  ]) {
+    for (const persistOldDecision of [false, true]) {
+      const ctx = new Context({ budget: 1 });
+      ctx.setSystem("system prompt");
+      ctx.push({ role: "user", content: "the task" });
+      if (persistOldDecision) {
+        ctx.addDecision("I decided to use Postgres for persistence.");
+      } else {
+        ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+      }
+      ctx.push({ role: "user", content: overrideMessage });
+      pushRecentTail(ctx, "filler", 13);
+
+      await ctx.maybeCompact();
+      const summary = latestCompactionSummary(ctx);
+      const block = decisionsBlock(summary);
+
+      assert.doesNotMatch(
+        block,
+        /Postgres/i,
+        `negated old-choice replacement must evict superseded decisions; persisted=${persistOldDecision}; message=${overrideMessage}`,
+      );
     }
-    ctx.push({ role: "user", content: "Do not use Postgres; use SQLite." });
-    pushRecentTail(ctx, "filler", 13);
-
-    await ctx.maybeCompact();
-    const summary = latestCompactionSummary(ctx);
-    const block = decisionsBlock(summary);
-
-    assert.doesNotMatch(
-      block,
-      /Postgres/i,
-      `negated old-choice replacement must evict superseded decisions; persisted=${persistOldDecision}`,
-    );
   }
 });
 

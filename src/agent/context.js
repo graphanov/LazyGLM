@@ -224,7 +224,6 @@ const DECISION_CUES = [
 const CHANGE_TO_CUE = /\bchange\b.*\b(?:decision|choice|approach|plan|design|rationale)\b.*\bto\b|\b(?:decision|choice|approach|plan|design|rationale)\b.*\bchange\b.*\bto\b/i;
 const NEGATED_CHANGE_TO_CUE = /\b(?:no|not|without)\s+change\b.*\bto\b|\b(?:do not|don't)\s+change\b.*\bto\b/i;
 const NEGATED_REPLACEMENT_CUE = /\b(?:do not|don't|dont)\s+(?:replace|use|switch\s+to|change\s+to|prefer|go with)\b|\b(?:no|not|without)\s+(?:replace|replacement|use|switch\s+to|change\s+to|preference)\b/i;
-const POSITIVE_REPLACEMENT_AFTER_NEGATION_CUE = /\b(?:do not|don't|dont)\s+(?:use|replace|prefer|go with)\s+[^.;,\n]+[.;,]\s*(?:use|switch\s+to|change\s+to|prefer|go with)\b|\b(?:do not|don't|dont)\s+(?:switch|change)\s+to\s+[^.;,\n]+[.;,]\s*(?:use|switch\s+to|change\s+to|prefer|go with)\b|\b(?:no|not|without)\s+(?:replacement|use|switch\s+to|change\s+to|preference)\s+(?:of\s+|for\s+)?[^.;,\n]+[.;,]\s*(?:use|switch\s+to|change\s+to|prefer|go with)\b/i;
 const PRESERVE_CHOICE_CUE = /\b(?:keep|preserve|retain|stick with|stay with|leave)\b|\b(?:same|current|existing|prior|previous)\b.*\b(?:choice|decision|approach|plan)\b/i;
 const REPLACE_DECISION_CUE = /\breplace\b.*\b(?:decision|choice|approach|rationale)\b|\b(?:decision|choice|approach|rationale)\b.*\breplace\b/i;
 const INSTEAD_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\b.*\binstead\b(?!\s+of\b)|\binstead\b(?!\s+of\b).*\b(?:use|switch\s+to|change\s+to|prefer|go with)\b/i;
@@ -236,9 +235,9 @@ const SECOND_THOUGHT_REPLACEMENT_CUE = /\bon second thought\b.*\b(?:use|switch t
 const NEVERMIND_REPLACEMENT_CUE = /\bnever ?mind\b.*\b(?:use|switch to|change to|prefer|go with|replace|decision|choice|approach|plan|design|rationale)\b/i;
 const DISCARD_DECISION_CUE = /\b(?:scrap|redo|revert)\b.*\b(?:decision|choice|approach|plan|design|rationale)\b|\b(?:decision|choice|approach|plan|design|rationale)\b.*\b(?:scrap|redo|revert)\b/i;
 const NEGATED_REPLACEMENT_TARGET_CUES = [
-  /\b(?:do not|don't|dont)\s+(?:use|replace|prefer|go with)\s+([^.;,\n]+?)(?=\s+instead\b|[.;,\n]|$)/i,
-  /\b(?:do not|don't|dont)\s+(?:switch|change)\s+to\s+([^.;,\n]+?)(?=\s+instead\b|[.;,\n]|$)/i,
-  /\b(?:no|not|without)\s+(?:replacement|use|switch\s+to|change\s+to|preference)\s+(?:of\s+|for\s+)?([^.;,\n]+?)(?=\s+instead\b|[.;,\n]|$)/i,
+  /\b(?:do not|don't|dont)\s+(?:use|replace|prefer|go with)\s+([^.;,\n]+?)(?=\s+(?:instead\b|(?:but|and)\s+(?:use|switch|change|prefer|go with)\b)|[.;,\n]|$)/i,
+  /\b(?:do not|don't|dont)\s+(?:switch|change)\s+to\s+([^.;,\n]+?)(?=\s+(?:instead\b|(?:but|and)\s+(?:use|switch|change|prefer|go with)\b)|[.;,\n]|$)/i,
+  /\b(?:no|not|without)\s+(?:replacement|use|switch\s+to|change\s+to|preference)\s+(?:of\s+|for\s+)?([^.;,\n]+?)(?=\s+(?:instead\b|(?:but|and)\s+(?:use|switch|change|prefer|go with)\b)|[.;,\n]|$)/i,
 ];
 const PRESERVE_TARGET_CUES = [
   /\b(?:keep|preserve|retain|stick with|stay with|leave)\s+([^.;,\n]+?)(?=[.;,\n]|$)/i,
@@ -363,9 +362,12 @@ function negatedReplacementOverrideTargets(content, activeDecisions = []) {
   const negatedTarget = firstChoiceTarget(content, NEGATED_REPLACEMENT_TARGET_CUES);
   const preservedTarget = firstChoiceTarget(content, PRESERVE_TARGET_CUES);
   if (!decisionsMentionChoice(activeDecisions, negatedTarget)) return [];
-  if (preservedTarget && (negatedTarget === preservedTarget || isPronounChoiceTarget(preservedTarget))) return [];
-  if (preservedTarget || POSITIVE_REPLACEMENT_AFTER_NEGATION_CUE.test(content)) return [negatedTarget];
-  return [];
+  if (preservedTarget && (negatedTarget === preservedTarget || isPronounChoiceTarget(preservedTarget) || isKeepGoingTarget(preservedTarget))) return [];
+  return [negatedTarget];
+}
+
+function isKeepGoingTarget(target) {
+  return /^(?:going|working|on|at it)$/i.test(target);
 }
 
 function targetedOverrideTargets(content, activeDecisions = []) {
