@@ -701,6 +701,43 @@ test("instead-of correction with infinitive rationale evicts superseded decision
   assert.doesNotMatch(block, /Postgres/i, "an instead-of correction with infinitive rationale must evict the superseded decision");
 });
 
+test("leading instead-of correction evicts superseded decision", async () => {
+  // Regression for the P2 finding: "Instead of Postgres, use SQLite" uses the
+  // reversed order (old target first). INSTEAD_OF_REPLACEMENT_CUE only matched
+  // verb-first order ("use SQLite instead of Postgres"), so the leading form
+  // slipped through and the rejected Postgres decision stayed in the digest.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  ctx.push({ role: "user", content: "Instead of Postgres, use SQLite." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.doesNotMatch(block, /Postgres/i, "a leading instead-of correction must evict the superseded decision");
+});
+
+test("rather-than preserve keeps current choice decision", async () => {
+  // Regression for the P2 finding: "Rather than use SQLite, keep Postgres"
+  // matched RATHER_REPLACEMENT_CUE which fired as a broad override and cleared
+  // the persisted Postgres decision even though the user explicitly kept it.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  ctx.push({ role: "user", content: "Rather than use SQLite, keep Postgres." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.match(block, /Postgres/i, "an explicit 'keep Postgres' must preserve the decision despite rather-than phrasing");
+});
+
 test("rather-than correction with infinitive rationale evicts superseded decision", async () => {
   // Same class as the instead-of fix, mirroring RATHER_THAN_REPLACEMENT_CUE.
   const ctx = new Context({ budget: 1 });

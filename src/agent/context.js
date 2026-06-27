@@ -236,10 +236,22 @@ const CHANGE_TO_CUE = /\bchange\b.*\b(?:decision|choice|approach|rationale|plan(
 const NEGATED_CHANGE_TO_CUE = /\b(?:no|not|without)\s+change\b.*\bto\b|\b(?:do not|don't)\s+change\b.*\bto\b/i;
 const NEGATED_REPLACEMENT_CUE = /\b(?:do not|don't|dont)\s+(?:replace|use|switch\s+to|change\s+to|prefer|go with)\b|\b(?:no|not|without)\s+(?:replace|replacement|use|switch\s+to|change\s+to|preference)\b/i;
 const PRESERVE_CHOICE_CUE = /\b(?:keep|preserve|retain|stick with|stay with|leave)\b|\b(?:same|current|existing|prior|previous)\b.*\b(?:choice|decision|approach|plan)\b/i;
+// "Rather than use SQLite, keep Postgres" — the rather...use pattern fires
+// hasPositiveReplacementCue and broad-clears even though the user is
+// explicitly keeping the current choice. This cue detects when a rather-than
+// clause is paired with an explicit keep/preserve target so isPreserveChoiceTurn
+// can treat it as a preserve instead of a broad override. Group 1 = kept target.
+const RATHER_THAN_PRESERVE_CUE = /\brather\s+than\b[^.;\n]*,\s*(?:keep|preserve|retain|stick\s+with|stay\s+with|leave)\s+([^.;,\n]+?)(?=[.;,\n]|$)/i;
 const REPLACE_DECISION_CUE = /\breplace\b.*\b(?:decision|choice|approach|rationale)\b|\b(?:decision|choice|approach|rationale)\b.*\breplace\b/i;
 const INSTEAD_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\b.*\binstead\b(?!\s+of\b)|\binstead\b(?!\s+of\b).*\b(?:use|switch\s+to|change\s+to|prefer|go with)\b/i;
 const SHORT_INSTEAD_REPLACEMENT_TARGET_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\s+([^.;,\n]+?)\s+instead\b(?!\s+of\b)/i;
 const INSTEAD_OF_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\s+([^.;,\n]+?)\s+instead\s+of\s+([^.;,\n]+?)(?=\s+(?:because|since|as|in|for|on|during|when|while|where|under|with|to)\b|\s+(?:but|and)\s+(?:(?:do not|don't|dont|not|never)\s+)?(?:keep|preserve|retain|stick with|stay with|leave|update|edit|modify|write|patch|create|delete|read|open|run|rerun|test|verify|check|build|lint|format|fix)\b|[.;,\n]|$)/i;
+// Leading-order: "Instead of Postgres, use SQLite" — the old target appears
+// first (after "instead of"), the new target follows the verb. INSTEAD_OF above
+// only recognizes verb-first order ("use SQLite instead of Postgres"), so the
+// reversed phrasing slipped through and the rejected decision stayed in the
+// handoff digest. Group 1 = old target, group 2 = new target.
+const LEADING_INSTEAD_OF_REPLACEMENT_CUE = /\binstead\s+of\s+([^.;,\n]+?)\s*,?\s+(?:use|switch\s+to|change\s+to|prefer|go\s+with)\s+([^.;,\n]+?)(?=\s+(?:because|since|as|in|for|on|during|when|while|where|under|with|to)\b|\s+(?:but|and)\s+(?:(?:do not|don't|dont|not|never)\s+)?(?:keep|preserve|retain|stick with|stay with|leave|update|edit|modify|write|patch|create|delete|read|open|run|rerun|test|verify|check|build|lint|format|fix)\b|[.;,\n]|$)/i;
 const ACTUALLY_REPLACEMENT_CUE = /\bactually\b.*\b(?:use|switch to|change to|prefer|go with)\b/i;
 const RATHER_REPLACEMENT_CUE = /\brather\b.*\b(?:use|switch to|change to|prefer|go with)\b/i;
 // Targeted "use X rather than Y" form: RATHER_REPLACEMENT_CUE only matches the
@@ -471,6 +483,15 @@ function insteadOfOldChoiceTargets(content, activeDecisions = []) {
   return decisionsMentionChoice(activeDecisions, replacedTarget) ? [replacedTarget] : [];
 }
 
+// Leading-order "Instead of Postgres, use SQLite": the old target is in group 1
+// (after "instead of"), not group 2. Same eviction logic as insteadOfOldChoiceTargets
+// but reads the reversed cue's first capture group.
+function leadingInsteadOfOldChoiceTargets(content, activeDecisions = []) {
+  const match = LEADING_INSTEAD_OF_REPLACEMENT_CUE.exec(content);
+  const replacedTarget = normalizeChoiceTarget(match?.[1]);
+  return decisionsMentionChoice(activeDecisions, replacedTarget) ? [replacedTarget] : [];
+}
+
 function ratherThanOldChoiceTargets(content, activeDecisions = []) {
   const match = RATHER_THAN_REPLACEMENT_CUE.exec(content);
   const replacedTarget = normalizeChoiceTarget(match?.[2]);
@@ -544,6 +565,7 @@ function targetedOverrideTargets(content, activeDecisions = []) {
   return [...new Set([
     ...negatedReplacementOverrideTargets(content, activeDecisions),
     ...insteadOfOldChoiceTargets(content, activeDecisions),
+    ...leadingInsteadOfOldChoiceTargets(content, activeDecisions),
     ...ratherThanOldChoiceTargets(content, activeDecisions),
     ...bareUseReplacementTargets(content, activeDecisions),
   ])];
@@ -557,6 +579,15 @@ function isPreserveChoiceTurn(content, activeDecisions = []) {
   // is rejecting the old choice and the decision must be evicted instead.
   if (isNegatedReplacementOverride(content, activeDecisions)) return false;
   if (isNeutralActionUseTurn(content)) return true;
+  // "Rather than use SQLite, keep Postgres" — the rather...use pattern would
+  // otherwise fire as a broad override, but the explicit keep target means the
+  // user wants to retain the current choice. Only preserve when the kept target
+  // matches an active decision so we don't misfire on unrelated preserve phrasing.
+  const ratherPreserveMatch = RATHER_THAN_PRESERVE_CUE.exec(content);
+  if (ratherPreserveMatch) {
+    const keptTarget = normalizeChoiceTarget(ratherPreserveMatch[1]);
+    if (keptTarget && decisionsMentionChoice(activeDecisions, keptTarget)) return true;
+  }
   return NEGATED_CHANGE_TO_CUE.test(content)
     || (NEGATED_REPLACEMENT_CUE.test(content) && PRESERVE_CHOICE_CUE.test(content))
     || (PRESERVE_CHOICE_CUE.test(content) && !hasPositiveReplacementCue(content));
