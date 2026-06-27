@@ -605,6 +605,28 @@ test("neutral change-to edit request does not drop decisions", async () => {
   );
 });
 
+test("neutral change-to plan file edit request does not drop decisions", async () => {
+  // Regression for the P2 finding: `change ... plan ... to` must not treat a
+  // file edit like `plan.md` as a decision reversal just because the filename
+  // contains "plan".
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  ctx.push({ role: "user", content: "Change plan.md to add a verification checklist." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.match(
+    block,
+    /I decided to use Postgres for persistence\./,
+    "a plan.md edit request must not evict unrelated decisions",
+  );
+});
+
 test("decision change-to wording drops superseded decisions", async () => {
   // Keep explicit decision-reversal wording active after narrowing plain change-to
   // requests: changing a prior decision is still an override.
@@ -684,6 +706,34 @@ test("neutral short instead command request does not drop decisions", async () =
     /I decided to use Postgres for persistence\./,
     "a short command substitution must not evict unrelated decisions",
   );
+});
+
+test("short instead database choice with test noun drops superseded decisions", async () => {
+  // Regression for the P2 finding: `test` inside a noun phrase like "SQLite
+  // test database" is not enough to classify the replacement target as a
+  // neutral command substitution.
+  for (const persistOldDecision of [false, true]) {
+    const ctx = new Context({ budget: 1 });
+    ctx.setSystem("system prompt");
+    ctx.push({ role: "user", content: "the task" });
+    if (persistOldDecision) {
+      ctx.addDecision("I decided to use Postgres for persistence.");
+    } else {
+      ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+    }
+    ctx.push({ role: "user", content: "Use a SQLite test database instead." });
+    pushRecentTail(ctx, "filler", 13);
+
+    await ctx.maybeCompact();
+    const summary = latestCompactionSummary(ctx);
+    const block = decisionsBlock(summary);
+
+    assert.doesNotMatch(
+      block,
+      /Postgres/i,
+      `a test-database replacement must evict superseded decisions; persisted=${persistOldDecision}`,
+    );
+  }
 });
 
 test("choice instead-of wording drops superseded decisions", async () => {

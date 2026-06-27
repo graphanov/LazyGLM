@@ -221,7 +221,7 @@ const DECISION_CUES = [
 // negation cues (\bnot\b, \bdon'?t\b) were removed: they matched neutral
 // instructions ("Do not run tests yet", "No need to update docs") and wrongly
 // cleared the Decisions & rationale block in multi-compaction sessions.
-const CHANGE_TO_CUE = /\bchange\b.*\b(?:decision|choice|approach|plan|design|rationale)\b.*\bto\b|\b(?:decision|choice|approach|plan|design|rationale)\b.*\bchange\b.*\bto\b/i;
+const CHANGE_TO_CUE = /\bchange\b.*\b(?:decision|choice|approach|rationale|plan(?!\.[\w-])|design(?!\.[\w-]))\b.*\bto\b|\b(?:decision|choice|approach|rationale|plan(?!\.[\w-])|design(?!\.[\w-]))\b.*\bchange\b.*\bto\b/i;
 const NEGATED_CHANGE_TO_CUE = /\b(?:no|not|without)\s+change\b.*\bto\b|\b(?:do not|don't)\s+change\b.*\bto\b/i;
 const NEGATED_REPLACEMENT_CUE = /\b(?:do not|don't|dont)\s+(?:replace|use|switch\s+to|change\s+to|prefer|go with)\b|\b(?:no|not|without)\s+(?:replace|replacement|use|switch\s+to|change\s+to|preference)\b/i;
 const PRESERVE_CHOICE_CUE = /\b(?:keep|preserve|retain|stick with|stay with|leave)\b|\b(?:same|current|existing|prior|previous)\b.*\b(?:choice|decision|approach|plan)\b/i;
@@ -243,7 +243,7 @@ const PRESERVE_TARGET_CUES = [
   /\b(?:keep|preserve|retain|stick with|stay with|leave)\s+([^.;,\n]+?)(?=[.;,\n]|$)/i,
 ];
 const NEUTRAL_ACTION_USE_CUE = /\bactually\b.*\buse\s+(?:`[^`]+`|[^.;,\n]+?)\s+to\s+(?:verify|test|run|check|build|lint|format|inspect|update|edit|modify|write|patch|create|delete|read|open)\b/i;
-const COMMANDISH_REPLACEMENT_TARGET_CUE = /^(?:`[^`]+`|(?:npm|pnpm|yarn|node|npx|git|gh|python3?|pytest|go|cargo|make|cmake|bash|sh)\b|.*\b(?:test|tests|lint|typecheck|build|format|verify|check)\b)/i;
+const COMMANDISH_REPLACEMENT_TARGET_CUE = /^(?:`[^`]+`|(?:npm|pnpm|yarn|node|npx|git|gh|python3?|pytest|go|cargo|make|cmake|bash|sh)\b)/i;
 const PRONOUN_CHOICE_TARGETS = new Set(["it", "that", "this", "them"]);
 
 const OVERRIDE_CUES = [
