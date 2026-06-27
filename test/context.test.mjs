@@ -510,6 +510,45 @@ test("neutral actually request does not drop decisions", async () => {
   );
 });
 
+test("neutral replace edit request does not drop decisions", async () => {
+  // Regression for the P2 finding: plain /\breplace\b/i matched ordinary edit
+  // requests ("replace the README placeholder"), clearing persisted rationale
+  // even though the user was not reversing a prior decision.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  ctx.push({ role: "user", content: "Replace the README placeholder with the final wording." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.match(
+    block,
+    /I decided to use Postgres for persistence\./,
+    "a neutral replace edit request must not evict decisions",
+  );
+});
+
+test("decision replacement wording drops superseded decisions", async () => {
+  // Keep explicit decision-reversal wording active after narrowing plain replace
+  // requests: replacing a prior decision is still an override.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  ctx.push({ role: "user", content: "Replace the prior decision with SQLite." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.doesNotMatch(block, /Postgres/i, "decision replacement wording must evict superseded decisions");
+});
+
 test("negated change-to wording does not drop decisions", async () => {
   // Regression for the P2 finding: /\bchange\b.*\bto\b/i matched "No change
   // to the Postgres decision", clearing persisted rationale even though the
