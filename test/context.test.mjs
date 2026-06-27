@@ -682,6 +682,59 @@ test("article-prefixed technology swap drops superseded decisions", async () => 
   assert.doesNotMatch(block, /React/i, "an article-prefixed technology swap must evict superseded decisions");
 });
 
+test("instead-of correction with infinitive rationale evicts superseded decision", async () => {
+  // Regression for the P2 finding: INSTEAD_OF_REPLACEMENT_CUE did not treat an
+  // infinitive rationale ("to avoid running a server") as a boundary, so the old
+  // target was captured as "Postgres to avoid running a server" instead of just
+  // "Postgres", failing to match the existing decision and leaving it in the digest.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  ctx.push({ role: "user", content: "Use SQLite instead of Postgres to avoid running a server." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.doesNotMatch(block, /Postgres/i, "an instead-of correction with infinitive rationale must evict the superseded decision");
+});
+
+test("rather-than correction with infinitive rationale evicts superseded decision", async () => {
+  // Same class as the instead-of fix, mirroring RATHER_THAN_REPLACEMENT_CUE.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use Postgres for persistence." });
+  ctx.push({ role: "user", content: "Use SQLite rather than Postgres to avoid running a server." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.doesNotMatch(block, /Postgres/i, "a rather-than correction with infinitive rationale must evict the superseded decision");
+});
+
+test("bare imperative override evicts lowercase old-choice decision", async () => {
+  // Regression for the P2 finding: bareUseReplacementTargets required the old
+  // affirmed target's first word to be uppercase, so lowercase tech names like
+  // "postgres" were skipped and the stale decision survived compaction.
+  const ctx = new Context({ budget: 1 });
+  ctx.setSystem("system prompt");
+  ctx.push({ role: "user", content: "the task" });
+  ctx.push({ role: "assistant", content: "I decided to use postgres for persistence." });
+  ctx.push({ role: "user", content: "Use SQLite." });
+  pushRecentTail(ctx, "filler", 13);
+
+  await ctx.maybeCompact();
+  const summary = latestCompactionSummary(ctx);
+  const block = decisionsBlock(summary);
+
+  assert.doesNotMatch(block, /postgres/i, "a bare imperative override must evict a lowercase old-choice decision");
+});
+
 test("neutral replace edit request does not drop decisions", async () => {
   // Regression for the P2 finding: plain /\breplace\b/i matched ordinary edit
   // requests ("replace the README placeholder"), clearing persisted rationale

@@ -239,7 +239,7 @@ const PRESERVE_CHOICE_CUE = /\b(?:keep|preserve|retain|stick with|stay with|leav
 const REPLACE_DECISION_CUE = /\breplace\b.*\b(?:decision|choice|approach|rationale)\b|\b(?:decision|choice|approach|rationale)\b.*\breplace\b/i;
 const INSTEAD_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\b.*\binstead\b(?!\s+of\b)|\binstead\b(?!\s+of\b).*\b(?:use|switch\s+to|change\s+to|prefer|go with)\b/i;
 const SHORT_INSTEAD_REPLACEMENT_TARGET_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\s+([^.;,\n]+?)\s+instead\b(?!\s+of\b)/i;
-const INSTEAD_OF_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\s+([^.;,\n]+?)\s+instead\s+of\s+([^.;,\n]+?)(?=\s+(?:because|since|as|in|for|on|during|when|while|where|under|with)\b|\s+(?:but|and)\s+(?:(?:do not|don't|dont|not|never)\s+)?(?:keep|preserve|retain|stick with|stay with|leave|update|edit|modify|write|patch|create|delete|read|open|run|rerun|test|verify|check|build|lint|format|fix)\b|[.;,\n]|$)/i;
+const INSTEAD_OF_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go with)\s+([^.;,\n]+?)\s+instead\s+of\s+([^.;,\n]+?)(?=\s+(?:because|since|as|in|for|on|during|when|while|where|under|with|to)\b|\s+(?:but|and)\s+(?:(?:do not|don't|dont|not|never)\s+)?(?:keep|preserve|retain|stick with|stay with|leave|update|edit|modify|write|patch|create|delete|read|open|run|rerun|test|verify|check|build|lint|format|fix)\b|[.;,\n]|$)/i;
 const ACTUALLY_REPLACEMENT_CUE = /\bactually\b.*\b(?:use|switch to|change to|prefer|go with)\b/i;
 const RATHER_REPLACEMENT_CUE = /\brather\b.*\b(?:use|switch to|change to|prefer|go with)\b/i;
 // Targeted "use X rather than Y" form: RATHER_REPLACEMENT_CUE only matches the
@@ -248,7 +248,7 @@ const RATHER_REPLACEMENT_CUE = /\brather\b.*\b(?:use|switch to|change to|prefer|
 // decision in the handoff digest. This cue names both targets so the old one
 // (the second capture group) can be evicted precisely, mirroring
 // INSTEAD_OF_REPLACEMENT_CUE for the "instead of" phrasing.
-const RATHER_THAN_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go\s+with)\s+([^.;,\n]+?)\s+rather\s+than\s+([^.;,\n]+?)(?=\s+(?:because|since|as|in|for|on|during|when|while|where|under|with)\b|\s+(?:but|and)\s+(?:(?:do not|don't|dont|not|never)\s+)?(?:keep|preserve|retain|stick with|stay with|leave|update|edit|modify|write|patch|create|delete|read|open|run|rerun|test|verify|check|build|lint|format|fix)\b|[.;,\n]|$)/i;
+const RATHER_THAN_REPLACEMENT_CUE = /\b(?:use|switch\s+to|change\s+to|prefer|go\s+with)\s+([^.;,\n]+?)\s+rather\s+than\s+([^.;,\n]+?)(?=\s+(?:because|since|as|in|for|on|during|when|while|where|under|with|to)\b|\s+(?:but|and)\s+(?:(?:do not|don't|dont|not|never)\s+)?(?:keep|preserve|retain|stick with|stay with|leave|update|edit|modify|write|patch|create|delete|read|open|run|rerun|test|verify|check|build|lint|format|fix)\b|[.;,\n]|$)/i;
 const SECOND_THOUGHT_REPLACEMENT_CUE = /\bon second thought\b.*\b(?:use|switch to|change to|prefer|go with|replace|scrap|redo|revert)\b/i;
 const NEVERMIND_REPLACEMENT_CUE = /\bnever ?mind\b.*\b(?:use|switch to|change to|prefer|go with|replace|decision|choice|approach|plan|design|rationale)\b/i;
 // Bare imperative choice replacement: "Use SQLite.", "Switch to Redis.", "Prefer Bun."
@@ -286,6 +286,14 @@ const GENERIC_ARTIFACT_NOUNS = new Set([
   "setup", "approach", "method", "process", "environment", "directory",
   "folder", "path", "branch", "version", "existing", "current",
   "previous", "same", "latest", "fixture", "stubs", "binary",
+  // Design/architecture concepts that are not technology choices. Previously
+  // caught by an uppercase-only guard in bareUseReplacementTargets; now
+  // listed explicitly so lowercase tech names (postgres, node, svelte) can
+  // pass while these generic concepts still do not.
+  "factory", "pattern", "patterns", "singleton", "builder", "adapter",
+  "proxy", "observer", "decorator", "facade", "strategy", "iterator",
+  "middleware", "abstraction", "layer", "mixin", "trait", "wrapper",
+  "handler", "strategy", "component", "hook",
 ]);
 
 const OVERRIDE_CUES = [
@@ -497,14 +505,13 @@ function bareUseReplacementTargets(content, activeDecisions = []) {
     const choiceMatch = USE_CHOICE_FROM_DECISION_CUE.exec(decision);
     if (!choiceMatch) continue;
     const rawOldTarget = choiceMatch[1].trim();
-    // Only treat the old affirmed target as a technology choice when its first
-    // word is a proper noun (capitalized) and not a generic concept extracted
-    // from "use the factory pattern" or "use an event-driven approach".
-    const firstWord = rawOldTarget.split(/\s+/)[0];
-    if (!/^[A-Z]/.test(firstWord)) continue;
-    if (GENERIC_ARTIFACT_NOUNS.has(firstWord.toLowerCase())) continue;
     const oldTarget = normalizeChoiceTarget(rawOldTarget);
     if (!oldTarget || oldTarget === newTarget) continue;
+    // Skip generic concepts extracted from "use the factory pattern" or "use an
+    // event-driven approach". Do not require uppercase: lowercase tech names
+    // (postgres, node, svelte) are valid technology choices, not generic nouns.
+    const firstWord = oldTarget.split(/\s+/)[0];
+    if (GENERIC_ARTIFACT_NOUNS.has(firstWord)) continue;
     // Only evict when the old decision actually affirms the old choice (not a
     // negation like "decided not to use Postgres").
     if (decisionAffirmsTarget(decision, oldTarget)) oldTargets.push(oldTarget);
