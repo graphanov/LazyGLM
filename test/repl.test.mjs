@@ -23,6 +23,8 @@ import {
   turnRule,
   turnStart,
   turnEnd,
+  formatRoutingNotice,
+  hasManualRoutingOverride,
 } from "../src/repl.js";
 import { Context, assistantMessageFrom } from "../src/agent/context.js";
 import { chat } from "../src/agent/provider.js";
@@ -80,6 +82,27 @@ test("REPL turn-format helpers can render without ANSI for non-TTY output", () =
   assertNoAnsi(formatToolResult("ok", { isTTY: false }));
   assertNoAnsi(turnDivider({ isTTY: false }));
   assertNoAnsi(formatExitMarker({ isTTY: false }));
+});
+
+test("REPL routing notice is parseable and ANSI-free for non-TTY output", () => {
+  const out = formatRoutingNotice({
+    from: { provider: "zai", model: "glm-4.7", modelId: "glm-4.7", role: "quick", reasoningEffort: "low" },
+    to: { provider: "zai", model: "glm-5.2", modelId: "glm-5.2", role: "planner", reasoningEffort: "high" },
+    source: "prompt_intake",
+    reason: "prompt complexity: cleanup/refactor scope",
+    direction: "escalate",
+    hard: true,
+  }, { isTTY: false });
+
+  assertNoAnsi(out);
+  assert.equal(out, "routing: glm-4.7/low -> glm-5.2/high (prompt complexity: cleanup/refactor scope)");
+});
+
+test("REPL manual routing override is enabled by model or role flags", () => {
+  assert.equal(hasManualRoutingOverride({}), false);
+  assert.equal(hasManualRoutingOverride({ model: "glm-4.7" }), true);
+  assert.equal(hasManualRoutingOverride({ role: "quick" }), true);
+  assert.equal(hasManualRoutingOverride({ model: "glm-4.7", role: "quick" }), true);
 });
 
 test("REPL prompt routing keeps piped stdout clean", () => {

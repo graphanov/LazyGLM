@@ -8,6 +8,19 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { chat, resolveProviderConfig, shouldPreserveThinking } from "./agent/provider.js";
 import { loadCatalog, resolveContextBudget } from "./agent/router.js";
+import {
+  beginAdaptiveUserTurn,
+  createAdaptiveRoutingState,
+  effectiveBundleFromProviderConfig,
+  evaluatePromptRouting,
+  evaluateToolResultRouting,
+  evaluateUserTurnCompleteRouting,
+  highRole,
+  observePromptIntake,
+  observeToolResult,
+  recordRoutingApplied,
+  resetAdaptiveRoutingState,
+} from "./agent/adaptive-router.js";
 import { TOOL_SPECS, TOOL_HANDLERS } from "./agent/tools.js";
 import { Context, assistantMessageFrom } from "./agent/context.js";
 import { HookEngine } from "./hooks/engine.js";
@@ -42,6 +55,15 @@ const TURN_RULE = "─".repeat(TURN_RULE_WIDTH);
 
 function ansi(code, { isTTY = true } = {}) {
   return isTTY ? code : "";
+}
+
+function routingBundleLabel(bundle) {
+  return `${bundle.model}/${bundle.reasoningEffort}`;
+}
+
+export function formatRoutingNotice(decision, opts = {}) {
+  const text = `routing: ${routingBundleLabel(decision.from)} -> ${routingBundleLabel(decision.to)} (${decision.reason})`;
+  return `${ansi(CYAN, opts)}${text}${ansi(RESET, opts)}`;
 }
 
 function displayValue(value) {
@@ -131,6 +153,10 @@ export function resolveContextBudgetCommand(argStr, { model, catalog, manualBudg
   const parsed = parseContextBudgetInput(arg);
   if (!parsed) return { error: "usage: /context-budget <positive-tokens|auto>" };
   return { budget: parsed, manualBudget: parsed, mode: "manual", action: "set" };
+}
+
+export function hasManualRoutingOverride(flags = {}) {
+  return !!(flags.model || flags.role);
 }
 
 const REPL_PERSONA = `You are LazyGLM, a terminal-based AI coding agent connected directly to the user's file system via a CLI.
@@ -400,7 +426,7 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
   // 2. Resolve provider config (env > config file > catalog default)
   let providerConfig;
   try {
-    providerConfig = await resolveProviderConfig({ model: flags.model, provider: flags.provider, role: "default" });
+    providerConfig = await resolveProviderConfig({ model: flags.model, provider: flags.provider, role: flags.role || "default" });
   } catch (e) {
     console.error(`\n❌ ${e.message}`);
     process.exit(1);
@@ -408,6 +434,7 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
   let currentModel = providerConfig.modelId;
   let manualContextBudget = Number.isInteger(flags.contextBudget) && flags.contextBudget > 0 ? flags.contextBudget : null;
   let contextBudget = manualContextBudget ?? resolveContextBudget(providerConfig.model, await loadCatalog());
+  const adaptiveState = createAdaptiveRoutingState({ manualOverride: hasManualRoutingOverride(flags) });
 
   // 3. Auto-init the project dir silently (.lazyglm/ + AGENTS.md) if missing
   if (!existsSync(join(dir, ".lazyglm")) || !existsSync(join(dir, "AGENTS.md"))) {
@@ -489,6 +516,74 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
     }),
   );
 
+  const resolveRoutingCandidate = async (role) => {
+    const catalog = await loadCatalog();
+    const config = await resolveProviderConfig({ provider: flags.provider, role });
+    return { config, bundle: effectiveBundleFromProviderConfig(config, catalog) };
+  };
+
+  const currentRoutingBundle = async () => effectiveBundleFromProviderConfig(providerConfig, await loadCatalog());
+
+  const applyRoutingDecision = async (decision, nextConfig) => {
+    if (!decision) return false;
+    providerConfig = nextConfig;
+    currentModel = nextConfig.modelId;
+    contextBudget = manualContextBudget ?? resolveContextBudget(nextConfig.model, await loadCatalog());
+    ctx.model = currentModel;
+    ctx.budget = contextBudget;
+    ctx.preserveThinking = shouldPreserveThinking(nextConfig.provider);
+    engine.setMeta({ model: currentModel });
+    recordRoutingApplied(adaptiveState, decision);
+    process.stdout.write(`${formatRoutingNotice(decision, renderOpts())}\n`);
+    await appendEvent(session, {
+      type: "routing_change",
+      source: decision.source,
+      reason: decision.reason,
+      direction: decision.direction,
+      from: decision.from,
+      to: decision.to,
+    });
+    return true;
+  };
+
+  const maybeRouteForPrompt = async (signal) => {
+    if (adaptiveState.manualOverride) return false;
+    const currentBundle = await currentRoutingBundle();
+    const candidate = await resolveRoutingCandidate(signal.role);
+    const decision = evaluatePromptRouting({
+      state: adaptiveState,
+      currentBundle,
+      candidateBundle: candidate.bundle,
+      signal,
+    });
+    return applyRoutingDecision(decision, candidate.config);
+  };
+
+  const maybeRouteForToolResult = async () => {
+    if (adaptiveState.manualOverride) return false;
+    const currentBundle = await currentRoutingBundle();
+    const candidate = await resolveRoutingCandidate(highRole());
+    const decision = evaluateToolResultRouting({
+      state: adaptiveState,
+      currentBundle,
+      candidateBundle: candidate.bundle,
+    });
+    return applyRoutingDecision(decision, candidate.config);
+  };
+
+  const maybeRouteAfterUserTurn = async (turnSummary) => {
+    if (adaptiveState.manualOverride) return false;
+    const currentBundle = await currentRoutingBundle();
+    const candidate = await resolveRoutingCandidate("quick");
+    const decision = evaluateUserTurnCompleteRouting({
+      state: adaptiveState,
+      currentBundle,
+      quickBundle: candidate.bundle,
+      turnSummary,
+    });
+    return applyRoutingDecision(decision, candidate.config);
+  };
+
   // --- slash commands (closure over mutable REPL state) ---
   const handleSlash = async (input) => {
     const body = input.slice(1);
@@ -518,6 +613,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
         return "exit";
       case "clear":
         ctx.resetToSystemPrompt();
+        resetAdaptiveRoutingState(adaptiveState);
         console.log(`${DIM}   (context cleared)${RESET}`);
         return;
       case "model": {
@@ -539,6 +635,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
           // estimator in sync so compaction decisions match the new payload.
           ctx.preserveThinking = shouldPreserveThinking(nc.provider);
           engine.setMeta({ model: currentModel });
+          resetAdaptiveRoutingState(adaptiveState, { manualOverride: true });
           console.log(`${GREEN}   ✓ model: ${currentModel}${RESET}`);
         } catch (e) {
           console.log(`${YELLOW}   ✗ ${e.message}${RESET}`);
@@ -651,15 +748,36 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
         const completionPromise =
           extractFlag(argStr, "completion-promise") ||
           "the task is fully implemented, builds cleanly, and passes verification.";
+        // Resolve an ultrabrain bundle independent of the adaptive REPL's current
+        // route. applyRoutingDecision may have de-escalated providerConfig/currentModel
+        // to a quick bundle; reusing those would silently run ultrawork on the wrong
+        // model, because runAgent prefers an explicit config over role-based picking.
+        //
+        // When the user pinned a model via --model/--role or /model, adaptive
+        // routing is disabled (manualOverride), so providerConfig/currentModel are
+        // authoritative and must be honored — resolving the catalog ultrabrain here
+        // would override their selection. Only fall back to catalog ultrabrain when
+        // adaptive routing is active and may have de-escalated the live route.
+        const ultraCatalog = await loadCatalog();
+        let ultraConfig, ultraBundle, ultraBudget;
+        if (adaptiveState.manualOverride) {
+          ultraConfig = providerConfig;
+          ultraBundle = effectiveBundleFromProviderConfig(ultraConfig, ultraCatalog);
+          ultraBudget = contextBudget;
+        } else {
+          ultraConfig = await resolveProviderConfig({ provider: flags.provider, role: "ultrabrain" });
+          ultraBundle = effectiveBundleFromProviderConfig(ultraConfig, ultraCatalog);
+          ultraBudget = manualContextBudget ?? resolveContextBudget(ultraConfig.model, ultraCatalog);
+        }
         console.log(`\n${CYAN}🔁 ULTRAWORK${RESET} — task: ${truncate(task, 120)}`);
         if (verifyCommand) console.log(`   verify: ${verifyCommand}`);
         const res = await runUltrawork({
           task,
           cwd: dir,
-          model: currentModel,
+          model: ultraBundle.modelId,
           role: "ultrabrain",
-          config: providerConfig,
-          budget: contextBudget,
+          config: ultraConfig,
+          budget: ultraBudget,
           completionPromise,
           verifyCommand,
           maxIterations: 3,
@@ -686,6 +804,11 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
   // echo so piped output logs the user's command rather than the expanded skill
   // body. Defaults to userContent for non-skill turns. (PR #26 Codex P2.)
   const runAgentTurn = async (userContent, displayText = userContent) => {
+    const turnSummary = {
+      hadError: false,
+      wroteFiles: false,
+      explicitComplexity: adaptiveState.explicitComplexityInCurrentUserTurn,
+    };
     const ups = await engine.fire("UserPromptSubmit", { prompt: userContent });
     let content = userContent;
     if (ups.injects.length) content = `${ups.injects.join("\n\n")}\n\n---\n\n${userContent}`;
@@ -724,9 +847,10 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
         });
       } catch (err) {
         closeStream();
+        turnSummary.hadError = true;
         process.stdout.write(`\n${YELLOW}❌ ${err.message}${RESET}\n`);
         process.stdout.write(turnEnd(renderOpts()));
-        return;
+        return turnSummary;
       }
       // Per-turn timing: wall-clock around chat() (includes retry backoff).
       lastTurnMs = Date.now() - turnStartMs;
@@ -756,7 +880,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
       if (!resp.tool_calls || resp.tool_calls.length === 0) {
         await engine.fire("Stop", { response: resp.content, finished: false });
         process.stdout.write(turnEnd(renderOpts()));
-        return;
+        return turnSummary;
       }
 
       // execute each tool call (Pre/PostToolUse hooks fire around it)
@@ -768,6 +892,14 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
           const m = `Error: unknown tool '${tc.name}'. Available: read_file, write_file, patch_file, list_dir, grep, run_shell, finish.`;
           ctx.push({ role: "tool", tool_call_id: tc.id, content: m });
           await appendEvent(session, { type: "tool", tool_call_id: tc.id, name: tc.name, content: m });
+          const signal = observeToolResult(adaptiveState, {
+            toolName: tc.name,
+            toolInput: tc.arguments,
+            result: m,
+          });
+          turnSummary.hadError = turnSummary.hadError || signal.hadError;
+          turnSummary.wroteFiles = turnSummary.wroteFiles || signal.wroteFile;
+          await maybeRouteForToolResult();
           continue;
         }
         const pre = await engine.fire("PreToolUse", {
@@ -779,15 +911,28 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
         if (pre.blocks.length) {
           resultStr = `Blocked by hook:\n${pre.blocks.join("\n")}`;
           process.stdout.write(`${TOOL_INDENT}${ansi(YELLOW, renderOpts())}⛔ ${tc.name} blocked: ${pre.blocks.join("; ")}${ansi(RESET, renderOpts())}\n`);
+          // PreToolUse block is a failed tool outcome from the adaptive-routing
+          // perspective: no tool actually ran, so count it toward errorStreak
+          // so repeated denials can trigger recovery escalation.
+          const signal = observeToolResult(adaptiveState, {
+            toolName: tc.name,
+            toolInput: tc.arguments,
+            result: resultStr,
+          });
+          turnSummary.hadError = turnSummary.hadError || signal.hadError;
+          turnSummary.wroteFiles = turnSummary.wroteFiles || signal.wroteFile;
+          await maybeRouteForToolResult();
         } else {
           process.stdout.write(`${formatToolCall(tc.name, tc.arguments, renderOpts())}\n`);
           let result;
+          let handlerThrew = false;
           try {
             result = await handler(tc.arguments, {
               cwd: dir,
               runtime: { engine, ctx, log: async (o) => appendEvent(session, { type: "log", ...o }) },
             });
           } catch (err) {
+            handlerThrew = true;
             result = `Error executing ${tc.name}: ${err?.message || err}`;
           }
           if (result && result.__finish) {
@@ -806,6 +951,15 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
           });
           if (post.blocks.length) resultStr += `\n\n[hook feedback — address] ${post.blocks.join(" | ")}`;
           if (post.feedbacks.length) resultStr += `\n\n[hook note] ${post.feedbacks.join(" | ")}`;
+          const signal = observeToolResult(adaptiveState, {
+            toolName: tc.name,
+            toolInput: tc.arguments,
+            result: resultStr,
+            handlerThrew,
+          });
+          turnSummary.hadError = turnSummary.hadError || signal.hadError;
+          turnSummary.wroteFiles = turnSummary.wroteFiles || signal.wroteFile;
+          await maybeRouteForToolResult();
         }
         ctx.push({ role: "tool", tool_call_id: tc.id, content: resultStr });
         await appendEvent(session, { type: "tool", tool_call_id: tc.id, name: tc.name, content: truncate(resultStr, 2000) });
@@ -814,13 +968,18 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
       if (finished) {
         await engine.fire("Stop", { response: "(finish)", finished: true });
         process.stdout.write(turnEnd(renderOpts()));
-        return;
+        return turnSummary;
       }
       // otherwise loop: the model continues with the tool results
     }
     closeStream();
     process.stdout.write(`\n   ${YELLOW}(turn limit reached — task may be incomplete)${RESET}\n`);
     process.stdout.write(turnEnd(renderOpts()));
+    // An exhausted MAX_TURNS turn is incomplete work, not a routine turn.
+    // Mark it as an error so adaptive routing does not count it toward the
+    // routine-turn de-escalation streak. (Codex P2 review on PR #49.)
+    turnSummary.hadError = true;
+    return turnSummary;
   };
 
   const handleLine = async (raw) => {
@@ -831,6 +990,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
       if (r === "exit") return "exit";
       return;
     }
+    beginAdaptiveUserTurn(adaptiveState);
     // inline $skill invocation → expand the skill body into the user message
     let userContent = input;
     const skillName = detectSkillInvocation(input);
@@ -839,7 +999,13 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
       if (skill) userContent = `${skill.body}\n\n---\n\nUSER REQUEST\n${input}`;
       else console.log(`${YELLOW}   (unknown skill: $${skillName})${RESET}`);
     }
-    await runAgentTurn(userContent, input);
+    const promptSignal = observePromptIntake(adaptiveState, input);
+    await maybeRouteForPrompt(promptSignal);
+    const turnSummary = await runAgentTurn(userContent, input);
+    await maybeRouteAfterUserTurn({
+      ...(turnSummary || {}),
+      explicitComplexity: promptSignal.explicitComplexity || !!turnSummary?.explicitComplexity,
+    });
   };
 
   // 10. REPL loop: prompt → read line → handle → repeat (sequential via the queue)

@@ -12,6 +12,7 @@ import { Context, assistantMessageFrom } from "./context.js";
 import { HookEngine } from "../hooks/engine.js";
 import { gitInfo, truncate, ensureDir, nowIso } from "../util.js";
 import { abortReason, composeAbortSignals, isDeadlineError, throwIfAborted, withAbort } from "./deadline.js";
+import { isToolErrorResult } from "./tool-errors.js";
 
 /**
  * @typedef {import("../types/index.js").ChatUsage} ChatUsage
@@ -429,12 +430,4 @@ function errorMessageOf(err) {
  */
 function abortFallback(err) {
   return /** @type {Error | undefined} */ (err);
-}
-
-/**
- * @param {string | null | undefined} resultStr
- * @returns {boolean}
- */
-function isToolErrorResult(resultStr) {
-  return /^Error(?::| executing\b)/i.test(resultStr || "") || /^Command exited\b/i.test(resultStr || "");
 }
