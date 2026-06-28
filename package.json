@@ -23,6 +23,8 @@
   ],
   "scripts": {
     "build": "tsc",
+    "prepack": "npm run build",
+    "prepare": "npm run build",
     "pretest": "npm run build",
     "test": "node --test test/*.test.mjs",
     "smoke": "node bin/lazyglm.js doctor",
