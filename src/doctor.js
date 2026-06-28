@@ -9,6 +9,7 @@ import { loadPlugins } from "./plugins/index.js";
 import { loadSkills, listSkillNames } from "./skills/index.js";
 import { loadUserConfig } from "./config.js";
 import { parseMcpServers, mcpServersSummary } from "./mcp/config.js";
+import { discoverScaffold, readHandoffText } from "./scaffold/handoff.js";
 import { CONTEXT_BUDGET_FACTOR, resolveContextBudget, findCatalogModelEntry } from "./agent/router.js";
 import { readJson } from "./util.js";
 import { fileURLToPath } from "node:url";
@@ -167,6 +168,24 @@ export async function doctor({ cwd } = {}) {
     }
   } catch {
     warn("mcp", "could not read MCP server declarations");
+  }
+
+  // Optional Open Scaffold handoff records. This is discovery/read-only only;
+  // LazyGLM does not invoke `osc` or connect an Open Scaffold MCP server here.
+  try {
+    const scaffold = discoverScaffold(dir);
+    if (!scaffold.present) {
+      ok("scaffold", "no Open Scaffold records (optional; no-op by default)");
+    } else {
+      const handoff = await readHandoffText(dir);
+      if (handoff) {
+        ok("scaffold", `Open Scaffold handoff available (${handoff.source}, ${handoff.text.length} chars) — injected at session start`);
+      } else {
+        warn("scaffold", `Open Scaffold records present (${scaffold.sources.join(", ")}) but no readable handoff text (.osc/handoff.md or MISSION.md)`);
+      }
+    }
+  } catch {
+    warn("scaffold", "could not read Open Scaffold handoff records");
   }
 
   return {

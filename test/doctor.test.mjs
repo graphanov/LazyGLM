@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { doctor, reasoningConfigDetail } from "../src/doctor.js";
@@ -70,6 +70,58 @@ test("doctor returns an mcp check when no MCP servers are declared", async () =>
     assert.ok(mcp, "doctor must include an 'mcp' check");
     assert.equal(mcp.status, "ok");
     assert.match(mcp.detail, /no MCP servers declared/);
+  });
+});
+
+test("doctor reports optional scaffold integration as no-op when records are absent", async () => {
+  await withIsolatedHome(async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "lazyglm-doctor-scaffold-"));
+    try {
+      const res = await doctor({ cwd });
+      const scaffold = findCheck(res, "scaffold");
+      assert.ok(scaffold, "doctor must include a 'scaffold' check");
+      assert.equal(scaffold.status, "ok");
+      assert.match(scaffold.detail, /no Open Scaffold records/);
+      assert.match(scaffold.detail, /no-op by default/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+});
+
+test("doctor reports readable Open Scaffold handoff records as available", async () => {
+  await withIsolatedHome(async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "lazyglm-doctor-scaffold-"));
+    try {
+      await mkdir(join(cwd, ".osc"), { recursive: true });
+      await writeFile(join(cwd, ".osc", "handoff.md"), "Decision: use repo-native handoff context.\n", "utf8");
+
+      const res = await doctor({ cwd });
+      const scaffold = findCheck(res, "scaffold");
+      assert.equal(scaffold.status, "ok");
+      assert.match(scaffold.detail, /Open Scaffold handoff available/);
+      assert.match(scaffold.detail, /\.osc\/handoff\.md/);
+      assert.match(scaffold.detail, /injected at session start/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+});
+
+test("doctor warns when Open Scaffold records are present but no handoff text is readable", async () => {
+  await withIsolatedHome(async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "lazyglm-doctor-scaffold-"));
+    try {
+      await mkdir(join(cwd, ".osc"), { recursive: true });
+
+      const res = await doctor({ cwd });
+      const scaffold = findCheck(res, "scaffold");
+      assert.equal(scaffold.status, "warn");
+      assert.match(scaffold.detail, /records present/);
+      assert.match(scaffold.detail, /no readable handoff text/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 });
 

@@ -10,6 +10,7 @@ import ulwLoop from "./ulw-loop.js";
 import ulwPlan from "./ulw-plan.js";
 import telemetry from "./telemetry.js";
 import initDeep from "./init-deep.js";
+import scaffoldHandoff from "./scaffold-handoff.js";
 
 export const BUILTIN_PLUGINS = [
   telemetry,
@@ -21,6 +22,7 @@ export const BUILTIN_PLUGINS = [
   ulwLoop,
   ulwPlan,
   initDeep,
+  scaffoldHandoff,
 ];
 
 export const PLUGIN_BY_NAME = Object.fromEntries(BUILTIN_PLUGINS.map((p) => [p.name, p]));
