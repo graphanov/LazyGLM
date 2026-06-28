@@ -137,13 +137,14 @@ test("PostToolUse hook block counts as a tool error for adaptive routing", () =>
   assert.match(decision?.reason || "", /2 tool errors/);
 });
 
-test("effort-only bundle differences are treated as equal (no-op routes)", () => {
+test("effort-only bundle differences are treated as real route changes", () => {
   // Same provider/model/modelId, differing only in reasoningEffort — as when
-  // LAZYGLM_MODEL pins the model across quick/default candidates. Routing must
-  // not churn on this since resolveProviderConfig/chat never carry effort.
+  // LAZYGLM_MODEL pins the model across quick/default candidates. This remains
+  // provider-agnostic even for ollama, because effort is now a route dimension
+  // that can affect the z.ai wire payload and user-facing route notices.
   const a = { provider: "ollama", model: "glm-4.7", modelId: "glm-4.7", role: "quick", reasoningEffort: "low" };
   const b = { provider: "ollama", model: "glm-4.7", modelId: "glm-4.7", role: "default", reasoningEffort: "high" };
-  assert.equal(bundlesEqual(a, b), true);
+  assert.equal(bundlesEqual(a, b), false);
 
   // A real model change is still a real route.
   const c = { provider: "ollama", model: "glm-5.2", modelId: "glm-5.2", role: "default", reasoningEffort: "high" };

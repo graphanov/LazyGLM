@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { doctor } from "../src/doctor.js";
+import { doctor, reasoningConfigDetail } from "../src/doctor.js";
 import { resetConfigCache } from "../src/config.js";
 
 // Doctor touches the network/provider. Isolate LAZYGLM_HOME and use the
@@ -25,6 +25,7 @@ async function withIsolatedHome(fn) {
   const savedTimeout = process.env.LAZYGLM_TIMEOUT;
   const savedRetries = process.env.LAZYGLM_MAX_RETRIES;
   const savedContextBudget = process.env.LAZYGLM_CONTEXT_BUDGET;
+  const savedPreserveThinking = process.env.LAZYGLM_PRESERVE_THINKING;
   const home = await mkdtemp(join(tmpdir(), "lazyglm-doctor-"));
   try {
     process.env.LAZYGLM_HOME = home;
@@ -33,6 +34,7 @@ async function withIsolatedHome(fn) {
     delete process.env.LAZYGLM_BASE_URL;
     delete process.env.LAZYGLM_API_KEY;
     delete process.env.LAZYGLM_CONTEXT_BUDGET;
+    delete process.env.LAZYGLM_PRESERVE_THINKING;
     process.env.LAZYGLM_TIMEOUT = "250";
     process.env.LAZYGLM_MAX_RETRIES = "0";
     resetConfigCache();
@@ -46,6 +48,7 @@ async function withIsolatedHome(fn) {
     restoreEnv("LAZYGLM_TIMEOUT", savedTimeout);
     restoreEnv("LAZYGLM_MAX_RETRIES", savedRetries);
     restoreEnv("LAZYGLM_CONTEXT_BUDGET", savedContextBudget);
+    restoreEnv("LAZYGLM_PRESERVE_THINKING", savedPreserveThinking);
     resetConfigCache();
     await rm(home, { recursive: true, force: true });
   }
@@ -79,6 +82,41 @@ test("doctor reports catalog-derived context budget and documented window", asyn
     assert.match(context.detail, /context budget: 800000 tokens/);
     assert.match(context.detail, /glm-5\.2's 1000000 token window/);
   });
+});
+
+test("doctor reports reasoning configuration for keyless ollama", async () => {
+  await withIsolatedHome(async () => {
+    const res = await doctor({ cwd: tmpdir() });
+    const reasoning = findCheck(res, "reasoning");
+    assert.ok(reasoning, "doctor must include a 'reasoning' check");
+    assert.equal(reasoning.status, "ok");
+    assert.match(reasoning.detail, /provider=ollama/);
+    assert.match(reasoning.detail, /effort=high/);
+    assert.match(reasoning.detail, /thinking=not-sent/);
+    assert.match(reasoning.detail, /preserved_thinking=off/);
+  });
+});
+
+test("reasoningConfigDetail describes z.ai thinking control without live provider calls", () => {
+  assert.equal(
+    reasoningConfigDetail({
+      provider: "zai",
+      modelId: "glm-5.2",
+      role: "default",
+      reasoningEffort: "high",
+    }, { preserveThinking: true }),
+    "provider=zai model=glm-5.2 role=default effort=high thinking=enabled clear_thinking=false preserved_thinking=on",
+  );
+
+  assert.equal(
+    reasoningConfigDetail({
+      provider: "zai",
+      modelId: "glm-5.2",
+      role: "quick",
+      reasoningEffort: "low",
+    }, { preserveThinking: false }),
+    "provider=zai model=glm-5.2 role=quick effort=low thinking=disabled preserved_thinking=off",
+  );
 });
 
 test("doctor context budget follows the active LAZYGLM_MODEL override", async () => {

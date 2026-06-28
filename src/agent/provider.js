@@ -24,6 +24,7 @@
 
 import { pickModel, getProviderConfig, resolveProvider } from "./router.js";
 import { SUPPORTED_PROVIDERS } from "../config.js";
+import { thinkingControlForRequest } from "./thinking.js";
 import {
   abortableSleep,
   abortReason,
@@ -37,6 +38,7 @@ import {
 
 /**
  * @typedef {import("../types/index.js").Provider} Provider
+ * @typedef {import("../types/index.js").ReasoningEffort} ReasoningEffort
  * @typedef {import("../types/index.js").ProviderConfig} ProviderConfig
  * @typedef {import("../types/index.js").ModelRouteOptions} ModelRouteOptions
  * @typedef {import("../types/index.js").ChatCompletion} ChatCompletion
@@ -48,8 +50,8 @@ import {
  * @typedef {{ attempt: number, reason: string, delay: number }} RetryPayload
  * @typedef {{ timeout: number, maxRetries: number, onRetry?: (payload: RetryPayload) => void, signal?: AbortSignal }} RetryOptions
  * @typedef {{ role?: string, content?: string | null, reasoning_content?: string | null, name?: string, tool_call_id?: string, tool_calls?: unknown, [key: string]: unknown }} ChatMessage
- * @typedef {{ model?: string, messages: ChatMessage[], tools?: ToolSpec[], temperature?: number, config?: ProviderConfig, onDelta?: (delta: StreamDelta) => void, onRetry?: (payload: RetryPayload) => void, signal?: AbortSignal }} ChatOptions
- * @typedef {{ model: string, messages: ChatMessage[], temperature: number, stream: boolean, tools?: ToolSpec[], tool_choice?: "auto", stream_options?: { include_usage: boolean } }} ChatRequestBody
+ * @typedef {{ model?: string, messages: ChatMessage[], tools?: ToolSpec[], temperature?: number, config?: ProviderConfig, reasoningEffort?: ReasoningEffort, onDelta?: (delta: StreamDelta) => void, onRetry?: (payload: RetryPayload) => void, signal?: AbortSignal }} ChatOptions
+ * @typedef {{ model: string, messages: ChatMessage[], temperature: number, stream: boolean, tools?: ToolSpec[], tool_choice?: "auto", stream_options?: { include_usage: boolean }, thinking?: { type: "disabled" } | { type: "enabled", clear_thinking?: false } }} ChatRequestBody
  * @typedef {{ id?: string | null, name?: string | null }} ModelListEntry
  * @typedef {{ id?: string | null, function?: { name?: string | null, arguments?: string | null } | null, [key: string]: unknown }} OpenAIToolCall
  * @typedef {{ index?: number, id?: string | null, function?: { name?: string | null, arguments?: string | null } | null, [key: string]: unknown }} OpenAIStreamToolCallDelta
@@ -127,9 +129,25 @@ export async function resolveProviderConfig(options = {}) {
     model: picked.model,
     provider: picked.provider,
     role: picked.role,
+    reasoningEffort: picked.reasoningEffort,
     timeout,
     maxRetries,
   };
+}
+
+class ProviderHttpError extends Error {
+  /**
+   * @param {number} status
+   * @param {string} body
+   * @param {string} url
+   */
+  constructor(status, body, url) {
+    super(`GLM provider error ${status}: ${truncateBody(body, 800)} (url=${url})`);
+    this.name = "ProviderHttpError";
+    this.status = status;
+    this.body = body;
+    this.url = url;
+  }
 }
 
 /**
@@ -217,7 +235,7 @@ async function fetchWithRetry(url, init, { timeout, maxRetries, onRetry, signal 
     if (res.status === 401 || res.status === 403) {
       throw new Error(`GLM auth error ${res.status}: ${truncateBody(text, 400)}\nYour LAZYGLM_API_KEY may be invalid, blocked, or out of funds. Check https://portal.nousresearch.com (Nous) or https://z.ai (Zhipu).`);
     }
-    throw new Error(`GLM provider error ${res.status}: ${truncateBody(text, 800)} (url=${url})`);
+    throw new ProviderHttpError(res.status, text, url);
   }
 }
 
@@ -378,7 +396,7 @@ function messagesForProvider(messages, preserveThinking) {
  * @param {ChatOptions} opts
  * @returns {Promise<ChatCompletion>}
  */
-export async function chat({ model, messages, tools, temperature, config, onDelta, onRetry, signal }) {
+export async function chat({ model, messages, tools, temperature, config, reasoningEffort, onDelta, onRetry, signal }) {
   const cfg = config || await resolveProviderConfig();
   const url = `${cfg.baseURL}/chat/completions`;
   const wantStream = typeof onDelta === "function";
@@ -386,7 +404,9 @@ export async function chat({ model, messages, tools, temperature, config, onDelt
   // backends may reject it. Strip it from the outgoing payload unless this
   // provider honors it (or LAZYGLM_PRESERVE_THINKING forces keep). The live
   // Context keeps reasoning_content regardless — only the wire payload changes.
-  const sendMessages = messagesForProvider(messages, shouldPreserveThinking(cfg.provider));
+  const preserveThinking = shouldPreserveThinking(cfg.provider);
+  const sendMessages = messagesForProvider(messages, preserveThinking);
+  const requestEffort = reasoningEffort || cfg.reasoningEffort || "high";
   /** @type {ChatRequestBody} */
   const body = {
     model: model || cfg.modelId,
@@ -402,17 +422,47 @@ export async function chat({ model, messages, tools, temperature, config, onDelt
     // Ask for usage in the final stream chunk (OpenAI-compatible; z.ai & Ollama support it).
     body.stream_options = { include_usage: true };
   }
+  const thinking = thinkingControlForRequest({
+    provider: cfg.provider,
+    reasoningEffort: requestEffort,
+    preserveThinking,
+  });
+  if (thinking) body.thinking = thinking;
 
-  const init = {
+  /**
+   * @param {ChatRequestBody} requestBody
+   * @returns {RequestInit}
+   */
+  const initForBody = (requestBody) => ({
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${cfg.apiKey}`,
     },
-    body: JSON.stringify(body),
-  };
+    body: JSON.stringify(requestBody),
+  });
 
-  const res = await fetchWithRetry(url, init, { timeout: cfg.timeout, maxRetries: cfg.maxRetries, onRetry, signal });
+  let res;
+  try {
+    res = await fetchWithRetry(url, initForBody(body), { timeout: cfg.timeout, maxRetries: cfg.maxRetries, onRetry, signal });
+  } catch (err) {
+    if (
+      err instanceof ProviderHttpError &&
+      err.status === 400 &&
+      cfg.provider === "zai" &&
+      body.thinking
+    ) {
+      const { thinking: _thinking, ...fallbackBody } = body;
+      onRetry?.({
+        attempt: 1,
+        reason: "z.ai thinking control rejected with HTTP 400; retrying without thinking",
+        delay: 0,
+      });
+      res = await fetchWithRetry(url, initForBody(fallbackBody), { timeout: cfg.timeout, maxRetries: cfg.maxRetries, onRetry, signal });
+    } else {
+      throw err;
+    }
+  }
 
   if (!wantStream) {
     const data = (!res.body && typeof res.json === "function")
