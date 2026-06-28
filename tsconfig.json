@@ -4,7 +4,8 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "strict": true,
-    "noEmit": true,
+    "outDir": "./dist",
+    "removeComments": true,
     "allowJs": true,
     "checkJs": false,
     "skipLibCheck": true,
@@ -13,12 +14,7 @@
   },
   "include": [
     "src/**/*.ts",
-    "src/agent/adaptive-router.js",
-    "src/agent/router.js",
-    "src/agent/provider.js",
-    "src/agent/runtime.js",
-    "src/agent/tool-errors.js",
-    "src/agent/tools.js"
+    "src/**/*.js"
   ],
   "exclude": ["node_modules", "test", "dist"]
 }
