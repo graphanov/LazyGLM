@@ -246,3 +246,37 @@ test("LAZYGLM_PRESERVE_THINKING=off forces strip on zai", async () => {
     restoreEnv("LAZYGLM_PRESERVE_THINKING", saved);
   }
 });
+
+// --- reasoning_effort gated by model support (GLM-5.2+) ---
+
+test("chat() omits reasoning_effort for glm-4.7 even when thinking is enabled", async () => {
+  delete process.env.LAZYGLM_PRESERVE_THINKING;
+  const stub = installFetchStub();
+  try {
+    await chat({
+      messages: historyWithReasoning(),
+      config: makeConfig("zai", { modelId: "glm-4.7", model: "glm-4.7", reasoningEffort: "high" }),
+    });
+    // thinking should still be sent (verifier/quick roles get turn-level toggle)
+    assert.deepEqual(stub.sentBody().thinking, { type: "enabled", clear_thinking: false });
+    // but reasoning_effort must NOT be sent — glm-4.7 rejects it
+    assert.equal(stub.sentBody().reasoning_effort, undefined);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("chat() sends reasoning_effort for glm-5.2 when thinking is enabled", async () => {
+  delete process.env.LAZYGLM_PRESERVE_THINKING;
+  const stub = installFetchStub();
+  try {
+    await chat({
+      messages: historyWithReasoning(),
+      config: makeConfig("zai", { modelId: "glm-5.2", model: "glm-5.2", reasoningEffort: "high" }),
+    });
+    assert.deepEqual(stub.sentBody().thinking, { type: "enabled", clear_thinking: false });
+    assert.equal(stub.sentBody().reasoning_effort, "high");
+  } finally {
+    stub.restore();
+  }
+});

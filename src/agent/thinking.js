@@ -32,3 +32,27 @@ export function thinkingControlForRequest({ provider, reasoningEffort, preserveT
   if (preserveThinking) control.clear_thinking = false;
   return control;
 }
+
+// z.ai documents reasoning_effort as supported by GLM-5.2 and above only:
+// https://docs.z.ai/guides/capabilities/thinking#core-parameters
+// Older models (glm-4.7, glm-4.7-flash) reject the field, triggering a 400
+// whose fallback drops the entire thinking block — losing turn-level thinking.
+// Extract the numeric major.minor from a canonical model name (e.g. "glm-5.2",
+// "glm-4.7-flash") and compare against the 5.2 floor.
+const REASONING_EFFORT_FLOOR = [5, 2];
+
+/**
+ * Whether a given model supports z.ai's top-level `reasoning_effort` field.
+ * Returns false for any non-matching name so the field is only sent when the
+ * active model is GLM-5.2 or above.
+ *
+ * @param {string} modelId - canonical model name (e.g. "glm-5.2", "glm-4.7")
+ * @returns {boolean}
+ */
+export function supportsReasoningEffort(modelId) {
+  const match = String(modelId || "").match(/(\d+)\.(\d+)/);
+  if (!match) return false;
+  const [major, minor] = [Number(match[1]), Number(match[2])];
+  if (major !== REASONING_EFFORT_FLOOR[0]) return major > REASONING_EFFORT_FLOOR[0];
+  return minor >= REASONING_EFFORT_FLOOR[1];
+}

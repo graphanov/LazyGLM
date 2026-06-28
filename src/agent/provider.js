@@ -24,7 +24,7 @@
 
 import { pickModel, getProviderConfig, resolveProvider } from "./router.js";
 import { SUPPORTED_PROVIDERS } from "../config.js";
-import { thinkingControlForRequest } from "./thinking.js";
+import { thinkingControlForRequest, supportsReasoningEffort } from "./thinking.js";
 import {
   abortableSleep,
   abortReason,
@@ -431,8 +431,11 @@ export async function chat({ model, messages, tools, temperature, config, reason
     body.thinking = thinking;
     // z.ai distinguishes thinking on/off (thinking.type) from the effort level
     // (top-level reasoning_effort). For enabled turns, send the advertised effort
-    // on the wire so routing and /status match the actual request.
-    if (thinking.type === "enabled") body.reasoning_effort = requestEffort;
+    // on the wire so routing and /status match the actual request — but only for
+    // models that support it (GLM-5.2+). Older models reject reasoning_effort,
+    // and the 400 fallback would strip the entire thinking block, losing
+    // turn-level thinking control for that model.
+    if (thinking.type === "enabled" && supportsReasoningEffort(cfg.modelId)) body.reasoning_effort = requestEffort;
   }
 
   /**
