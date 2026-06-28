@@ -975,6 +975,10 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
     closeStream();
     process.stdout.write(`\n   ${YELLOW}(turn limit reached — task may be incomplete)${RESET}\n`);
     process.stdout.write(turnEnd(renderOpts()));
+    // An exhausted MAX_TURNS turn is incomplete work, not a routine turn.
+    // Mark it as an error so adaptive routing does not count it toward the
+    // routine-turn de-escalation streak. (Codex P2 review on PR #49.)
+    turnSummary.hadError = true;
     return turnSummary;
   };
 

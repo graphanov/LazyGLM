@@ -266,6 +266,36 @@ test("routine de-escalation counts completed user turns, not internal tool resul
   assert.equal(decision?.to.reasoningEffort, "low");
 });
 
+test("an errored user-turn summary (e.g. turn-limit exit) does not count as routine", () => {
+  const state = createAdaptiveRoutingState();
+  // Seed routine turns so a routine summary would de-escalate on the next call.
+  for (let i = 1; i < ROUTINE_USER_TURNS_THRESHOLD; i++) {
+    assert.equal(
+      evaluateUserTurnCompleteRouting({
+        state,
+        currentBundle: bundle("default"),
+        quickBundle: bundle("quick"),
+        turnSummary: {},
+      }),
+      null,
+    );
+  }
+  assert.equal(state.routineUserTurns, ROUTINE_USER_TURNS_THRESHOLD - 1);
+
+  // A turn that exhausted MAX_TURNS reports hadError=true (see runAgentTurn).
+  // It must reset the routine streak instead of de-escalating to the quick
+  // bundle, so incomplete work never lowers the model tier.
+  const decision = evaluateUserTurnCompleteRouting({
+    state,
+    currentBundle: bundle("default"),
+    quickBundle: bundle("quick"),
+    turnSummary: { hadError: true },
+  });
+
+  assert.equal(decision, null);
+  assert.equal(state.routineUserTurns, 0);
+});
+
 test("manual override suppresses prompt, tool, and routine adaptive decisions", () => {
   const state = createAdaptiveRoutingState({ manualOverride: true });
   const signal = observePromptIntake(state, "clean up the database layer");
