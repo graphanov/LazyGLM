@@ -1,4 +1,4 @@
-import { existsSync, statSync } from "node:fs";
+import { existsSync, lstatSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { join } from "node:path";
 import { truncate } from "../util.js";
@@ -26,23 +26,28 @@ export async function readHandoffText(cwd, { maxChars = 600 } = {}) {
   for (const candidate of HANDOFF_CANDIDATES) {
     const path = join(cwd, candidate.rel);
     if (!existsSync(path)) continue;
-    let stat;
+    let lstat;
     try {
-      stat = statSync(path);
+      lstat = lstatSync(path);
     } catch {
       // Unreadable candidate (bad permissions, broken symlink, …) — skip and
       // try the next candidate so one malformed preferred record does not
       // disable handoff injection entirely.
       continue;
     }
+    // Reject symlinks outright. A repo-local symlink could point at an
+    // absolute path (e.g. $HOME/.ssh/config) or ..-escape the working tree,
+    // leaking arbitrary files into the injected system prompt. Only accept
+    // real, repo-native files for handoff context.
+    if (lstat.isSymbolicLink()) continue;
     // Skip non-regular files (FIFOs, device nodes, sockets, directories): a
     // FIFO would block open() indefinitely, and directories behave
     // unpredictably under read(). Only proceed for real, readable files.
-    if (!stat.isFile()) continue;
+    if (!lstat.isFile()) continue;
     // Bound the read: read at most MAX_HANDOFF_READ_BYTES so an accidentally
     // huge handoff/mission record cannot exhaust memory or stall startup.
-    const oversized = stat.size > MAX_HANDOFF_READ_BYTES;
-    const readBytes = oversized ? MAX_HANDOFF_READ_BYTES : stat.size;
+    const oversized = lstat.size > MAX_HANDOFF_READ_BYTES;
+    const readBytes = oversized ? MAX_HANDOFF_READ_BYTES : lstat.size;
     let raw;
     try {
       const fh = await open(path, "r");

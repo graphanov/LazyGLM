@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { HookEngine } from "../src/hooks/engine.js";
@@ -170,5 +170,37 @@ test("oversized handoff record is bounded without reading the whole file", async
     assert.equal(handoff.truncated, true);
     assert.ok(handoff.text.length <= 60, "bounded read keeps injected text small");
     assert.ok(handoff.text.startsWith("y".repeat(20)));
+  });
+});
+
+test("symlinked handoff escaping the repo is rejected", async () => {
+  await withTempCwd(async (cwd) => {
+    // Create a secret file outside the repo working tree.
+    const secret = join(cwd, "..", "lazyglm-secret-target.md");
+    await writeFile(secret, "TOP SECRET ssh config contents\n", "utf8");
+    try {
+      // Point MISSION.md at the out-of-repo secret via a symlink.
+      await symlink(secret, join(cwd, "MISSION.md"));
+
+      const handoff = await readHandoffText(cwd);
+
+      // The symlink must be rejected; no secret content is injected.
+      assert.equal(handoff, null);
+    } finally {
+      await rm(secret, { force: true });
+    }
+  });
+});
+
+test("symlinked handoff resolving inside the repo is rejected for safety", async () => {
+  await withTempCwd(async (cwd) => {
+    // Even an in-repo symlink target is rejected: handoff context only comes
+    // from real, repo-native files, not links.
+    await write(cwd, "real-mission.md", "Real in-repo mission text.\n");
+    await symlink("real-mission.md", join(cwd, "MISSION.md"));
+
+    const handoff = await readHandoffText(cwd);
+
+    assert.equal(handoff, null);
   });
 });
