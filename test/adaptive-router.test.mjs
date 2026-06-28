@@ -106,7 +106,35 @@ test("shared tool error helper matches runtime error result forms", () => {
   assert.equal(isToolErrorResult("Error: old_string not found"), true);
   assert.equal(isToolErrorResult("Command exited 1:\nnope"), true);
   assert.equal(isToolErrorResult("Blocked by hook:\nwrite denied"), true);
+  assert.equal(isToolErrorResult("patched src/repl.js (1 replacement)\n\n[hook feedback — address] comment missing"), true);
   assert.equal(isToolErrorResult("patched src/repl.js (1 replacement)"), false);
+});
+
+test("PostToolUse hook block counts as a tool error for adaptive routing", () => {
+  const state = createAdaptiveRoutingState();
+
+  observeToolResult(state, {
+    toolName: "write_file",
+    toolInput: { path: "src/x.js" },
+    result: "patched src/x.js\n\n[hook feedback — address] comment missing",
+  });
+  assert.equal(state.errorStreak, 1);
+
+  observeToolResult(state, {
+    toolName: "write_file",
+    toolInput: { path: "src/y.js" },
+    result: "patched src/y.js\n\n[hook feedback — address] test missing",
+  });
+  assert.equal(state.errorStreak, 2);
+
+  const decision = evaluateToolResultRouting({
+    state,
+    currentBundle: bundle("quick"),
+    candidateBundle: bundle(highRole()),
+  });
+  assert.equal(decision?.source, "tool_result");
+  assert.equal(decision?.hard, true);
+  assert.match(decision?.reason || "", /2 tool errors/);
 });
 
 test("effort-only bundle differences are treated as equal (no-op routes)", () => {

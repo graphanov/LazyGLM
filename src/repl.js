@@ -748,15 +748,23 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
         const completionPromise =
           extractFlag(argStr, "completion-promise") ||
           "the task is fully implemented, builds cleanly, and passes verification.";
+        // Resolve an ultrabrain bundle independent of the adaptive REPL's current
+        // route. applyRoutingDecision may have de-escalated providerConfig/currentModel
+        // to a quick bundle; reusing those would silently run ultrawork on the wrong
+        // model, because runAgent prefers an explicit config over role-based picking.
+        const ultraCatalog = await loadCatalog();
+        const ultraConfig = await resolveProviderConfig({ provider: flags.provider, role: "ultrabrain" });
+        const ultraBundle = effectiveBundleFromProviderConfig(ultraConfig, ultraCatalog);
+        const ultraBudget = manualContextBudget ?? resolveContextBudget(ultraConfig.model, ultraCatalog);
         console.log(`\n${CYAN}🔁 ULTRAWORK${RESET} — task: ${truncate(task, 120)}`);
         if (verifyCommand) console.log(`   verify: ${verifyCommand}`);
         const res = await runUltrawork({
           task,
           cwd: dir,
-          model: currentModel,
+          model: ultraBundle.modelId,
           role: "ultrabrain",
-          config: providerConfig,
-          budget: contextBudget,
+          config: ultraConfig,
+          budget: ultraBudget,
           completionPromise,
           verifyCommand,
           maxIterations: 3,
