@@ -67,6 +67,36 @@ test("non-TTY: zero ANSI, a single machine-readable line", () => {
   assert.equal(out.split("\n").filter(Boolean).length, 1, "non-TTY output is exactly one non-empty line");
 });
 
+test("tier: omitted tier keeps legacy non-TTY output byte-identical", () => {
+  const out = renderBanner({ ...base, isTTY: false });
+  assert.equal(out, "LazyGLM | glm-5.2 | zai | /tmp/demo\n");
+});
+
+test("tier: TTY banner shows active tier and catalog-derived guidance", () => {
+  const out = renderBanner({
+    ...base,
+    tier: "high-end",
+    tierReason: "Use this tier for long-horizon coding.",
+    isTTY: true,
+  });
+  const plain = stripAnsi(out);
+  assert.ok(plain.includes("tier     high-end"), "tier row present");
+  assert.ok(plain.includes("guidance Use this tier for long-horizon coding."), "guidance row present");
+});
+
+test("tier: non-TTY banner appends pipe-parseable tier fields only when supplied", () => {
+  const out = renderBanner({
+    ...base,
+    tier: "high-end",
+    tierReason: "Use this tier for long-horizon coding.",
+    isTTY: false,
+  });
+  assert.equal(
+    out,
+    "LazyGLM | glm-5.2 | zai | /tmp/demo | tier=high-end | guidance=Use this tier for long-horizon coding.\n",
+  );
+});
+
 test("non-TTY: stays a clean single line even with git/session/yolo set", () => {
   const out = renderBanner({
     model: "glm-5.2",

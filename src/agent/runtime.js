@@ -6,13 +6,14 @@
 import { join, dirname } from "node:path";
 import { appendFile } from "node:fs/promises";
 import { chat, resolveProviderConfig, shouldPreserveThinking } from "./provider.js";
-import { detectRole, loadCatalog, resolveContextBudget } from "./router.js";
+import { detectRole, findCatalogModelEntry, loadCatalog, resolveContextBudget } from "./router.js";
 import { TOOL_SPECS, TOOL_HANDLERS } from "./tools.js";
 import { Context, assistantMessageFrom } from "./context.js";
 import { HookEngine } from "../hooks/engine.js";
 import { gitInfo, truncate, ensureDir, nowIso } from "../util.js";
 import { abortReason, composeAbortSignals, isDeadlineError, throwIfAborted, withAbort } from "./deadline.js";
 import { isToolErrorResult } from "./tool-errors.js";
+import { buildRuntimePrompt } from "../prompt.js";
 
 /**
  * @typedef {import("../types/index.js").ChatUsage} ChatUsage
@@ -25,36 +26,7 @@ import { isToolErrorResult } from "./tool-errors.js";
  * @typedef {import("../types/index.js").ToolHandler} ToolHandler
  *
  * @typedef {{ isRepo: boolean, branch?: string, root?: string }} RuntimeGitInfo
- * @typedef {{ cwd: string, git: RuntimeGitInfo, model: string, injects?: string[], extra?: string }} SystemPromptOptions
  */
-
-const BASE_SYSTEM_PROMPT = `You are LazyGLM, an autonomous software engineering agent driven by a GLM model. You operate inside a real project directory on the user's machine via tools.
-
-WORKING RULES
-- Think in small, verifiable steps. Read before you write. Prefer patch_file for edits, write_file for new files.
-- After making changes, run builds/tests with run_shell to verify. Never claim success without verifying.
-- Use grep/list_dir/read_file to orient yourself; do not guess file contents.
-- When the task is fully done and verified, call the finish tool once with a concise summary and verification instructions. Do not call finish otherwise.
-- Do not narrate at length between tool calls. Act, verify, continue.
-- Keep file contents complete and correct — never leave placeholders or TODOs in shipped code.
-
-You have these tools: read_file, write_file, patch_file, list_dir, grep, run_shell, finish.`;
-
-/**
- * @param {SystemPromptOptions} options
- * @returns {string}
- */
-function buildSystemPrompt({ cwd, git, model, injects, extra }) {
-  const parts = [BASE_SYSTEM_PROMPT];
-  parts.push(
-    `\nENVIRONMENT\n- cwd: ${cwd}\n- git: ${git.isRepo ? `${git.branch} @ ${git.root}` : "(not a repo)"}\n- model: ${model}\n- date: ${nowIso()}\n- os: ${process.platform}`,
-  );
-  if (injects && injects.length) {
-    parts.push(`\nPROJECT CONTEXT (injected by hooks)\n${injects.join("\n\n")}`);
-  }
-  if (extra) parts.push(`\n${extra}`);
-  return parts.join("\n");
-}
 
 /**
  * Run the GLM agent on a task.
@@ -96,7 +68,10 @@ export async function runAgent(opts) {
   if (!resolvedModel) {
     throw new Error("No GLM model resolved. Set LAZYGLM_MODEL, pass --model, or configure config/model-catalog.json.");
   }
-  const contextBudget = budget ?? resolveContextBudget(providerConfig.model || model || resolvedModel, await loadCatalog());
+  const catalog = await loadCatalog();
+  const catalogModel = providerConfig.model || model || resolvedModel;
+  const catalogEntry = findCatalogModelEntry(catalogModel, catalog);
+  const contextBudget = budget ?? resolveContextBudget(catalogModel, catalog);
 
   /** @param {string} message */
   const hookLog = (message) => onEvent({ type: "log", message });
@@ -176,7 +151,16 @@ export async function runAgent(opts) {
     // 1. SessionStart
     const startRes = await fireRunHook("SessionStart", {});
     const gi = gitInfo(cwd);
-    const system = buildSystemPrompt({ cwd, git: gi, model: resolvedModel, injects: startRes.injects, extra: systemPromptExtra });
+    const system = buildRuntimePrompt({
+      cwd,
+      git: gi,
+      model: resolvedModel,
+      injects: startRes.injects,
+      extra: systemPromptExtra,
+      tier: catalogEntry?.tier,
+      contextWindow: catalogEntry?.context_window ?? catalogEntry?.context,
+      description: catalogEntry?.description,
+    });
     ctx.setSystem(system);
     await log({ type: "system_prompt_chars", chars: system.length });
 

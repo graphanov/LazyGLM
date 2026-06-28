@@ -1,5 +1,6 @@
 node_modules/
 .lazyglm/
+.clawhip/
 *.log
 .DS_Store
 dist/
