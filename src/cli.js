@@ -26,6 +26,7 @@ Usage:
     --yolo                             Bypass all permission gates (auto everywhere)
     --model <name>                     GLM model (default: glm-5.2 via z.ai)
     --provider <zai|nous|ollama>       Backend (default: zai; ollama=keyless local)
+    --role <role>                      Force a routing role (manual override)
     --context-budget <tokens>          Override the catalog-derived soft context budget
   lazyglm run "<task>" [options]       Run the GLM agent on a task (one-shot, non-interactive)
   lazyglm install [--force]            Initialize .lazyglm/ + AGENTS.md in this project
@@ -107,7 +108,7 @@ export async function main(argv) {
     const { launchREPL } = await import("./repl.js");
     return launchREPL({
       cwd: flags.cwd ? resolve(flags.cwd) : process.cwd(),
-      flags: { continue: !!flags.continue, yolo: !!flags.yolo, model: flags.model, provider: flags.provider, contextBudget: contextBudget.value },
+      flags: { continue: !!flags.continue, yolo: !!flags.yolo, model: flags.model, provider: flags.provider, role: flags.role, contextBudget: contextBudget.value },
     });
   }
 

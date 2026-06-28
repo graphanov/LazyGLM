@@ -11,6 +11,14 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "src/agent/router.js", "src/agent/provider.js", "src/agent/runtime.js", "src/agent/tools.js"],
+  "include": [
+    "src/**/*.ts",
+    "src/agent/adaptive-router.js",
+    "src/agent/router.js",
+    "src/agent/provider.js",
+    "src/agent/runtime.js",
+    "src/agent/tool-errors.js",
+    "src/agent/tools.js"
+  ],
   "exclude": ["node_modules", "test", "dist"]
 }

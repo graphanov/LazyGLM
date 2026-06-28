@@ -77,6 +77,30 @@ export interface ProviderConfig {
   maxRetries: number;
 }
 
+export interface EffectiveBundle {
+  provider: Provider;
+  model: string;
+  modelId: string;
+  role: RoleName;
+  reasoningEffort: ReasoningEffort;
+}
+
+export interface RoutingSignal {
+  source: "prompt_intake" | "tool_result" | "user_turn_complete";
+  role?: RoleName;
+  reason: string;
+  hard?: boolean;
+}
+
+export interface RoutingDecision {
+  source: "prompt_intake" | "tool_result" | "user_turn_complete";
+  from: EffectiveBundle;
+  to: EffectiveBundle;
+  reason: string;
+  direction: "escalate" | "deescalate";
+  hard: boolean;
+}
+
 export interface ReasoningUsage {
   reasoning_tokens?: number;
 }
