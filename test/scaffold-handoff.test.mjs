@@ -144,6 +144,20 @@ test("handoff text is budgeted with a truncation marker", async () => {
   });
 });
 
+test("non-regular handoff candidate falls through to a regular fallback", async () => {
+  await withTempCwd(async (cwd) => {
+    // A directory at .osc/handoff.md is a non-regular file; statSync succeeds
+    // but isFile() is false, so it must skip without blocking and try MISSION.md.
+    await mkdir(join(cwd, ".osc", "handoff.md"), { recursive: true });
+    await write(cwd, "MISSION.md", "Fallback after skipping a directory.\n");
+
+    const handoff = await readHandoffText(cwd);
+
+    assert.equal(handoff.source, "MISSION.md");
+    assert.match(handoff.text, /Fallback after skipping a directory/);
+  });
+});
+
 test("oversized handoff record is bounded without reading the whole file", async () => {
   await withTempCwd(async (cwd) => {
     // 32 KiB is larger than the internal read cap; the read must stay bounded

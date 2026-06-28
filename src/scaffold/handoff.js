@@ -26,24 +26,34 @@ export async function readHandoffText(cwd, { maxChars = 600 } = {}) {
   for (const candidate of HANDOFF_CANDIDATES) {
     const path = join(cwd, candidate.rel);
     if (!existsSync(path)) continue;
-    let size;
+    let stat;
     try {
-      size = statSync(path).size;
+      stat = statSync(path);
     } catch {
-      // Unreadable candidate (directory, bad permissions, broken symlink, …)
-      // — skip and try the next candidate so one malformed preferred record
-      // does not disable handoff injection entirely.
+      // Unreadable candidate (bad permissions, broken symlink, …) — skip and
+      // try the next candidate so one malformed preferred record does not
+      // disable handoff injection entirely.
       continue;
     }
+    // Skip non-regular files (FIFOs, device nodes, sockets, directories): a
+    // FIFO would block open() indefinitely, and directories behave
+    // unpredictably under read(). Only proceed for real, readable files.
+    if (!stat.isFile()) continue;
     // Bound the read: read at most MAX_HANDOFF_READ_BYTES so an accidentally
     // huge handoff/mission record cannot exhaust memory or stall startup.
-    const oversized = size > MAX_HANDOFF_READ_BYTES;
-    const readBytes = oversized ? MAX_HANDOFF_READ_BYTES : size;
+    const oversized = stat.size > MAX_HANDOFF_READ_BYTES;
+    const readBytes = oversized ? MAX_HANDOFF_READ_BYTES : stat.size;
     let raw;
     try {
       const fh = await open(path, "r");
       try {
-        raw = (await fh.read(Buffer.allocUnsafe(readBytes), 0, readBytes, 0)).buffer.toString("utf8");
+        // Decode only the bytes actually read so a short read or a file that
+        // shrank between stat and read cannot leak uninitialized Buffer memory
+        // into the injected system prompt.
+        const { bytesRead, buffer } = await fh.read(
+          Buffer.allocUnsafe(readBytes), 0, readBytes, 0,
+        );
+        raw = buffer.subarray(0, bytesRead).toString("utf8");
       } finally {
         await fh.close();
       }
