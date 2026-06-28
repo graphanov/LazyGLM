@@ -752,10 +752,23 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
         // route. applyRoutingDecision may have de-escalated providerConfig/currentModel
         // to a quick bundle; reusing those would silently run ultrawork on the wrong
         // model, because runAgent prefers an explicit config over role-based picking.
+        //
+        // When the user pinned a model via --model/--role or /model, adaptive
+        // routing is disabled (manualOverride), so providerConfig/currentModel are
+        // authoritative and must be honored — resolving the catalog ultrabrain here
+        // would override their selection. Only fall back to catalog ultrabrain when
+        // adaptive routing is active and may have de-escalated the live route.
         const ultraCatalog = await loadCatalog();
-        const ultraConfig = await resolveProviderConfig({ provider: flags.provider, role: "ultrabrain" });
-        const ultraBundle = effectiveBundleFromProviderConfig(ultraConfig, ultraCatalog);
-        const ultraBudget = manualContextBudget ?? resolveContextBudget(ultraConfig.model, ultraCatalog);
+        let ultraConfig, ultraBundle, ultraBudget;
+        if (adaptiveState.manualOverride) {
+          ultraConfig = providerConfig;
+          ultraBundle = effectiveBundleFromProviderConfig(ultraConfig, ultraCatalog);
+          ultraBudget = contextBudget;
+        } else {
+          ultraConfig = await resolveProviderConfig({ provider: flags.provider, role: "ultrabrain" });
+          ultraBundle = effectiveBundleFromProviderConfig(ultraConfig, ultraCatalog);
+          ultraBudget = manualContextBudget ?? resolveContextBudget(ultraConfig.model, ultraCatalog);
+        }
         console.log(`\n${CYAN}🔁 ULTRAWORK${RESET} — task: ${truncate(task, 120)}`);
         if (verifyCommand) console.log(`   verify: ${verifyCommand}`);
         const res = await runUltrawork({
