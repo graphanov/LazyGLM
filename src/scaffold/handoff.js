@@ -1,5 +1,5 @@
-import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { existsSync, statSync } from "node:fs";
+import { open } from "node:fs/promises";
 import { join } from "node:path";
 import { truncate } from "../util.js";
 
@@ -7,6 +7,13 @@ const HANDOFF_CANDIDATES = [
   { rel: ".osc/handoff.md", source: ".osc/handoff.md" },
   { rel: "MISSION.md", source: "MISSION.md" },
 ];
+
+// Upper bound on how many bytes we read from disk for a single handoff
+// candidate. Keeps startup bounded even if a repo accidentally contains a
+// multi-gigabyte handoff/mission record. A small sentinel past maxChars is
+// included so truncation can still be detected when the file is slightly
+// larger than the configured budget.
+const MAX_HANDOFF_READ_BYTES = 16 * 1024;
 
 export function discoverScaffold(cwd) {
   const sources = [];
@@ -19,13 +26,28 @@ export async function readHandoffText(cwd, { maxChars = 600 } = {}) {
   for (const candidate of HANDOFF_CANDIDATES) {
     const path = join(cwd, candidate.rel);
     if (!existsSync(path)) continue;
-    let raw;
+    let size;
     try {
-      raw = await readFile(path, "utf8");
+      size = statSync(path).size;
     } catch {
       // Unreadable candidate (directory, bad permissions, broken symlink, …)
       // — skip and try the next candidate so one malformed preferred record
       // does not disable handoff injection entirely.
+      continue;
+    }
+    // Bound the read: read at most MAX_HANDOFF_READ_BYTES so an accidentally
+    // huge handoff/mission record cannot exhaust memory or stall startup.
+    const oversized = size > MAX_HANDOFF_READ_BYTES;
+    const readBytes = oversized ? MAX_HANDOFF_READ_BYTES : size;
+    let raw;
+    try {
+      const fh = await open(path, "r");
+      try {
+        raw = (await fh.read(Buffer.allocUnsafe(readBytes), 0, readBytes, 0)).buffer.toString("utf8");
+      } finally {
+        await fh.close();
+      }
+    } catch {
       continue;
     }
     const text = raw.trim();
@@ -33,7 +55,7 @@ export async function readHandoffText(cwd, { maxChars = 600 } = {}) {
     return {
       text: truncate(text, maxChars),
       source: candidate.source,
-      truncated: text.length > maxChars,
+      truncated: oversized || text.length > maxChars,
     };
   }
   return null;

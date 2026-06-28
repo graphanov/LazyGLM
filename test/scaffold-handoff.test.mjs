@@ -143,3 +143,18 @@ test("handoff text is budgeted with a truncation marker", async () => {
     assert.match(inject, /Open Scaffold handoff truncated before injection/);
   });
 });
+
+test("oversized handoff record is bounded without reading the whole file", async () => {
+  await withTempCwd(async (cwd) => {
+    // 32 KiB is larger than the internal read cap; the read must stay bounded
+    // and still mark the result as truncated without exhausting memory.
+    await write(cwd, ".osc/handoff.md", "y".repeat(32 * 1024));
+
+    const handoff = await readHandoffText(cwd, { maxChars: 20 });
+
+    assert.equal(handoff.source, ".osc/handoff.md");
+    assert.equal(handoff.truncated, true);
+    assert.ok(handoff.text.length <= 60, "bounded read keeps injected text small");
+    assert.ok(handoff.text.startsWith("y".repeat(20)));
+  });
+});
