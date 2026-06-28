@@ -7,7 +7,7 @@ import * as readline from "node:readline";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { chat, resolveProviderConfig, shouldPreserveThinking } from "./agent/provider.js";
-import { loadCatalog, resolveContextBudget } from "./agent/router.js";
+import { findCatalogModelEntry, loadCatalog, resolveContextBudget } from "./agent/router.js";
 import {
   beginAdaptiveUserTurn,
   createAdaptiveRoutingState,
@@ -30,13 +30,10 @@ import { runOnboarding, needsOnboarding } from "./onboard.js";
 import { createSession, appendEvent, listSessions, loadSessionEvents, lastSession } from "./sessions.js";
 import { install } from "./installer.js";
 import { runUltrawork } from "./ulw.js";
-import { readJson, gitInfo, truncate, nowIso } from "./util.js";
+import { gitInfo, truncate } from "./util.js";
 import { renderBanner } from "./banner.js";
 import { renderStatus } from "./status.js";
-import { fileURLToPath } from "node:url";
-import { dirname, join as pjoin } from "node:path";
-
-const ROOT = pjoin(dirname(fileURLToPath(import.meta.url)), "..");
+import { buildReplPrompt, modelTierGuidance } from "./prompt.js";
 
 const GRAY = "\x1b[90m";
 const DIM = "\x1b[2m";
@@ -187,18 +184,6 @@ export function hasManualRoutingOverride(flags = {}) {
   return !!(flags.model || flags.role);
 }
 
-const REPL_PERSONA = `You are LazyGLM, a terminal-based AI coding agent connected directly to the user's file system via a CLI.
-
-PERSONALITY:
-You are a brilliant but "lazy" pragmatic developer. You hate writing unnecessary text, explanations, or filler. You believe code speaks louder than words. You do exactly what is asked, make the edit, and stop talking. Never say "Certainly!" or "I'd be happy to help." Just do the work. Be extremely concise. If the user didn't ask for an explanation, don't give one.
-
-HOW YOU OPERATE (agentic — you have tools):
-- To edit a file, use the patch_file tool (SEARCH/REPLACE: old_string → new_string). Never output whole files. Never paste SEARCH/REPLACE blocks into chat — invoke the tool.
-- To see a file, use read_file / list_dir / grep autonomously. Do NOT ask the user to @mention or paste files — go look yourself.
-- After making changes, verify with run_shell (build/test). Never claim success without verifying.
-- Keep your terminal output clean and readable.
-- When the user's request is fully done, call the finish tool with a one-line summary.`;
-
 /**
  * A single readline interface over stdin that buffers lines and serves them
  * sequentially via next(). This is shared by onboarding and the REPL so that
@@ -282,15 +267,6 @@ function renderDelta(d) {
     closeStream();
     writeTurnDivider();
   }
-}
-
-function buildSystemPrompt({ cwd, git, model, injects }) {
-  const parts = [REPL_PERSONA];
-  parts.push(
-    `\nENVIRONMENT\n- cwd: ${cwd}\n- git: ${git.isRepo ? `${git.branch} @ ${git.root}` : "(not a repo)"}\n- model: ${model}\n- date: ${nowIso()}\n- os: ${process.platform}`,
-  );
-  if (injects && injects.length) parts.push(`\nPROJECT CONTEXT (injected by hooks)\n${injects.join("\n\n")}`);
-  return parts.join("\n");
 }
 
 function extractQuoted(s) {
@@ -460,8 +436,9 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
     process.exit(1);
   }
   let currentModel = providerConfig.modelId;
+  const catalog = await loadCatalog();
   let manualContextBudget = Number.isInteger(flags.contextBudget) && flags.contextBudget > 0 ? flags.contextBudget : null;
-  let contextBudget = manualContextBudget ?? resolveContextBudget(providerConfig.model, await loadCatalog());
+  let contextBudget = manualContextBudget ?? resolveContextBudget(providerConfig.model, catalog);
   const adaptiveState = createAdaptiveRoutingState({ manualOverride: hasManualRoutingOverride(flags) });
 
   // 3. Auto-init the project dir silently (.lazyglm/ + AGENTS.md) if missing
@@ -481,8 +458,27 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
   const gi = gitInfo(dir);
   const ctx = new Context({ model: currentModel, budget: contextBudget, preserveThinking: shouldPreserveThinking(providerConfig.provider) });
   const startRes = await engine.fire("SessionStart", {});
-  const system = buildSystemPrompt({ cwd: dir, git: gi, model: currentModel, injects: startRes.injects });
-  ctx.setSystem(system);
+  const activeModelInfo = () => {
+    const entry = findCatalogModelEntry(providerConfig.model || currentModel, catalog) || findCatalogModelEntry(currentModel, catalog);
+    const tier = entry?.tier;
+    const description = entry?.description;
+    const contextWindow = entry?.context_window ?? entry?.context;
+    const tierReason = modelTierGuidance({ tier, description });
+    return { tier, description, contextWindow, tierReason };
+  };
+  const refreshSystemPrompt = () => {
+    const info = activeModelInfo();
+    ctx.setSystem(buildReplPrompt({
+      cwd: dir,
+      git: gi,
+      model: currentModel,
+      injects: startRes.injects,
+      tier: info.tier,
+      contextWindow: info.contextWindow,
+      description: info.description,
+    }));
+  };
+  refreshSystemPrompt();
 
   let yolo = !!flags.yolo;
   engine.setMeta({ model: currentModel, transcriptPath: null, permissionMode: yolo ? "yolo" : "auto" });
@@ -540,26 +536,27 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
       git: gi,
       session,
       yolo,
+      ...activeModelInfo(),
       isTTY: process.stdout.isTTY ?? false,
     }),
   );
 
   const resolveRoutingCandidate = async (role) => {
-    const catalog = await loadCatalog();
     const config = await resolveProviderConfig({ provider: flags.provider, role });
     return { config, bundle: effectiveBundleFromProviderConfig(config, catalog) };
   };
 
-  const currentRoutingBundle = async () => effectiveBundleFromProviderConfig(providerConfig, await loadCatalog());
+  const currentRoutingBundle = async () => effectiveBundleFromProviderConfig(providerConfig, catalog);
 
   const applyRoutingDecision = async (decision, nextConfig) => {
     if (!decision) return false;
     providerConfig = nextConfig;
     currentModel = nextConfig.modelId;
-    contextBudget = manualContextBudget ?? resolveContextBudget(nextConfig.model, await loadCatalog());
+    contextBudget = manualContextBudget ?? resolveContextBudget(nextConfig.model, catalog);
     ctx.model = currentModel;
     ctx.budget = contextBudget;
     ctx.preserveThinking = shouldPreserveThinking(nextConfig.provider);
+    refreshSystemPrompt();
     engine.setMeta({ model: currentModel });
     recordRoutingApplied(adaptiveState, decision);
     process.stdout.write(`${formatRoutingNotice(decision, renderOpts())}\n`);
@@ -647,24 +644,26 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
       case "model": {
         if (!argStr) {
           console.log(`   current model: ${currentModel}`);
-          const cat = await readJson(pjoin(ROOT, "config", "model-catalog.json"), {});
-          console.log(`   available: ${Object.keys(cat.models || {}).join(", ")}`);
+          console.log(`   available: ${Object.keys(catalog.models || {}).join(", ")}`);
           return;
         }
         try {
           const nc = await resolveProviderConfig({ model: argStr, provider: flags.provider, role: "default" });
           providerConfig = nc;
           currentModel = nc.modelId;
-          contextBudget = manualContextBudget ?? resolveContextBudget(nc.model, await loadCatalog());
+          contextBudget = manualContextBudget ?? resolveContextBudget(nc.model, catalog);
           ctx.model = currentModel;
           ctx.budget = contextBudget;
           // A /model switch can change the provider (e.g. zai → ollama), which
           // flips whether reasoning_content is on the wire. Keep the budget
           // estimator in sync so compaction decisions match the new payload.
           ctx.preserveThinking = shouldPreserveThinking(nc.provider);
+          refreshSystemPrompt();
           engine.setMeta({ model: currentModel });
           resetAdaptiveRoutingState(adaptiveState, { manualOverride: true });
-          console.log(`${GREEN}   ✓ model: ${currentModel}${RESET}`);
+          const info = activeModelInfo();
+          const tierNote = info.tier ? ` | tier: ${info.tier}${info.tierReason ? ` - ${info.tierReason}` : ""}` : "";
+          console.log(`${GREEN}   ✓ model: ${currentModel}${tierNote}${RESET}`);
         } catch (e) {
           console.log(`${YELLOW}   ✗ ${e.message}${RESET}`);
         }
@@ -673,7 +672,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
       case "context-budget": {
         const res = resolveContextBudgetCommand(argStr, {
           model: providerConfig.model,
-          catalog: await loadCatalog(),
+          catalog,
           manualBudget: manualContextBudget,
         });
         if (res.error) {
@@ -697,13 +696,9 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
         // is reflected without threading effort through providerConfig's return.
         let effort = "high";
         let role = providerConfig.role || "default";
-        try {
-          const cat = await readJson(pjoin(ROOT, "config", "model-catalog.json"), {});
-          const roleEntry = cat.roles?.[role] || cat.roles?.default || {};
-          effort = roleEntry.reasoning_effort || cat.current?.model_reasoning_effort || "high";
-        } catch {
-          // catalog read failure is non-fatal for a status line
-        }
+        const roleEntry = catalog.roles?.[role] || catalog.roles?.default || {};
+        effort = roleEntry.reasoning_effort || catalog.current?.model_reasoning_effort || "high";
+        const info = activeModelInfo();
         console.log(
           renderStatus({
             sessionId: session?.id,
@@ -711,6 +706,8 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
             provider: providerConfig.provider,
             role,
             reasoningEffort: effort,
+            tier: info.tier,
+            tierReason: info.tierReason,
             cumulative,
             lastTurn,
             sessionElapsedMs: Date.now() - sessionStartMs,
@@ -786,16 +783,15 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
         // authoritative and must be honored — resolving the catalog ultrabrain here
         // would override their selection. Only fall back to catalog ultrabrain when
         // adaptive routing is active and may have de-escalated the live route.
-        const ultraCatalog = await loadCatalog();
         let ultraConfig, ultraBundle, ultraBudget;
         if (adaptiveState.manualOverride) {
           ultraConfig = providerConfig;
-          ultraBundle = effectiveBundleFromProviderConfig(ultraConfig, ultraCatalog);
+          ultraBundle = effectiveBundleFromProviderConfig(ultraConfig, catalog);
           ultraBudget = contextBudget;
         } else {
           ultraConfig = await resolveProviderConfig({ provider: flags.provider, role: "ultrabrain" });
-          ultraBundle = effectiveBundleFromProviderConfig(ultraConfig, ultraCatalog);
-          ultraBudget = manualContextBudget ?? resolveContextBudget(ultraConfig.model, ultraCatalog);
+          ultraBundle = effectiveBundleFromProviderConfig(ultraConfig, catalog);
+          ultraBudget = manualContextBudget ?? resolveContextBudget(ultraConfig.model, catalog);
         }
         console.log(`\n${CYAN}🔁 ULTRAWORK${RESET} — task: ${truncate(task, 120)}`);
         if (verifyCommand) console.log(`   verify: ${verifyCommand}`);

@@ -104,6 +104,10 @@ function centerVisible(s, width) {
   return " ".repeat(left) + value + " ".repeat(right);
 }
 
+function cleanSegment(value) {
+  return String(value ?? "").replace(/[|\r\n]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
 /** One `label  value` row, padded to exactly `width` rendered columns. */
 function fieldRow(label, value, width) {
   const labelField = label ? String(label).padEnd(LABEL_WIDTH) : "";
@@ -121,6 +125,8 @@ function fieldRow(label, value, width) {
  * @param {object} [opts.git]      - { isRepo, branch, root } from gitInfo()
  * @param {object} [opts.session]  - { id, ... } from createSession(); omitted => no session line
  * @param {boolean} [opts.yolo]    - render the yolo line when true
+ * @param {string} [opts.tier]     - catalog tier for the active model
+ * @param {string} [opts.tierReason] - catalog-derived tier guidance
  * @param {boolean} [opts.isTTY]   - true => art + panel; false/undefined => one clean line
  * @returns {string} the full banner (no console writes, no process reads)
  */
@@ -131,6 +137,8 @@ export function renderBanner({
   git,
   session,
   yolo,
+  tier,
+  tierReason,
   isTTY,
 } = {}) {
   const m = model ?? "?";
@@ -141,7 +149,10 @@ export function renderBanner({
 
   // Non-TTY: one machine-readable line, no ANSI, no art.
   if (!tty) {
-    return `LazyGLM | ${m} | ${p} | ${dir}\n`;
+    const parts = ["LazyGLM", m, p, dir];
+    if (tier) parts.push(`tier=${cleanSegment(tier)}`);
+    if (tierReason) parts.push(`guidance=${cleanSegment(tierReason)}`);
+    return `${parts.join(" | ")}\n`;
   }
 
   const out = [];
@@ -158,6 +169,8 @@ export function renderBanner({
   const b = BOX.tty;
   const rows = [];
   rows.push(fieldRow("model", m, PANEL_WIDTH));
+  if (tier) rows.push(fieldRow("tier", tier, PANEL_WIDTH));
+  if (tierReason) rows.push(fieldRow("guidance", tierReason, PANEL_WIDTH));
   rows.push(fieldRow("provider", p, PANEL_WIDTH));
   rows.push(fieldRow("cwd", dir, PANEL_WIDTH));
   if (g.isRepo && g.branch) rows.push(fieldRow("git", g.branch, PANEL_WIDTH));

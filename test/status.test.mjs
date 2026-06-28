@@ -69,6 +69,42 @@ test("non-TTY status line is pipe-parseable key=value", () => {
   assert.equal(kv.credits, "unsupported", "non-TTY credits show the unsupported state");
 });
 
+test("tier: omitted tier keeps existing non-TTY key set unchanged", () => {
+  const out = renderStatus({ ...base, isTTY: false });
+  assert.doesNotMatch(out, /tier=/);
+  assert.doesNotMatch(out, /tier_reason=/);
+});
+
+test("tier: non-TTY status includes tier and guidance alongside reasoning spend", () => {
+  const out = renderStatus({
+    ...base,
+    tier: "balanced",
+    tierReason: "Use this tier for verification and medium-complexity work.",
+    isTTY: false,
+  });
+  const kv = Object.fromEntries(
+    out
+      .split(" | ")
+      .slice(1)
+      .map((seg) => seg.split("=")),
+  );
+  assert.equal(kv.tier, "balanced");
+  assert.equal(kv.tier_reason, "Use this tier for verification and medium-complexity work.");
+  assert.equal(kv.reasoning, "90", "existing reasoning spend remains visible");
+});
+
+test("tier: TTY status includes active tier and guidance", () => {
+  const out = renderStatus({
+    ...base,
+    tier: "high-end",
+    tierReason: "Use this tier for long-horizon coding.",
+    isTTY: true,
+  });
+  const plain = stripAnsi(out);
+  assert.ok(plain.includes("tier high-end: Use this tier for long-horizon coding."), "tier guidance present");
+  assert.ok(plain.includes("🧠 90"), "reasoning spend still present");
+});
+
 test("credits: always n/a (TTY) / unsupported (non-TTY) — never estimated or faked", () => {
   const tty = renderStatus({ ...base, isTTY: true });
   assert.ok(stripAnsi(tty).includes("credits: n/a"), "TTY credits render n/a");

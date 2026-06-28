@@ -24,6 +24,15 @@ const DIM = "\x1b[2m";
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
+function cleanSegment(value) {
+  return String(value ?? "").replace(/[|\r\n]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function truncateToChars(value, max = 96) {
+  const text = cleanSegment(value);
+  return text.length > max ? text.slice(0, Math.max(0, max - 1)) + "…" : text;
+}
+
 /** Human-readable duration for the TTY line (e.g. "2m13s", "4.2s", "0ms"). */
 function humanizeMs(ms) {
   const n = Number(ms) || 0;
@@ -47,6 +56,8 @@ function humanizeMs(ms) {
  * @param {string} [opts.provider]      - active provider (e.g. "zai")
  * @param {string} [opts.role]          - routing role (e.g. "default")
  * @param {string} [opts.reasoningEffort] - "high"|"low"|... from the catalog role
+ * @param {string} [opts.tier]          - catalog tier for the active model
+ * @param {string} [opts.tierReason]    - catalog-derived tier guidance
  * @param {object} [opts.cumulative]    - { prompt, completion, reasoning } running totals
  * @param {object} [opts.lastTurn]      - { prompt, completion, reasoning } for the last turn
  * @param {number} [opts.sessionElapsedMs] - wall-clock ms since session start
@@ -60,6 +71,8 @@ export function renderStatus({
   provider,
   role,
   reasoningEffort,
+  tier,
+  tierReason,
   cumulative,
   lastTurn,
   sessionElapsedMs,
@@ -85,12 +98,16 @@ export function renderStatus({
       `provider=${p}`,
       `role=${r}`,
       `effort=${effort}`,
+    ];
+    if (tier) parts.push(`tier=${cleanSegment(tier)}`);
+    if (tierReason) parts.push(`tier_reason=${cleanSegment(tierReason)}`);
+    parts.push(
       `turn_ms=${lastTurnMs != null ? Math.max(0, Math.round(Number(lastTurnMs) || 0)) : ""}`,
       `session_ms=${Math.max(0, Math.round(Number(sessionElapsedMs) || 0))}`,
       `prompt=${c.prompt || 0}`,
       `completion=${c.completion || 0}`,
       `reasoning=${c.reasoning || 0}`,
-    ];
+    );
     if (lt) {
       parts.push(`last_prompt=${lt.prompt || 0}`);
       parts.push(`last_completion=${lt.completion || 0}`);
@@ -106,6 +123,7 @@ export function renderStatus({
     `${GRAY}   ${sid}${RESET} ${DIM}|${RESET} ` +
     `${CYAN}${m}${RESET} ${DIM}·${RESET} ${p} ${DIM}|${RESET} ` +
     `${DIM}role${RESET} ${r}/${effort} ${DIM}|${RESET} ` +
+    (tier ? `${DIM}tier${RESET} ${tier}${tierReason ? `: ${truncateToChars(tierReason)}` : ""} ${DIM}|${RESET} ` : "") +
     `${GRAY}⏱${RESET} turn ${tElapsed} ${DIM}·${RESET} session ${sElapsed} ${DIM}|${RESET} ` +
     `${DIM}tok${RESET} ${c.prompt || 0}↑/${c.completion || 0}↓ (${GRAY}🧠 ${c.reasoning || 0}${RESET}) ${DIM}|${RESET} ` +
     `${GRAY}credits: n/a${RESET}`;
