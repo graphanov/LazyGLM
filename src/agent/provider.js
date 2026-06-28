@@ -51,7 +51,7 @@ import {
  * @typedef {{ timeout: number, maxRetries: number, onRetry?: (payload: RetryPayload) => void, signal?: AbortSignal }} RetryOptions
  * @typedef {{ role?: string, content?: string | null, reasoning_content?: string | null, name?: string, tool_call_id?: string, tool_calls?: unknown, [key: string]: unknown }} ChatMessage
  * @typedef {{ model?: string, messages: ChatMessage[], tools?: ToolSpec[], temperature?: number, config?: ProviderConfig, reasoningEffort?: ReasoningEffort, onDelta?: (delta: StreamDelta) => void, onRetry?: (payload: RetryPayload) => void, signal?: AbortSignal }} ChatOptions
- * @typedef {{ model: string, messages: ChatMessage[], temperature: number, stream: boolean, tools?: ToolSpec[], tool_choice?: "auto", stream_options?: { include_usage: boolean }, thinking?: { type: "disabled" } | { type: "enabled", clear_thinking?: false } }} ChatRequestBody
+ * @typedef {{ model?: string, messages: ChatMessage[], temperature: number, stream: boolean, tools?: ToolSpec[], tool_choice?: "auto", stream_options?: { include_usage: boolean }, thinking?: { type: "disabled" } | { type: "enabled", clear_thinking?: false }, reasoning_effort?: ReasoningEffort }} ChatRequestBody
  * @typedef {{ id?: string | null, name?: string | null }} ModelListEntry
  * @typedef {{ id?: string | null, function?: { name?: string | null, arguments?: string | null } | null, [key: string]: unknown }} OpenAIToolCall
  * @typedef {{ index?: number, id?: string | null, function?: { name?: string | null, arguments?: string | null } | null, [key: string]: unknown }} OpenAIStreamToolCallDelta
@@ -427,7 +427,13 @@ export async function chat({ model, messages, tools, temperature, config, reason
     reasoningEffort: requestEffort,
     preserveThinking,
   });
-  if (thinking) body.thinking = thinking;
+  if (thinking) {
+    body.thinking = thinking;
+    // z.ai distinguishes thinking on/off (thinking.type) from the effort level
+    // (top-level reasoning_effort). For enabled turns, send the advertised effort
+    // on the wire so routing and /status match the actual request.
+    if (thinking.type === "enabled") body.reasoning_effort = requestEffort;
+  }
 
   /**
    * @param {ChatRequestBody} requestBody
@@ -452,7 +458,7 @@ export async function chat({ model, messages, tools, temperature, config, reason
       cfg.provider === "zai" &&
       body.thinking
     ) {
-      const { thinking: _thinking, ...fallbackBody } = body;
+      const { thinking: _thinking, reasoning_effort: _effort, ...fallbackBody } = body;
       onRetry?.({
         attempt: 1,
         reason: "z.ai thinking control rejected with HTTP 400; retrying without thinking",

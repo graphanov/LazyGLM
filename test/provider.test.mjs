@@ -116,23 +116,39 @@ test("chat() keeps reasoning_content on the outgoing message for zai", async () 
   }
 });
 
-test("chat() sends z.ai thinking enabled for high effort with preserved thinking", async () => {
+test("chat() sends z.ai thinking enabled with reasoning_effort for high effort", async () => {
   delete process.env.LAZYGLM_PRESERVE_THINKING;
   const stub = installFetchStub();
   try {
     await chat({ messages: historyWithReasoning(), config: makeConfig("zai", { reasoningEffort: "high" }) });
     assert.deepEqual(stub.sentBody().thinking, { type: "enabled", clear_thinking: false });
+    assert.equal(stub.sentBody().reasoning_effort, "high");
   } finally {
     stub.restore();
   }
 });
 
-test("chat() sends z.ai thinking disabled for low effort", async () => {
+test("chat() sends reasoning_effort matching the configured effort for zai", async () => {
+  for (const effort of ["medium", "high", "max"]) {
+    delete process.env.LAZYGLM_PRESERVE_THINKING;
+    const stub = installFetchStub();
+    try {
+      await chat({ messages: historyWithReasoning(), config: makeConfig("zai", { reasoningEffort: effort }) });
+      assert.equal(stub.sentBody().reasoning_effort, effort, `wire should carry ${effort}`);
+      assert.deepEqual(stub.sentBody().thinking, { type: "enabled", clear_thinking: false });
+    } finally {
+      stub.restore();
+    }
+  }
+});
+
+test("chat() sends z.ai thinking disabled and no reasoning_effort for low effort", async () => {
   delete process.env.LAZYGLM_PRESERVE_THINKING;
   const stub = installFetchStub();
   try {
     await chat({ messages: historyWithReasoning(), config: makeConfig("zai", { role: "quick", reasoningEffort: "low" }) });
     assert.deepEqual(stub.sentBody().thinking, { type: "disabled" });
+    assert.equal(stub.sentBody().reasoning_effort, undefined);
   } finally {
     stub.restore();
   }
@@ -189,7 +205,9 @@ test("chat() retries once without z.ai thinking control after HTTP 400", async (
     assert.equal(stub.callCount(), 2);
     const [first, second] = stub.sentBodies();
     assert.deepEqual(first.thinking, { type: "enabled", clear_thinking: false });
+    assert.equal(first.reasoning_effort, "high");
     assert.equal(second.thinking, undefined);
+    assert.equal(second.reasoning_effort, undefined);
     assert.equal(retries.length, 1);
     assert.match(retries[0].reason, /thinking control rejected with HTTP 400/);
   } finally {
