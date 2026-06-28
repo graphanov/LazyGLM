@@ -12,7 +12,7 @@
   },
   "files": [
     "bin",
-    "src",
+    "dist",
     "skills",
     "config",
     "docs/PR_REVIEW.md",
@@ -22,6 +22,10 @@
     "LICENSE"
   ],
   "scripts": {
+    "build": "tsc",
+    "prepack": "npm run build",
+    "prepare": "npm run build",
+    "pretest": "npm run build",
     "test": "node --test test/*.test.mjs",
     "smoke": "node bin/lazyglm.js doctor",
     "typecheck": "tsc --noEmit"

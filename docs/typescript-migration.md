@@ -73,26 +73,42 @@ The third boundary rollout adds the two remaining named core runtime boundary fi
 
 The measured pragma-on budget for this slice was 103 local type errors across runtime/tools. The fixes are JSDoc annotations, typed accumulators, zero-cost casts, and local narrowing helpers; no `@ts-ignore`, `.js -> .ts` conversion, build step, CLI shim change, package version change, or runtime behavior change is part of this rollout.
 
+### Phase 1 — build pipeline infrastructure
+
+The first migration phase adds the compiled package pipeline without converting runtime modules:
+
+- `tsconfig.json` emits ESM output to `dist/`.
+- `allowJs` stays enabled and `checkJs` stays disabled, so all current JavaScript runtime modules compile as-is.
+- `npm run build` runs `tsc`; `npm test` runs the build first through `pretest`.
+- `bin/lazyglm.js` stays as the published executable shim, but imports `dist/cli.js`.
+- `package.json` ships `dist/` instead of `src/`.
+
+This phase intentionally does not convert `.js` files to `.ts`, add a bundler, change CLI behavior, or touch version/publish flow. Follow-up phases can convert modules against a working package pipeline.
+
+`dist/types/index.js` is expected output. The source file is type-only, so the emitted runtime file contains only `export {};`. It is harmless package dead weight for now and should not be treated as a failed exclude rule.
+
 ## Deferred decisions
 
-These remain outside PR-A and the current PR-B boundary slices:
+These remain outside the Phase 1 build-pipeline work and the current boundary slices:
 
 - enabling `checkJs` globally;
 - converting provider/router/runtime/tools/hooks files to `.ts`;
-- typechecking runtime/tools/hooks JavaScript in this provider-boundary slice;
-- adding a `dist/` build step;
-- changing `bin/lazyglm.js`;
-- changing `package.json` `files`, `bin`, `engines`, or version;
+- typechecking additional JavaScript boundaries beyond the current router/provider/runtime/tools surface;
+- source maps for compiled stack traces;
+- changing `package.json` `engines` or version;
 - changing runtime behavior, model routing, hook semantics, tool calls, REPL UX, sessions, or publishing flow.
 
 ## Package compatibility
 
-`src/types/index.ts` is included under the existing `src` package allowlist. It is type-only and has no runtime imports, so `npx lazyglm`, global installs, and direct Node execution remain unchanged. If later PRs add compiled output, `npm pack --dry-run` must prove the shipped CLI and runtime files are still correct.
+The npm package now runs through the compiled `dist/` output while keeping the executable path stable at `bin/lazyglm.js`. `npx lazyglm` and global installs still use the same bin name, and source checkouts must run `npm run build` before invoking `node bin/lazyglm.js ...`.
+
+Because `dist/` is gitignored but listed in `package.json` `files`, `npm pack --dry-run` must prove the shipped CLI and runtime files are still correct.
 
 ## Verification
 
 ```bash
 npm install --no-package-lock
+npm run build
 npm run typecheck
 npm test
 node bin/lazyglm.js --version

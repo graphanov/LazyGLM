@@ -98,6 +98,7 @@ Or run from source:
 
 ```bash
 git clone https://github.com/graphanov/LazyGLM.git lazyglm && cd lazyglm
+npm install && npm run build
 node bin/lazyglm.js doctor
 ```
 
