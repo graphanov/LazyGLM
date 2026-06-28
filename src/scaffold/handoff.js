@@ -19,7 +19,15 @@ export async function readHandoffText(cwd, { maxChars = 600 } = {}) {
   for (const candidate of HANDOFF_CANDIDATES) {
     const path = join(cwd, candidate.rel);
     if (!existsSync(path)) continue;
-    const raw = await readFile(path, "utf8");
+    let raw;
+    try {
+      raw = await readFile(path, "utf8");
+    } catch {
+      // Unreadable candidate (directory, bad permissions, broken symlink, …)
+      // — skip and try the next candidate so one malformed preferred record
+      // does not disable handoff injection entirely.
+      continue;
+    }
     const text = raw.trim();
     if (!text) continue;
     return {

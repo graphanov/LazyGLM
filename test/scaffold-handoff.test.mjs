@@ -100,6 +100,19 @@ test("empty .osc handoff falls through to non-empty MISSION.md", async () => {
   });
 });
 
+test("unreadable .osc handoff falls through to readable MISSION.md", async () => {
+  await withTempCwd(async (cwd) => {
+    // .osc/handoff.md as a directory is unreadable via readFile → should skip.
+    await mkdir(join(cwd, ".osc", "handoff.md"), { recursive: true });
+    await write(cwd, "MISSION.md", "Fallback survives an unreadable packet.\n");
+
+    const handoff = await readHandoffText(cwd);
+
+    assert.equal(handoff.source, "MISSION.md");
+    assert.match(handoff.text, /Fallback survives an unreadable packet/);
+  });
+});
+
 test("osc binary availability is not required for file-based handoff injection", async () => {
   await withTempCwd(async (cwd) => {
     const savedPath = process.env.PATH;
