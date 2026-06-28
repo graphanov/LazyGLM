@@ -129,11 +129,10 @@ export function effectiveBundleFromProviderConfig(config, catalog = {}) {
 }
 
 /**
- * Two bundles are "equal" only when they would produce a different wire-level
- * request.  `reasoningEffort` is deliberately excluded: `resolveProviderConfig`
- * does not carry it and `chat()` never sends it in the request body, so an
- * effort-only difference (e.g. when `LAZYGLM_MODEL` pins the model) is a
- * cosmetic no-op, not a real route change.
+ * Two bundles are "equal" only when they represent the same route. Effort now
+ * counts even though z.ai is the only provider with a wire-level thinking
+ * toggle today: routing is provider-agnostic, and effort changes must remain
+ * visible when a pinned model moves between quick/high-style roles.
  *
  * @param {EffectiveBundle | null | undefined} a
  * @param {EffectiveBundle | null | undefined} b
@@ -143,7 +142,8 @@ export function bundlesEqual(a, b) {
   return !!a && !!b &&
     a.provider === b.provider &&
     a.model === b.model &&
-    a.modelId === b.modelId;
+    a.modelId === b.modelId &&
+    a.reasoningEffort === b.reasoningEffort;
 }
 
 /**

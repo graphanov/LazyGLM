@@ -102,6 +102,34 @@ export function formatExitMarker(opts = {}) {
   return `${ansi(DIM, opts)}bye.${ansi(RESET, opts)}`;
 }
 
+export function formatCost(cumulative = {}, lastTurn = null, opts = {}) {
+  const c = cumulative && typeof cumulative === "object" ? cumulative : {};
+  const lt = lastTurn && typeof lastTurn === "object" ? lastTurn : {};
+  const lastPrompt = lt.prompt || 0;
+  const lastCompletion = lt.completion || 0;
+  const lastReasoning = lt.reasoning || 0;
+  const totalPrompt = c.prompt || 0;
+  const totalCompletion = c.completion || 0;
+  const totalReasoning = c.reasoning || 0;
+
+  if (!opts.isTTY) {
+    return [
+      "LazyGLM cost",
+      `last_prompt=${lastPrompt}`,
+      `last_completion=${lastCompletion}`,
+      `last_reasoning=${lastReasoning}`,
+      `prompt=${totalPrompt}`,
+      `completion=${totalCompletion}`,
+      `reasoning=${totalReasoning}`,
+    ].join(" | ");
+  }
+
+  return `   last in/out: ${lastPrompt}/${lastCompletion} | ` +
+    `${ansi(GRAY, opts)}reasoning: ${lastReasoning}${ansi(RESET, opts)} | ` +
+    `total in/out: ${totalPrompt}/${totalCompletion} | ` +
+    `${ansi(GRAY, opts)}reasoning: ${totalReasoning}${ansi(RESET, opts)}`;
+}
+
 // Turn-boundary frame helpers (purely additive). Each assistant+tool turn is
 // wrapped so consecutive turns stop blending. TTY: a dim fixed-width rule
 // above and below the turn (symmetric). Non-TTY: a plain `> text` echo with
@@ -600,7 +628,7 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
   /model <name>         switch model (e.g. glm-4.7-flash, glm-4.7, glm-5.2)
   /context-budget <n>   override context budget; use auto to restore catalog-derived
   /status               show session, model, role/effort, timing, and token totals
-  /cost                 show cumulative token spend (incl. reasoning)
+  /cost                 show last-turn and cumulative token spend (incl. reasoning)
   /compact              compact the context now
   /resume [n]           list past sessions, or resume the nth
   /ultrawork "<task>"   verified-completion autonomous loop
@@ -660,7 +688,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
         return;
       }
       case "cost":
-        console.log(`   tokens in/out: ${cumulative.prompt}/${cumulative.completion} | ${GRAY}🧠 reasoning: ${cumulative.reasoning}${RESET}`);
+        console.log(formatCost(cumulative, lastTurn, renderOpts()));
         return;
       case "status": {
         // Derive reasoningEffort at /status time from the live role + catalog

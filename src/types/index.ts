@@ -73,6 +73,7 @@ export interface ProviderConfig {
   model: string;
   provider: Provider;
   role: RoleName;
+  reasoningEffort: ReasoningEffort;
   timeout: number;
   maxRetries: number;
 }

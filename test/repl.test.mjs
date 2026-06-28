@@ -23,6 +23,7 @@ import {
   turnRule,
   turnStart,
   turnEnd,
+  formatCost,
   formatRoutingNotice,
   hasManualRoutingOverride,
 } from "../src/repl.js";
@@ -96,6 +97,25 @@ test("REPL routing notice is parseable and ANSI-free for non-TTY output", () => 
 
   assertNoAnsi(out);
   assert.equal(out, "routing: glm-4.7/low -> glm-5.2/high (prompt complexity: cleanup/refactor scope)");
+});
+
+test("REPL cost formatter shows last-turn and cumulative reasoning spend", () => {
+  const cumulative = { prompt: 100, completion: 40, reasoning: 12 };
+  const lastTurn = { prompt: 8, completion: 5, reasoning: 3 };
+
+  const tty = formatCost(cumulative, lastTurn, { isTTY: true });
+  assert.ok(tty.includes("last in/out: 8/5"));
+  assert.ok(tty.includes("total in/out: 100/40"));
+  assert.ok(tty.includes("reasoning: 3"));
+  assert.ok(tty.includes("reasoning: 12"));
+  assert.ok(tty.includes(GRAY));
+
+  const plain = formatCost(cumulative, lastTurn, { isTTY: false });
+  assertNoAnsi(plain);
+  assert.equal(
+    plain,
+    "LazyGLM cost | last_prompt=8 | last_completion=5 | last_reasoning=3 | prompt=100 | completion=40 | reasoning=12",
+  );
 });
 
 test("REPL manual routing override is enabled by model or role flags", () => {

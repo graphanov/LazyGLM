@@ -3,7 +3,8 @@ import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { resolveProviderConfig, listModels } from "./agent/provider.js";
+import { resolveProviderConfig, listModels, shouldPreserveThinking } from "./agent/provider.js";
+import { thinkingControlForRequest } from "./agent/thinking.js";
 import { loadPlugins } from "./plugins/index.js";
 import { loadSkills, listSkillNames } from "./skills/index.js";
 import { loadUserConfig } from "./config.js";
@@ -16,6 +17,24 @@ import { dirname } from "node:path";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 const execP = promisify(exec);
+
+export function reasoningConfigDetail(config, { preserveThinking } = {}) {
+  const cfg = config || {};
+  const provider = cfg.provider || "?";
+  const effort = cfg.reasoningEffort || "high";
+  const preserved = preserveThinking ?? shouldPreserveThinking(provider);
+  const control = thinkingControlForRequest({
+    provider,
+    reasoningEffort: effort,
+    preserveThinking: preserved,
+  });
+  const thinking = control
+    ? control.type === "enabled" && control.clear_thinking === false
+      ? "enabled clear_thinking=false"
+      : control.type
+    : "not-sent";
+  return `provider=${provider} model=${cfg.modelId || cfg.model || "?"} role=${cfg.role || "default"} effort=${effort} thinking=${thinking} preserved_thinking=${preserved ? "on" : "off"}`;
+}
 
 export async function doctor({ cwd } = {}) {
   const dir = cwd || process.cwd();
@@ -36,7 +55,7 @@ export async function doctor({ cwd } = {}) {
     // Honor LAZYGLM_MODEL in the fallback so the context check reports the
     // env-selected model, matching runtime routing (router.js pickModel).
     const fallbackModel = process.env.LAZYGLM_MODEL || catalog.current?.model || "glm-5.2";
-    cfg = { baseURL: "?", provider: "?", model: fallbackModel, modelId: fallbackModel, apiKey: "***" };
+    cfg = { baseURL: "?", provider: "?", model: fallbackModel, modelId: fallbackModel, role: "default", reasoningEffort: "high", apiKey: "***" };
   }
 
   // provider config resolved?
@@ -45,6 +64,9 @@ export async function doctor({ cwd } = {}) {
   } else {
     ok("provider", `${cfg.provider} -> ${cfg.baseURL} | model: ${cfg.modelId} (role: ${cfg.role})`);
   }
+
+  if (providerError) warn("reasoning", reasoningConfigDetail(cfg));
+  else ok("reasoning", reasoningConfigDetail(cfg));
 
   // provider reachable + model available?
   if (!providerError) {
