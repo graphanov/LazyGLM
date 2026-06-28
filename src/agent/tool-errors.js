@@ -8,5 +8,9 @@
  * @returns {boolean}
  */
 export function isToolErrorResult(resultStr) {
-  return /^Error(?::| executing\b)/i.test(resultStr || "") || /^Command exited\b/i.test(resultStr || "");
+  return (
+    /^Error(?::| executing\b)/i.test(resultStr || "") ||
+    /^Command exited\b/i.test(resultStr || "") ||
+    /^Blocked by hook\b/i.test(resultStr || "")
+  );
 }

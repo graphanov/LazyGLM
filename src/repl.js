@@ -890,6 +890,17 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
         if (pre.blocks.length) {
           resultStr = `Blocked by hook:\n${pre.blocks.join("\n")}`;
           process.stdout.write(`${TOOL_INDENT}${ansi(YELLOW, renderOpts())}⛔ ${tc.name} blocked: ${pre.blocks.join("; ")}${ansi(RESET, renderOpts())}\n`);
+          // PreToolUse block is a failed tool outcome from the adaptive-routing
+          // perspective: no tool actually ran, so count it toward errorStreak
+          // so repeated denials can trigger recovery escalation.
+          const signal = observeToolResult(adaptiveState, {
+            toolName: tc.name,
+            toolInput: tc.arguments,
+            result: resultStr,
+          });
+          turnSummary.hadError = turnSummary.hadError || signal.hadError;
+          turnSummary.wroteFiles = turnSummary.wroteFiles || signal.wroteFile;
+          await maybeRouteForToolResult();
         } else {
           process.stdout.write(`${formatToolCall(tc.name, tc.arguments, renderOpts())}\n`);
           let result;

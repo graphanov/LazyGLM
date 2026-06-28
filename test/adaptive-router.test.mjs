@@ -105,7 +105,48 @@ test("shared tool error helper matches runtime error result forms", () => {
   assert.equal(isToolErrorResult("Error executing run_shell: boom"), true);
   assert.equal(isToolErrorResult("Error: old_string not found"), true);
   assert.equal(isToolErrorResult("Command exited 1:\nnope"), true);
+  assert.equal(isToolErrorResult("Blocked by hook:\nwrite denied"), true);
   assert.equal(isToolErrorResult("patched src/repl.js (1 replacement)"), false);
+});
+
+test("effort-only bundle differences are treated as equal (no-op routes)", () => {
+  // Same provider/model/modelId, differing only in reasoningEffort — as when
+  // LAZYGLM_MODEL pins the model across quick/default candidates. Routing must
+  // not churn on this since resolveProviderConfig/chat never carry effort.
+  const a = { provider: "ollama", model: "glm-4.7", modelId: "glm-4.7", role: "quick", reasoningEffort: "low" };
+  const b = { provider: "ollama", model: "glm-4.7", modelId: "glm-4.7", role: "default", reasoningEffort: "high" };
+  assert.equal(bundlesEqual(a, b), true);
+
+  // A real model change is still a real route.
+  const c = { provider: "ollama", model: "glm-5.2", modelId: "glm-5.2", role: "default", reasoningEffort: "high" };
+  assert.equal(bundlesEqual(a, c), false);
+});
+
+test("blocked PreToolUse hook result counts as a tool error for adaptive routing", () => {
+  const state = createAdaptiveRoutingState();
+
+  observeToolResult(state, {
+    toolName: "write_file",
+    toolInput: { path: "src/x.js" },
+    result: "Blocked by hook:\nwrite denied",
+  });
+  assert.equal(state.errorStreak, 1);
+
+  observeToolResult(state, {
+    toolName: "write_file",
+    toolInput: { path: "src/y.js" },
+    result: "Blocked by hook:\nwrite denied",
+  });
+  assert.equal(state.errorStreak, 2);
+
+  const decision = evaluateToolResultRouting({
+    state,
+    currentBundle: bundle("quick"),
+    candidateBundle: bundle(highRole()),
+  });
+  assert.equal(decision?.source, "tool_result");
+  assert.equal(decision?.hard, true);
+  assert.match(decision?.reason || "", /2 tool errors/);
 });
 
 test("two consecutive tool errors escalate to the high bundle", () => {

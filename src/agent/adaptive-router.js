@@ -129,8 +129,11 @@ export function effectiveBundleFromProviderConfig(config, catalog = {}) {
 }
 
 /**
- * Role-only changes are intentionally cosmetic no-ops. Routing only changes
- * when the actual provider/model/effort bundle changes.
+ * Two bundles are "equal" only when they would produce a different wire-level
+ * request.  `reasoningEffort` is deliberately excluded: `resolveProviderConfig`
+ * does not carry it and `chat()` never sends it in the request body, so an
+ * effort-only difference (e.g. when `LAZYGLM_MODEL` pins the model) is a
+ * cosmetic no-op, not a real route change.
  *
  * @param {EffectiveBundle | null | undefined} a
  * @param {EffectiveBundle | null | undefined} b
@@ -140,8 +143,7 @@ export function bundlesEqual(a, b) {
   return !!a && !!b &&
     a.provider === b.provider &&
     a.model === b.model &&
-    a.modelId === b.modelId &&
-    a.reasoningEffort === b.reasoningEffort;
+    a.modelId === b.modelId;
 }
 
 /**
