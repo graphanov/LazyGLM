@@ -1,21 +1,24 @@
-// @ts-check
-
 // Side-effect-free prompt composition for the one-shot runtime and interactive
 // REPL. Model/tier facts are supplied by callers from config/model-catalog.json.
 import { nowIso } from "./util.js";
+import type { ModelCatalogEntry } from "./types/index.js";
 
-/**
- * @typedef {{ isRepo: boolean, branch?: string, root?: string }} PromptGitInfo
- * @typedef {object} PromptOptions
- * @property {string} cwd
- * @property {PromptGitInfo} git
- * @property {string} model
- * @property {string[]} [injects]
- * @property {string} [extra]
- * @property {string} [tier]
- * @property {number|string} [contextWindow]
- * @property {string} [description]
- */
+export interface PromptGitInfo {
+  isRepo: boolean;
+  branch?: string;
+  root?: string;
+}
+
+export interface PromptOptions {
+  cwd: string;
+  git: PromptGitInfo;
+  model: string;
+  injects?: string[];
+  extra?: string;
+  tier?: string;
+  contextWindow?: number | string;
+  description?: string;
+}
 
 export const RUNTIME_WORKING_PROMPT = `You are LazyGLM, an autonomous software engineering agent driven by a GLM model. You operate inside a real project directory on the user's machine via tools.
 
@@ -41,8 +44,7 @@ HOW YOU OPERATE (agentic - you have tools):
 - Keep your terminal output clean and readable.
 - When the user's request is fully done, call the finish tool with a one-line summary.`;
 
-/** @type {Record<string, string>} */
-const TIER_GUIDANCE = {
+const TIER_GUIDANCE: Record<string, string> = {
   "high-end": "Use this tier for long-horizon coding, architecture, complex debugging, and work that benefits from the largest GLM context.",
   "high-end-fast": "Use this tier when the task still needs strong coding ability but should spend fewer latency/cost resources than the flagship route.",
   strong: "Use this tier for general implementation and review where full flagship context is not required.",
@@ -54,7 +56,7 @@ const TIER_GUIDANCE = {
  * @param {{ tier?: string, description?: string }} [info]
  * @returns {string}
  */
-export function modelTierGuidance(info = {}) {
+export function modelTierGuidance(info: Pick<ModelCatalogEntry, "tier" | "description"> = {}): string {
   const tier = info.tier || "";
   const tierText = TIER_GUIDANCE[tier] || "";
   const description = info.description ? String(info.description).trim() : "";
@@ -66,7 +68,7 @@ export function modelTierGuidance(info = {}) {
  * @param {number|string|undefined} value
  * @returns {string}
  */
-function formatContextWindow(value) {
+function formatContextWindow(value: number | string | undefined): string {
   const n = Number(value);
   if (Number.isFinite(n) && n > 0) return n.toLocaleString("en-US");
   return value ? String(value) : "catalog entry unavailable";
@@ -76,7 +78,12 @@ function formatContextWindow(value) {
  * @param {{ model?: string, tier?: string, contextWindow?: number|string, description?: string }} [options]
  * @returns {string}
  */
-export function buildGlmNativeBlock({ model, tier, contextWindow, description } = {}) {
+export function buildGlmNativeBlock({
+  model,
+  tier,
+  contextWindow,
+  description,
+}: Partial<Pick<PromptOptions, "model" | "tier" | "contextWindow" | "description">> = {}): string {
   const guidance = modelTierGuidance({ tier, description });
   const lines = [
     "GLM-NATIVE OPERATING CONTRACT",
@@ -96,7 +103,7 @@ export function buildGlmNativeBlock({ model, tier, contextWindow, description } 
  * @param {PromptOptions} options
  * @returns {string}
  */
-function buildEnvironmentBlock({ cwd, git, model }) {
+function buildEnvironmentBlock({ cwd, git, model }: PromptOptions): string {
   return [
     "ENVIRONMENT",
     `- cwd: ${cwd}`,
@@ -111,7 +118,7 @@ function buildEnvironmentBlock({ cwd, git, model }) {
  * @param {PromptOptions} options
  * @returns {string}
  */
-export function buildRuntimePrompt(options) {
+export function buildRuntimePrompt(options: PromptOptions): string {
   const parts = [
     buildGlmNativeBlock(options),
     RUNTIME_WORKING_PROMPT,
@@ -128,7 +135,7 @@ export function buildRuntimePrompt(options) {
  * @param {PromptOptions} options
  * @returns {string}
  */
-export function buildReplPrompt(options) {
+export function buildReplPrompt(options: PromptOptions): string {
   const parts = [
     buildGlmNativeBlock(options),
     REPL_PERSONA_PROMPT,

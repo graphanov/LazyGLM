@@ -10,16 +10,62 @@ import { resolvePath } from "./util.js";
 import { abortReason, boundedTimeoutMs, composeAbortSignals, isDeadlineError } from "./agent/deadline.js";
 import { runAgent } from "./agent/runtime.js";
 import { loadPlugins } from "./plugins/index.js";
+import type { Deadline } from "./agent/deadline.js";
+import type { HookPlugin, PermissionMode, ProviderConfig, RoleName, RunAgentResult } from "./types/index.js";
 
 const execP = promisify(exec);
+
+export interface VerifyFinishOptions {
+  summary?: string | null;
+  cwd: string;
+  verifyCommand?: string | null;
+  filesWritten?: string[] | null;
+  deadline?: Deadline | null;
+  signal?: AbortSignal | null;
+}
+
+export interface VerifyFinishResult {
+  pass: boolean;
+  reason: string;
+  evidence: string;
+}
+
+export interface RunUltraworkOptions {
+  task: string;
+  cwd: string;
+  model?: string;
+  role?: RoleName;
+  config?: ProviderConfig;
+  completionPromise?: string;
+  verifyCommand?: string;
+  maxIterations?: number;
+  maxTurns?: number;
+  budget?: number;
+  reasoningBudget?: number;
+  onEvent?: (event: Record<string, unknown>) => void;
+  permissionMode?: PermissionMode;
+  failOnToolBlock?: boolean;
+  plugins?: HookPlugin[];
+  deadline?: Deadline;
+  signal?: AbortSignal;
+}
+
+function asError(err: unknown): Error {
+  return err instanceof Error ? err : new Error(String(err));
+}
+
+function errorRecord(err: unknown): { stdout?: unknown; stderr?: unknown; code?: unknown; message?: unknown } {
+  return err && typeof err === "object" ? err as { stdout?: unknown; stderr?: unknown; code?: unknown; message?: unknown } : { message: String(err) };
+}
 
 /**
  * Verify a finish claim: files the agent actually wrote still exist + an
  * optional verifyCommand passes.
  * @returns {{pass:boolean, reason:string, evidence:string}}
  */
-export async function verifyFinish({ summary, cwd, verifyCommand, filesWritten, deadline, signal }) {
-  const evidence = [];
+export async function verifyFinish({ summary, cwd, verifyCommand, filesWritten, deadline, signal }: VerifyFinishOptions): Promise<VerifyFinishResult> {
+  void summary;
+  const evidence: string[] = [];
   deadline?.throwIfExpired?.();
   const runAbort = composeAbortSignals([deadline?.signal, signal]);
   const runSignal = runAbort.signal;
@@ -27,7 +73,7 @@ export async function verifyFinish({ summary, cwd, verifyCommand, filesWritten, 
   // 1. files the agent wrote via tools must still exist (robust: tracked, not
   //    regex-extracted from prose, which would false-match CDN specifiers).
   const written = Array.isArray(filesWritten) ? filesWritten : [];
-  const missingWritten = [];
+  const missingWritten: string[] = [];
   for (const rel of written) {
     try {
       if (!existsSync(resolvePath(rel, cwd))) missingWritten.push(rel);
@@ -52,9 +98,10 @@ export async function verifyFinish({ summary, cwd, verifyCommand, filesWritten, 
       evidence.push(`verify command exited 0:\n${out}`);
       return { pass: true, reason: "verify command passed", evidence: evidence.join("\n") };
     } catch (err) {
-      if (isDeadlineError(err) || runSignal?.aborted) throw abortReason(runSignal, err);
-      const out = [err.stdout, err.stderr, err.message].filter(Boolean).join("\n").trim().slice(-600);
-      return { pass: false, reason: `verify command failed (exit ${err.code ?? "?"}):\n${out}`, evidence: evidence.join("\n") };
+      if (isDeadlineError(err) || runSignal?.aborted) throw abortReason(runSignal, asError(err));
+      const record = errorRecord(err);
+      const out = [record.stdout, record.stderr, record.message].filter(Boolean).join("\n").trim().slice(-600);
+      return { pass: false, reason: `verify command failed (exit ${record.code ?? "?"}):\n${out}`, evidence: evidence.join("\n") };
     } finally {
       runAbort.cancel();
     }
@@ -88,16 +135,17 @@ export async function runUltrawork({
   plugins,
   deadline,
   signal,
-}) {
+}: RunUltraworkOptions) {
   const promise = completionPromise || "the task is fully implemented and builds cleanly.";
   let currentTask = `${task}\n\n[ULTRAWORK] Completion promise: ${promise}`;
-  const history = [];
+  const history: RunAgentResult[] = [];
 
   for (let i = 1; i <= maxIterations; i++) {
     try {
       deadline?.throwIfExpired?.();
     } catch (err) {
-      return { verified: false, iterations: i - 1, verdict: { pass: false, reason: err?.message || String(err) }, history, finishReason: "timeout", errorMessage: err?.message || String(err) };
+      const message = asError(err).message;
+      return { verified: false, iterations: i - 1, verdict: { pass: false, reason: message }, history, finishReason: "timeout", errorMessage: message };
     }
     onEvent({ type: "ultrawork_iteration", iteration: i, max: maxIterations });
     const res = await runAgent({
@@ -149,7 +197,7 @@ export async function runUltrawork({
       verdict = await verifyFinish({ summary: res.finishSummary, cwd, verifyCommand, filesWritten: res.filesWritten, deadline, signal });
     } catch (err) {
       if (isDeadlineError(err) || deadline?.signal?.aborted || signal?.aborted) {
-        const message = abortReason(deadline?.signal || signal, err).message;
+        const message = abortReason(deadline?.signal || signal, asError(err)).message;
         return { verified: false, iterations: i, verdict: { pass: false, reason: message }, history, finishReason: "timeout", errorMessage: message };
       }
       throw err;

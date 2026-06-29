@@ -50,13 +50,36 @@ const BOX = {
 const PANEL_WIDTH = WORDMARK_WIDTH - 4; // panel total width aligns with the wordmark
 const LABEL_WIDTH = 9; // left-aligned label field (model/provider/cwd/...)
 
+export interface BannerGitInfo {
+  isRepo: boolean;
+  branch?: string | null;
+  root?: string | null;
+}
+
+export interface BannerSessionInfo {
+  id?: string | null;
+}
+
+export interface BannerOptions {
+  model?: string | null;
+  provider?: string | null;
+  cwd?: string | null;
+  git?: BannerGitInfo | null;
+  session?: BannerSessionInfo | null;
+  yolo?: boolean;
+  tier?: string | null;
+  tierReason?: string | null;
+  isTTY?: boolean;
+}
+
 // Visible-width helpers so styled rows (with raw ANSI codes) still pad to the
 // panel width. Escape sequences render as 0 cols but inflate String.length, and
 // some glyphs (⚡, emoji, CJK) render as 2 cols — both must be accounted for or
 // the panel's right border misaligns. This is a minimal wcwidth approximation:
 // emoji / dingbat / CJK ranges count as 2, everything else as 1.
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
-function isWide(cp) {
+function isWide(cp: number | undefined): boolean {
+  if (cp == null) return false;
   return (
     (cp >= 0x1100 && cp <= 0x115f) ||
     (cp >= 0x2e80 && cp <= 0xa4cf && cp !== 0x303f) ||
@@ -69,18 +92,18 @@ function isWide(cp) {
     (cp >= 0x2600 && cp <= 0x27bf) // misc symbols & dingbats (incl ⚡ U+26A1)
   );
 }
-function renderedWidth(s) {
+function renderedWidth(s: string): number {
   let w = 0;
   for (const ch of s.replace(ANSI_RE, "")) w += isWide(ch.codePointAt(0)) ? 2 : 1;
   return w;
 }
-function padVisible(s, width) {
+function padVisible(s: string, width: number): string {
   const v = renderedWidth(s);
   return v >= width ? s : s + " ".repeat(width - v);
 }
 
 /** Trailing-truncate `s` to a max RENDERED width, keeping the leading part + `…`. */
-function truncateToWidth(s, maxW) {
+function truncateToWidth(s: unknown, maxW: number): string {
   const str = String(s ?? "");
   if (renderedWidth(str) <= maxW) return str;
   if (maxW <= 1) return "…";
@@ -95,7 +118,7 @@ function truncateToWidth(s, maxW) {
   return acc + "…";
 }
 
-function centerVisible(s, width) {
+function centerVisible(s: string, width: number): string {
   const value = truncateToWidth(s, width);
   const v = renderedWidth(value);
   if (v >= width) return value;
@@ -104,12 +127,12 @@ function centerVisible(s, width) {
   return " ".repeat(left) + value + " ".repeat(right);
 }
 
-function cleanSegment(value) {
+function cleanSegment(value: unknown): string {
   return String(value ?? "").replace(/[|\r\n]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
 /** One `label  value` row, padded to exactly `width` rendered columns. */
-function fieldRow(label, value, width) {
+function fieldRow(label: string, value: unknown, width: number): string {
   const labelField = label ? String(label).padEnd(LABEL_WIDTH) : "";
   const valueField = truncateToWidth(value, width - renderedWidth(labelField));
   return padVisible(labelField + valueField, width);
@@ -140,7 +163,7 @@ export function renderBanner({
   tier,
   tierReason,
   isTTY,
-} = {}) {
+}: BannerOptions = {}): string {
   const m = model ?? "?";
   const p = provider ?? "?";
   const dir = cwd ?? "";
@@ -155,7 +178,7 @@ export function renderBanner({
     return `${parts.join(" | ")}\n`;
   }
 
-  const out = [];
+  const out: string[] = [];
   out.push(""); // leading blank line for breathing room
 
   // Wordmark with per-row cyan->gray gradient.
@@ -167,7 +190,7 @@ export function renderBanner({
 
   // Info panel.
   const b = BOX.tty;
-  const rows = [];
+  const rows: string[] = [];
   rows.push(fieldRow("model", m, PANEL_WIDTH));
   if (tier) rows.push(fieldRow("tier", tier, PANEL_WIDTH));
   if (tierReason) rows.push(fieldRow("guidance", tierReason, PANEL_WIDTH));

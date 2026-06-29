@@ -1,11 +1,11 @@
-// Unit tests for src/status.js — the on-demand `/status` renderer.
+// Unit tests for the on-demand `/status` renderer.
 //
 // Mirrors the purity contract of banner.test.mjs: renderStatus() must be a pure
 // function (no process reads, no stdout writes), return a string, emit ANSI only
 // under TTY, and stay a single zero-ANSI machine-readable line under non-TTY.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderStatus, ANSI_RE } from "../src/status.js";
+import { renderStatus, ANSI_RE } from "../dist/status.js";
 
 const base = {
   sessionId: "sess_abc123",

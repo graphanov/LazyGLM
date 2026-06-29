@@ -1,23 +1,56 @@
 import { truncate } from "./util.js";
+import type { Writable } from "node:stream";
 
 const GRAY = "\x1b[90m";
 const DIM = "\x1b[2m";
 const YELLOW = "\x1b[33m";
 const RESET = "\x1b[0m";
 
-export function createRunEventPrinter({ stdout = process.stdout, stderr = process.stderr, isTTY = stdout?.isTTY === true } = {}) {
+type OutputStream = Pick<Writable, "write"> & { isTTY?: boolean };
+
+type RunPrinterEvent = Record<string, unknown> & {
+  type?: string;
+  text?: string;
+  content?: string | null;
+  input?: string | null;
+  result?: string | null;
+  summary?: string | null;
+  reason?: string | null;
+  message?: string | null;
+  reasons?: unknown[];
+};
+
+export interface RunEventPrinterOptions {
+  stdout?: OutputStream;
+  stderr?: OutputStream;
+  isTTY?: boolean;
+}
+
+function textField(value: unknown): string {
+  return value == null ? "" : String(value);
+}
+
+function numberField(value: unknown): number {
+  return Number(value) || 0;
+}
+
+export function createRunEventPrinter({
+  stdout = process.stdout,
+  stderr = process.stderr,
+  isTTY = stdout?.isTTY === true,
+}: RunEventPrinterOptions = {}): (event: RunPrinterEvent) => void {
   const tty = isTTY === true;
   let streamOpen = false;
-  let streamMode = null; // "text" | "reasoning"
+  let streamMode: "text" | "reasoning" | null = null;
   let streamedText = false; // suppresses the assistant_text echo when deltas already showed it
 
-  const ansi = (code) => (tty ? code : "");
-  const writeOut = (text) => stdout.write(String(text));
-  const writeErr = (text) => stderr.write(String(text));
-  const lineOut = (text = "") => writeOut(`${text}\n`);
-  const lineErr = (text = "") => writeErr(`${text}\n`);
+  const ansi = (code: string): string => (tty ? code : "");
+  const writeOut = (text: unknown): boolean => stdout.write(String(text));
+  const writeErr = (text: unknown): boolean => stderr.write(String(text));
+  const lineOut = (text = ""): boolean => writeOut(`${text}\n`);
+  const lineErr = (text = ""): boolean => writeErr(`${text}\n`);
 
-  function closeStream() {
+  function closeStream(): void {
     if (streamOpen) {
       writeOut(`${ansi(RESET)}\n`);
       streamOpen = false;
@@ -25,12 +58,12 @@ export function createRunEventPrinter({ stdout = process.stdout, stderr = proces
     }
   }
 
-  function printEvent(ev) {
+  function printEvent(ev: RunPrinterEvent): void {
     switch (ev.type) {
       case "start":
         lineOut(`\n🚀 LazyGLM session ${ev.sessionId} | model: ${ev.model} | provider: ${ev.provider || "?"} | role: ${ev.role || "default"}`);
         lineOut(`   cwd: ${ev.cwd}`);
-        lineOut(`   task: ${truncate(ev.task, 200)}\n`);
+        lineOut(`   task: ${truncate(textField(ev.task), 200)}\n`);
         break;
       case "reasoning_delta":
         // Reasoning streams first (GLM-5.2 thinks before answering). Show it dimmed
@@ -44,7 +77,7 @@ export function createRunEventPrinter({ stdout = process.stdout, stderr = proces
           writeOut(`${ansi(RESET)}\n${ansi(GRAY)}✶ `);
           streamMode = "reasoning";
         }
-        writeOut(ev.text);
+        writeOut(textField(ev.text));
         break;
       case "assistant_delta":
         if (streamOpen && streamMode === "reasoning") {
@@ -56,7 +89,7 @@ export function createRunEventPrinter({ stdout = process.stdout, stderr = proces
         streamOpen = true;
         streamMode = "text";
         streamedText = true;
-        writeOut(ev.text);
+        writeOut(textField(ev.text));
         break;
       case "assistant_text":
         // Close any open stream line first.
@@ -78,10 +111,10 @@ export function createRunEventPrinter({ stdout = process.stdout, stderr = proces
         break;
       }
       case "tool_result":
-        lineOut(`   ↳ ${truncate(ev.result, 400)}`);
+        lineOut(`   ↳ ${truncate(textField(ev.result), 400)}`);
         break;
       case "blocked":
-        lineOut(`⛔ blocked ${ev.tool}: ${ev.reasons.join("; ")}`);
+        lineOut(`⛔ blocked ${ev.tool}: ${(Array.isArray(ev.reasons) ? ev.reasons : []).map(textField).join("; ")}`);
         break;
       case "retry":
         closeStream();
@@ -94,16 +127,21 @@ export function createRunEventPrinter({ stdout = process.stdout, stderr = proces
       case "usage": {
         // Surface reasoning-token spend — the GLM-native cost signal. Only print
         // when reasoning tokens are non-zero to avoid noise on non-reasoning tiers.
-        const cum = ev.cumulative || {};
-        const turnReasoning = ev.usage?.completion_tokens_details?.reasoning_tokens || ev.usage?.reasoning_tokens || 0;
-        if (turnReasoning > 0 || cum.reasoning > 0) {
-          lineOut(`${ansi(GRAY)}   🧠 reasoning: +${turnReasoning} (cum ${cum.reasoning || 0}) | tokens in/out: ${cum.prompt || 0}/${cum.completion || 0}${ansi(RESET)}`);
+        const cum = ev.cumulative && typeof ev.cumulative === "object" ? ev.cumulative as Record<string, unknown> : {};
+        const usage = ev.usage && typeof ev.usage === "object" ? ev.usage as Record<string, unknown> : {};
+        const details = usage.completion_tokens_details && typeof usage.completion_tokens_details === "object"
+          ? usage.completion_tokens_details as Record<string, unknown>
+          : {};
+        const turnReasoning = numberField(details.reasoning_tokens || usage.reasoning_tokens);
+        const cumulativeReasoning = numberField(cum.reasoning);
+        if (turnReasoning > 0 || cumulativeReasoning > 0) {
+          lineOut(`${ansi(GRAY)}   🧠 reasoning: +${turnReasoning} (cum ${cumulativeReasoning}) | tokens in/out: ${numberField(cum.prompt)}/${numberField(cum.completion)}${ansi(RESET)}`);
         }
         break;
       }
       case "finish":
         closeStream();
-        lineOut(`\n✅ FINISH: ${truncate(ev.summary, 1500)}\n`);
+        lineOut(`\n✅ FINISH: ${truncate(textField(ev.summary), 1500)}\n`);
         break;
       case "compact":
         lineOut(`   (context compacted — #${ev.compactionCount})`);
@@ -113,11 +151,11 @@ export function createRunEventPrinter({ stdout = process.stdout, stderr = proces
         lineOut(`\n🔁 ULTRAWORK iteration ${ev.iteration}/${ev.max}`);
         break;
       case "ultrawork_verify":
-        lineOut(`   verify: ${ev.pass ? "PASS ✅" : "FAIL ❌"} — ${truncate(ev.reason, 300)}`);
+        lineOut(`   verify: ${ev.pass ? "PASS ✅" : "FAIL ❌"} — ${truncate(textField(ev.reason), 300)}`);
         break;
       case "error":
         closeStream();
-        lineErr(`❌ error: ${ev.message}`);
+        lineErr(`❌ error: ${textField(ev.message)}`);
         break;
       default:
         break;

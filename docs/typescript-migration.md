@@ -46,7 +46,17 @@ The second migration phase converts the contract-heavy agent boundary modules to
 - `src/agent/tool-errors.ts`
 - `src/agent/adaptive-router.ts`
 
-These modules now consume shared contracts from `src/types/index.ts` directly. Provider wire JSON remains module-private typed data, and out-of-scope support modules (`context.js`, `deadline.js`, `thinking.js`) remain JavaScript compiled by the Phase 1 `allowJs` pipeline.
+These modules now consume shared contracts from `src/types/index.ts` directly. Provider wire JSON remains module-private typed data, while support modules are converted in the final CLI/REPL phase below.
+
+### Phase 5 — CLI, REPL, sessions, and runtime support modules
+
+The final runtime migration phase converts the remaining source JavaScript modules to TypeScript while preserving NodeNext `.js` import specifiers in source:
+
+- CLI, REPL, session, doctor, installer, update, onboarding, banner, status, and output helpers
+- `src/agent/context.ts`, `src/agent/deadline.ts`, and `src/agent/thinking.ts`
+- `src/prompt.ts` and `src/scaffold/handoff.ts`
+
+After this phase, no runtime `.js` source files remain under `src/`. The executable shim stays JavaScript at `bin/lazyglm.js` and continues to import compiled output from `dist/`.
 
 Tests that exercise converted boundaries import from `dist/` after `npm run build`, matching the package runtime boundary used by `bin/lazyglm.js`.
 
@@ -55,8 +65,8 @@ Tests that exercise converted boundaries import from `dist/` after `npm run buil
 These remain outside the Phase 1/2 work:
 
 - enabling `checkJs` globally;
-- converting agent support, hooks, config, MCP, plugin, installer, CLI, REPL, or test files to `.ts`;
-- typechecking additional JavaScript boundaries beyond the current converted agent boundary surface;
+- converting test files to `.ts`;
+- enabling typechecking for non-runtime JavaScript outside `src/`;
 - source maps for compiled stack traces;
 - changing `package.json` `engines` or version;
 - changing runtime behavior, model routing, hook semantics, tool calls, REPL UX, sessions, or publishing flow.

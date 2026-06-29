@@ -69,7 +69,7 @@ LazyGLM itself, not smoke tests around another agent.
 
 ### Compaction handoff digest
 
-`src/agent/context.js` compacts by pinning the original user task and replacing
+`src/agent/context.ts` compacts by pinning the original user task and replacing
 the dropped transcript middle with a deterministic digest. The digest is plain
 text and currently emits sections in this order when data exists:
 
@@ -129,23 +129,23 @@ handoff; correctness still comes from repo inspection, tests, and verification.
 
 ```text
 bin/lazyglm.js            CLI entrypoint
-src/cli.js                command dispatcher (run | chat/REPL | install | uninstall | doctor | models | skills | skill | hook)
-src/config.js             global user config (~/.lazyglm/config.json, chmod 600; key never in process.env)
-src/onboard.js            first-run onboarding (provider + key)
-src/repl.js               interactive REPL (streaming + tools + hooks + sessions)
-src/sessions.js           session persistence (JSONL under ~/.lazyglm/sessions/)
+src/cli.ts                command dispatcher (run | chat/REPL | install | uninstall | doctor | models | skills | skill | hook)
+src/config.ts             global user config (~/.lazyglm/config.json, chmod 600; key never in process.env)
+src/onboard.ts            first-run onboarding (provider + key)
+src/repl.ts               interactive REPL (streaming + tools + hooks + sessions)
+src/sessions.ts           session persistence (JSONL under ~/.lazyglm/sessions/)
 src/agent/
-  provider.js             OpenAI-compatible GLM provider (z.ai / Nous / Ollama / custom)
-  router.js               role -> model routing + provider-aware model IDs
-  tools.js                read_file, write_file, patch_file, list_dir, grep, run_shell, finish
-  runtime.js              one-shot tool-use loop: model -> tools -> hooks -> repeat until finish()
-  context.js              message bookkeeping + task-preserving compaction
+  provider.ts             OpenAI-compatible GLM provider (z.ai / Nous / Ollama / custom)
+  router.ts               role -> model routing + provider-aware model IDs
+  tools.ts                read_file, write_file, patch_file, list_dir, grep, run_shell, finish
+  runtime.ts              one-shot tool-use loop: model -> tools -> hooks -> repeat until finish()
+  context.ts              message bookkeeping + task-preserving compaction
 src/hooks/                hook engine + protocol schema
 src/plugins/              discipline plugins
 src/skills/               skill loader for `$command` invocations
-src/installer.js          `lazyglm install`
-src/doctor.js             provider/model/routing/plugin/skill health report
-src/ulw.js                Ultrawork verified-completion loop
+src/installer.ts          `lazyglm install`
+src/doctor.ts             provider/model/routing/plugin/skill health report
+src/ulw.ts                Ultrawork verified-completion loop
 config/model-catalog.json GLM models, providers, roles, context windows, reasoning effort
 ```
 

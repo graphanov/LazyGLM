@@ -7,6 +7,34 @@ import { join } from "node:path";
 import { mkdir, writeFile, readFile, rm, unlink } from "node:fs/promises";
 import { ensureDir, readJson, writeJson, gitInfo, looksLikeProject } from "./util.js";
 
+type InstallerConfig = Record<string, unknown> & {
+  installedAt?: string;
+  version?: string;
+  provider?: unknown;
+  model?: string;
+  gitignoreOwnedByLazyglm?: boolean;
+  gitignoreFileOwnedByLazyglm?: boolean;
+  agentsOwnedByLazyglm?: boolean;
+};
+
+interface InstallOptions {
+  cwd?: string;
+  force?: boolean;
+}
+
+interface InstallResult {
+  cwd: string;
+  created: string[];
+  git: ReturnType<typeof gitInfo>;
+  isProject: boolean;
+}
+
+interface UninstallResult {
+  cwd: string;
+  removed: string[];
+  preserved: string[];
+}
+
 const AGENTS_TEMPLATE = `# AGENTS.md
 
 This project uses **LazyGLM** — a GLM-native agent harness. Agents working in
@@ -33,19 +61,19 @@ this repo should follow the rules below.
 Add project-specific guidance below as the codebase grows.
 `;
 
-function isGitignoreEntry(line, entry) {
+function isGitignoreEntry(line: string, entry: string): boolean {
   return line.replace(/\r$/, "") === entry;
 }
 
-function gitignoreHasEntry(text, entry) {
+function gitignoreHasEntry(text: string, entry: string): boolean {
   return text.split("\n").some((line) => isGitignoreEntry(line, entry));
 }
 
-function asConfig(value) {
-  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+function asConfig(value: unknown): InstallerConfig {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as InstallerConfig : {};
 }
 
-async function configWithDefaults(config = {}) {
+async function configWithDefaults(config: InstallerConfig = {}): Promise<InstallerConfig> {
   config = asConfig(config);
   return {
     installedAt: config.installedAt || new Date().toISOString(),
@@ -56,9 +84,9 @@ async function configWithDefaults(config = {}) {
   };
 }
 
-export async function install({ cwd, force = false } = {}) {
+export async function install({ cwd, force = false }: InstallOptions = {}): Promise<InstallResult> {
   const dir = cwd || process.cwd();
-  const created = [];
+  const created: string[] = [];
 
   const lazyDir = join(dir, ".lazyglm");
   await ensureDir(lazyDir);
@@ -128,11 +156,11 @@ export async function install({ cwd, force = false } = {}) {
   return { cwd: dir, created, git: gitInfo(dir), isProject: looksLikeProject(dir) };
 }
 
-export async function uninstall({ cwd } = {}) {
+export async function uninstall({ cwd }: { cwd?: string } = {}): Promise<UninstallResult> {
   const dir = cwd || process.cwd();
   const lazyDir = join(dir, ".lazyglm");
-  const removed = [];
-  const preserved = [];
+  const removed: string[] = [];
+  const preserved: string[] = [];
 
   // Capture ownership BEFORE removing .lazyglm/, since config.json lives inside
   // that directory. install() records which artifacts it created; if a marker is
@@ -194,10 +222,10 @@ export async function uninstall({ cwd } = {}) {
   return { cwd: dir, removed, preserved };
 }
 
-async function readVersion() {
+async function readVersion(): Promise<string> {
   try {
-    const pkg = JSON.parse(await readFile(join(import.meta.dirname, "..", "package.json"), "utf8"));
-    return pkg.version;
+    const pkg = JSON.parse(await readFile(join(import.meta.dirname, "..", "package.json"), "utf8")) as { version?: string };
+    return pkg.version || "0.0.0";
   } catch {
     return "0.0.0";
   }

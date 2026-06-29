@@ -34,6 +34,23 @@ import { gitInfo, truncate } from "./util.js";
 import { renderBanner } from "./banner.js";
 import { renderStatus } from "./status.js";
 import { buildReplPrompt, modelTierGuidance } from "./prompt.js";
+import type { ContextMessage } from "./agent/context.js";
+import type { SessionInfo } from "./sessions.js";
+import type {
+  ChatCompletion,
+  ChatUsage,
+  EffectiveBundle,
+  FinishToolResult,
+  ModelCatalog,
+  Provider,
+  ProviderConfig,
+  RoleName,
+  RoutingDecision,
+  SessionRecord,
+  StreamDelta,
+  ToolCall,
+  ToolHandlerResult,
+} from "./types/index.js";
 
 const GRAY = "\x1b[90m";
 const DIM = "\x1b[2m";
@@ -50,20 +67,62 @@ const TOOL_DIVIDER_RULE = "─".repeat(18);
 const TURN_RULE_WIDTH = 60;
 const TURN_RULE = "─".repeat(TURN_RULE_WIDTH);
 
-function ansi(code, { isTTY = true } = {}) {
+interface RenderOptions {
+  isTTY?: boolean;
+}
+
+interface TokenCounts {
+  prompt: number;
+  completion: number;
+  reasoning: number;
+}
+
+interface LaunchFlags {
+  continue?: boolean;
+  yolo?: boolean;
+  model?: string;
+  provider?: Provider;
+  role?: RoleName;
+  contextBudget?: number;
+}
+
+interface LaunchOptions {
+  cwd?: string;
+  flags?: LaunchFlags;
+}
+
+interface ContextBudgetCommandOptions {
+  model?: string | null;
+  catalog?: ModelCatalog;
+  manualBudget?: number | null;
+}
+
+type ContextBudgetCommandResult =
+  | { error: string; budget?: undefined; manualBudget?: undefined; mode?: undefined; action?: undefined }
+  | { budget: number; manualBudget: number | null; mode: "manual" | "catalog"; action: "show" | "set"; error?: undefined };
+
+interface TurnSummary {
+  hadError: boolean;
+  wroteFiles: boolean;
+  explicitComplexity: boolean;
+}
+
+type PromptSignal = ReturnType<typeof observePromptIntake>;
+
+function ansi(code: string, { isTTY = true }: RenderOptions = {}): string {
   return isTTY ? code : "";
 }
 
-function routingBundleLabel(bundle) {
+function routingBundleLabel(bundle: EffectiveBundle): string {
   return `${bundle.model}/${bundle.reasoningEffort}`;
 }
 
-export function formatRoutingNotice(decision, opts = {}) {
+export function formatRoutingNotice(decision: RoutingDecision, opts: RenderOptions = {}): string {
   const text = `routing: ${routingBundleLabel(decision.from)} -> ${routingBundleLabel(decision.to)} (${decision.reason})`;
   return `${ansi(CYAN, opts)}${text}${ansi(RESET, opts)}`;
 }
 
-function displayValue(value) {
+function displayValue(value: unknown): string {
   if (value === undefined || value === null) return "";
   if (typeof value === "string") return value;
   try {
@@ -73,33 +132,54 @@ function displayValue(value) {
   }
 }
 
-export function formatReasoning(text = "", opts = {}) {
+export function formatReasoning(text = "", opts: RenderOptions = {}): string {
   return `${ansi(GRAY, opts)}✶ ${text}`;
 }
 
-export function formatText(text = "") {
+export function formatText(text = ""): string {
   return `💬 ${text}`;
 }
 
-export function formatToolCall(name, args = "", opts = {}) {
+export function formatToolCall(name: string | null | undefined, args: unknown = "", opts: RenderOptions = {}): string {
   const argText = truncate(displayValue(args), 100);
   return `${TOOL_INDENT}${ansi(CYAN, opts)}🔧 ${name}${ansi(RESET, opts)}${ansi(DIM, opts)}(${argText})${ansi(RESET, opts)}`;
 }
 
-export function formatToolResult(result = "", opts = {}) {
+export function formatToolResult(result: unknown = "", opts: RenderOptions = {}): string {
   const preview = truncate(displayValue(result), 400).replace(/\n/g, `\n${TOOL_INDENT}${ansi(GREEN, opts)}`);
   return `${TOOL_INDENT}${ansi(GREEN, opts)}↳ ${preview}${ansi(RESET, opts)}`;
 }
 
-export function turnDivider(opts = {}) {
+export function turnDivider(opts: RenderOptions = {}): string {
   return `${TOOL_INDENT}${ansi(DIM, opts)}${TOOL_DIVIDER_RULE} tools ${TOOL_DIVIDER_RULE}${ansi(RESET, opts)}`;
 }
 
-export function formatExitMarker(opts = {}) {
+export function formatExitMarker(opts: RenderOptions = {}): string {
   return `${ansi(DIM, opts)}bye.${ansi(RESET, opts)}`;
 }
 
-export function formatCost(cumulative = {}, lastTurn = null, opts = {}) {
+function usageFromUnknown(value: unknown): TokenCounts {
+  const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  return {
+    prompt: Number(record.prompt || 0) || 0,
+    completion: Number(record.completion || 0) || 0,
+    reasoning: Number(record.reasoning || 0) || 0,
+  };
+}
+
+function reasoningTokens(usage: ChatUsage | null | undefined): number {
+  return Number(usage?.completion_tokens_details?.reasoning_tokens || usage?.reasoning_tokens || 0) || 0;
+}
+
+function toErrorMessage(err: unknown): string {
+  return err && typeof err === "object" && "message" in err ? String((err as { message?: unknown }).message) : String(err);
+}
+
+function isFinishResult(value: unknown): value is FinishToolResult {
+  return !!value && typeof value === "object" && (value as { __finish?: unknown }).__finish === true;
+}
+
+export function formatCost(cumulative: Partial<TokenCounts> = {}, lastTurn: Partial<TokenCounts> | null = null, opts: RenderOptions = {}): string {
   const c = cumulative && typeof cumulative === "object" ? cumulative : {};
   const lt = lastTurn && typeof lastTurn === "object" ? lastTurn : {};
   const lastPrompt = lt.prompt || 0;
@@ -132,39 +212,42 @@ export function formatCost(cumulative = {}, lastTurn = null, opts = {}) {
 // above and below the turn (symmetric). Non-TTY: a plain `> text` echo with
 // zero ANSI and no rule, so piped output stays clean + parseable. The existing
 // `── tools ──` divider nests inside this frame and is left untouched.
-export function turnRule({ isTTY = true } = {}) {
+export function turnRule({ isTTY = true }: RenderOptions = {}): string {
   return isTTY ? `${DIM}${TURN_RULE}${RESET}` : "";
 }
 
-export function stripControlSequences(text = "") {
+export function stripControlSequences(text = ""): string {
   return String(text).replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])|[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
 }
 
-export function turnStart(userText, { isTTY = true } = {}) {
+export function turnStart(userText: unknown, { isTTY = true }: RenderOptions = {}): string {
   if (!isTTY) {
     // Single-line truncation: the shared truncate() inserts a newline before
     // its marker, which would break the "standalone `> text` line" contract
     // for piped output. Use a flat inline marker instead.
-    const clean = stripControlSequences(userText ?? "");
+    const clean = stripControlSequences(String(userText ?? ""));
     const display = clean.length > 100 ? clean.slice(0, 100) + "…" : clean;
     return `> ${display}\n`;
   }
   return `\n${turnRule({ isTTY })}\n`;
 }
 
-export function turnEnd({ isTTY = true } = {}) {
+export function turnEnd({ isTTY = true }: RenderOptions = {}): string {
   if (!isTTY) return "";
   return `${turnRule({ isTTY })}\n\n`;
 }
 
-export function parseContextBudgetInput(value) {
+export function parseContextBudgetInput(value: unknown): number | null {
   if (value === undefined || value === null || value === "") return null;
   const normalized = String(value).replace(/_/g, "");
   const n = Number(normalized);
   return Number.isInteger(n) && n > 0 ? n : null;
 }
 
-export function resolveContextBudgetCommand(argStr, { model, catalog, manualBudget = null } = {}) {
+export function resolveContextBudgetCommand(
+  argStr: unknown,
+  { model, catalog, manualBudget = null }: ContextBudgetCommandOptions = {},
+): ContextBudgetCommandResult {
   const arg = String(argStr || "").trim();
   const derivedBudget = () => resolveContextBudget(model, catalog);
   if (!arg) {
@@ -180,7 +263,7 @@ export function resolveContextBudgetCommand(argStr, { model, catalog, manualBudg
   return { budget: parsed, manualBudget: parsed, mode: "manual", action: "set" };
 }
 
-export function hasManualRoutingOverride(flags = {}) {
+export function hasManualRoutingOverride(flags: Partial<LaunchFlags> = {}): boolean {
   return !!(flags.model || flags.role);
 }
 
@@ -193,22 +276,27 @@ export function hasManualRoutingOverride(flags = {}) {
  * up front and are handed out in order.
  */
 class LineQueue {
-  constructor({ input, output }) {
+  lines: string[];
+  waiters: Array<(line: string | null) => void>;
+  closed: boolean;
+  rl: readline.Interface;
+
+  constructor({ input, output }: { input: NodeJS.ReadableStream; output: NodeJS.WritableStream }) {
     this.lines = [];
     this.waiters = [];
     this.closed = false;
     this.rl = readline.createInterface({ input, output });
-    this.rl.on("line", (line) => {
-      if (this.waiters.length) this.waiters.shift()(line);
+    this.rl.on("line", (line: string) => {
+      if (this.waiters.length) this.waiters.shift()?.(line);
       else this.lines.push(line);
     });
     this.rl.on("close", () => {
       this.closed = true;
-      while (this.waiters.length) this.waiters.shift()(null);
+      while (this.waiters.length) this.waiters.shift()?.(null);
     });
   }
-  next() {
-    if (this.lines.length) return Promise.resolve(this.lines.shift());
+  next(): Promise<string | null> {
+    if (this.lines.length) return Promise.resolve(this.lines.shift() ?? null);
     if (this.closed) return Promise.resolve(null);
     return new Promise((resolve) => this.waiters.push(resolve));
   }
@@ -216,27 +304,27 @@ class LineQueue {
 
 // --- streaming renderer (shared across REPL turns and /ultrawork) ---
 let streamOpen = false;
-let streamMode = null; // "text" | "reasoning"
+let streamMode: "text" | "reasoning" | null = null;
 let toolDividerShown = false;
-let toolDividerKey = null;
+let toolDividerKey: string | null = null;
 
-function renderOpts() {
+function renderOpts(): RenderOptions {
   return { isTTY: process.stdout.isTTY === true };
 }
 
-function resetTurnDivider(key = null) {
+function resetTurnDivider(key: string | null = null): void {
   toolDividerKey = key;
   toolDividerShown = false;
 }
 
-function writeTurnDivider(key = toolDividerKey) {
+function writeTurnDivider(key: string | null = toolDividerKey): void {
   if (key !== toolDividerKey) resetTurnDivider(key);
   if (toolDividerShown) return;
   toolDividerShown = true;
   if (process.stdout.isTTY === true) process.stdout.write(`${turnDivider(renderOpts())}\n`);
 }
 
-function closeStream() {
+function closeStream(): void {
   if (streamOpen) {
     process.stdout.write(ansi(RESET, renderOpts()) + "\n");
     streamOpen = false;
@@ -244,7 +332,7 @@ function closeStream() {
   }
 }
 
-function renderDelta(d) {
+function renderDelta(d: StreamDelta): void {
   const opts = renderOpts();
   if (d.type === "reasoning") {
     if (!streamOpen) {
@@ -269,34 +357,35 @@ function renderDelta(d) {
   }
 }
 
-function extractQuoted(s) {
+function extractQuoted(s: string): string | null {
   const m = s.match(/"([^"]*)"/);
   return m ? m[1] : null;
 }
-function extractFlag(s, flag) {
+function extractFlag(s: string, flag: string): string | null {
   const re = new RegExp(`--${flag}\\s+"([^"]*)"`);
   const m = s.match(re);
   return m ? m[1] : null;
 }
 
-export function replPromptTarget({ stdinIsTTY, stdoutIsTTY } = {}) {
+export function replPromptTarget({ stdinIsTTY, stdoutIsTTY }: { stdinIsTTY?: boolean; stdoutIsTTY?: boolean } = {}): "stdout" | "stderr" | null {
   if (stdoutIsTTY) return "stdout";
   if (stdinIsTTY) return "stderr";
   return null;
 }
 
 /** Rebuild a Context's messages from a session's event records. */
-export function replayIntoContext(events, ctx) {
+export function replayIntoContext(events: SessionRecord[], ctx: Context): void {
   for (const ev of events) {
     if (ev.type === "user") {
-      ctx.push({ role: "user", content: ev.content });
+      ctx.push({ role: "user", content: String(ev.content ?? "") });
     } else if (ev.type === "assistant") {
-      const m = { role: "assistant", content: ev.content || "" };
+      const m: ContextMessage = { role: "assistant", content: String(ev.content || "") };
       // Restore GLM preserved thinking so resumed sessions replay prior
       // reasoning_content across turns (the provider gates the wire payload).
-      if (ev.reasoning_content) m.reasoning_content = ev.reasoning_content;
-      if (ev.tool_calls && ev.tool_calls.length) {
-        m.tool_calls = ev.tool_calls.map((tc) => ({
+      if (ev.reasoning_content) m.reasoning_content = String(ev.reasoning_content);
+      const toolCalls = Array.isArray(ev.tool_calls) ? ev.tool_calls as ToolCall[] : [];
+      if (toolCalls.length) {
+        m.tool_calls = toolCalls.map((tc) => ({
           id: tc.id,
           type: "function",
           function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
@@ -304,7 +393,7 @@ export function replayIntoContext(events, ctx) {
       }
       ctx.push(m);
     } else if (ev.type === "tool") {
-      ctx.push({ role: "tool", tool_call_id: ev.tool_call_id, content: ev.content });
+      ctx.push({ role: "tool", tool_call_id: ev.tool_call_id, content: String(ev.content ?? "") });
     }
     // session / usage / compact / log records are not part of the message history
   }
@@ -317,11 +406,11 @@ export function replayIntoContext(events, ctx) {
  *
  * @returns {{ cumulative: object, lastTurn: object|null, sessionStartMs: number }}
  */
-export function replayTelemetry(events) {
+export function replayTelemetry(events: SessionRecord[] = []): { cumulative: TokenCounts; lastTurn: TokenCounts | null; sessionStartMs: number } {
   const cumulative = { prompt: 0, completion: 0, reasoning: 0 };
-  let lastTurn = null;
+  let lastTurn: TokenCounts | null = null;
   let sessionStartMs = Date.now();
-  for (const ev of events || []) {
+  for (const ev of events) {
     if (ev.type === "session" && ev.t) {
       const ms = Date.parse(ev.t);
       if (!Number.isNaN(ms)) sessionStartMs = ms;
@@ -332,13 +421,13 @@ export function replayTelemetry(events) {
       // resumed before the telemetry-restore patch persisted cumulative
       // snapshots that restarted from zero, so last-one-wins would under-report
       // the true session total for those legacy histories.
-      const u = ev.usage;
+      const u = ev.usage && typeof ev.usage === "object" ? ev.usage as ChatUsage : null;
       if (u && typeof u === "object") {
-        const reasoning = u.completion_tokens_details?.reasoning_tokens || u.reasoning_tokens || 0;
-        cumulative.prompt += u.prompt_tokens || 0;
-        cumulative.completion += u.completion_tokens || 0;
+        const reasoning = reasoningTokens(u);
+        cumulative.prompt += Number(u.prompt_tokens || 0) || 0;
+        cumulative.completion += Number(u.completion_tokens || 0) || 0;
         cumulative.reasoning += reasoning;
-        lastTurn = { prompt: u.prompt_tokens || 0, completion: u.completion_tokens || 0, reasoning };
+        lastTurn = { prompt: Number(u.prompt_tokens || 0) || 0, completion: Number(u.completion_tokens || 0) || 0, reasoning };
       }
     }
   }
@@ -346,17 +435,17 @@ export function replayTelemetry(events) {
 }
 
 /** Render runAgent / runUltrawork events into the REPL (compact). */
-function renderUltraworkEvent(ev) {
+function renderUltraworkEvent(ev: Record<string, unknown> & { type?: string }): void {
   switch (ev.type) {
     case "start":
       resetTurnDivider("ultrawork:start");
-      console.log(`\n🚀 iteration start | model: ${ev.model} | task: ${truncate(ev.task, 120)}`);
+      console.log(`\n🚀 iteration start | model: ${ev.model} | task: ${truncate(String(ev.task ?? ""), 120)}`);
       break;
     case "reasoning_delta":
-      renderDelta({ type: "reasoning", text: ev.text });
+      renderDelta({ type: "reasoning", text: String(ev.text ?? "") });
       break;
     case "assistant_delta":
-      renderDelta({ type: "text", text: ev.text });
+      renderDelta({ type: "text", text: String(ev.text ?? "") });
       break;
     case "tool_call_start":
       closeStream();
@@ -364,7 +453,7 @@ function renderUltraworkEvent(ev) {
     case "tool_call":
       closeStream();
       writeTurnDivider(ev.turn === undefined ? "ultrawork" : `ultrawork:${ev.turn}`);
-      console.log(formatToolCall(ev.name, ev.input, renderOpts()));
+      console.log(formatToolCall(String(ev.name ?? "unknown"), ev.input, renderOpts()));
       break;
     case "tool_result":
       console.log(formatToolResult(ev.result, renderOpts()));
@@ -375,14 +464,14 @@ function renderUltraworkEvent(ev) {
       break; // per-turn usage is noisy; /cost shows the cumulative total
     case "finish":
       closeStream();
-      console.log(`${GREEN}   ✅ ${truncate(ev.summary, 400)}${RESET}`);
+      console.log(`${GREEN}   ✅ ${truncate(String(ev.summary ?? ""), 400)}${RESET}`);
       break;
     case "ultrawork_iteration":
       closeStream();
       console.log(`\n${CYAN}🔁 iteration ${ev.iteration}/${ev.max}${RESET}`);
       break;
     case "ultrawork_verify":
-      console.log(`   verify: ${ev.pass ? GREEN + "PASS ✅" : YELLOW + "FAIL ❌"}${RESET} — ${truncate(ev.reason, 200)}`);
+      console.log(`   verify: ${ev.pass ? GREEN + "PASS ✅" : YELLOW + "FAIL ❌"}${RESET} — ${truncate(String(ev.reason ?? ""), 200)}`);
       break;
     case "retry":
       closeStream();
@@ -392,7 +481,7 @@ function renderUltraworkEvent(ev) {
       console.log(`${DIM}   (compacted #${ev.compactionCount})${RESET}`);
       break;
     case "blocked":
-      console.log(`${YELLOW}   ⛔ ${ev.tool}: ${ev.reasons.join("; ")}${RESET}`);
+      console.log(`${YELLOW}   ⛔ ${ev.tool}: ${(Array.isArray(ev.reasons) ? ev.reasons : []).map(String).join("; ")}${RESET}`);
       break;
     case "error":
       closeStream();
@@ -407,7 +496,7 @@ function renderUltraworkEvent(ev) {
  * Launch the interactive REPL.
  * @param {object} opts - { cwd, flags: { continue, yolo, model, provider } }
  */
-export async function launchREPL({ cwd, flags = {} } = {}) {
+export async function launchREPL({ cwd, flags = {} }: LaunchOptions = {}): Promise<number> {
   const dir = cwd || process.cwd();
 
   // Shared line queue over stdin — used by onboarding (if it runs) and the REPL.
@@ -421,23 +510,23 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
   if (await needsOnboarding()) {
     try {
       await runOnboarding({ queue, output: process.stdout });
-    } catch (e) {
-      console.error(`\n❌ ${e.message}`);
+    } catch (e: unknown) {
+      console.error(`\n❌ ${toErrorMessage(e)}`);
       process.exit(1);
     }
   }
 
   // 2. Resolve provider config (env > config file > catalog default)
-  let providerConfig;
+  let providerConfig: ProviderConfig;
   try {
     providerConfig = await resolveProviderConfig({ model: flags.model, provider: flags.provider, role: flags.role || "default" });
-  } catch (e) {
-    console.error(`\n❌ ${e.message}`);
+  } catch (e: unknown) {
+    console.error(`\n❌ ${toErrorMessage(e)}`);
     process.exit(1);
   }
   let currentModel = providerConfig.modelId;
-  const catalog = await loadCatalog();
-  let manualContextBudget = Number.isInteger(flags.contextBudget) && flags.contextBudget > 0 ? flags.contextBudget : null;
+  const catalog: ModelCatalog = await loadCatalog();
+  let manualContextBudget = typeof flags.contextBudget === "number" && Number.isInteger(flags.contextBudget) && flags.contextBudget > 0 ? flags.contextBudget : null;
   let contextBudget = manualContextBudget ?? resolveContextBudget(providerConfig.model, catalog);
   const adaptiveState = createAdaptiveRoutingState({ manualOverride: hasManualRoutingOverride(flags) });
 
@@ -458,7 +547,7 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
   const gi = gitInfo(dir);
   const ctx = new Context({ model: currentModel, budget: contextBudget, preserveThinking: shouldPreserveThinking(providerConfig.provider) });
   const startRes = await engine.fire("SessionStart", {});
-  const activeModelInfo = () => {
+  const activeModelInfo = (): { tier?: string; description?: string; contextWindow?: number; tierReason: string } => {
     const entry = findCatalogModelEntry(providerConfig.model || currentModel, catalog) || findCatalogModelEntry(currentModel, catalog);
     const tier = entry?.tier;
     const description = entry?.description;
@@ -466,7 +555,7 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
     const tierReason = modelTierGuidance({ tier, description });
     return { tier, description, contextWindow, tierReason };
   };
-  const refreshSystemPrompt = () => {
+  const refreshSystemPrompt = (): void => {
     const info = activeModelInfo();
     ctx.setSystem(buildReplPrompt({
       cwd: dir,
@@ -484,14 +573,14 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
   engine.setMeta({ model: currentModel, transcriptPath: null, permissionMode: yolo ? "yolo" : "auto" });
 
   // 6. Cost tracking
-  const cumulative = { prompt: 0, completion: 0, reasoning: 0 };
+  const cumulative: TokenCounts = { prompt: 0, completion: 0, reasoning: 0 };
   // Last-turn usage + timing snapshot, surfaced by /status. lastTurn is null
   // until the first turn completes; lastTurnMs includes retry backoff (wall-clock
   // around chat()), so it is a human-facing figure, not a latency benchmark.
-  let lastTurn = null;
-  let lastTurnMs = null;
+  let lastTurn: TokenCounts | null = null;
+  let lastTurnMs: number | null = null;
   let sessionStartMs = Date.now();
-  const restoreTelemetry = (events) => {
+  const restoreTelemetry = (events: SessionRecord[]): void => {
     const restored = replayTelemetry(events);
     cumulative.prompt = restored.cumulative.prompt;
     cumulative.completion = restored.cumulative.completion;
@@ -505,7 +594,7 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
   };
 
   // 7. Session (--continue resumes the last session file; otherwise fresh)
-  let session;
+  let session: SessionInfo | null = null;
   if (flags.continue) {
     const last = await lastSession();
     if (last) {
@@ -541,14 +630,14 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
     }),
   );
 
-  const resolveRoutingCandidate = async (role) => {
+  const resolveRoutingCandidate = async (role: RoleName): Promise<{ config: ProviderConfig; bundle: EffectiveBundle }> => {
     const config = await resolveProviderConfig({ provider: flags.provider, role });
     return { config, bundle: effectiveBundleFromProviderConfig(config, catalog) };
   };
 
-  const currentRoutingBundle = async () => effectiveBundleFromProviderConfig(providerConfig, catalog);
+  const currentRoutingBundle = async (): Promise<EffectiveBundle> => effectiveBundleFromProviderConfig(providerConfig, catalog);
 
-  const applyRoutingDecision = async (decision, nextConfig) => {
+  const applyRoutingDecision = async (decision: RoutingDecision | null, nextConfig: ProviderConfig): Promise<boolean> => {
     if (!decision) return false;
     providerConfig = nextConfig;
     currentModel = nextConfig.modelId;
@@ -571,7 +660,7 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
     return true;
   };
 
-  const maybeRouteForPrompt = async (signal) => {
+  const maybeRouteForPrompt = async (signal: PromptSignal): Promise<boolean> => {
     if (adaptiveState.manualOverride) return false;
     const currentBundle = await currentRoutingBundle();
     const candidate = await resolveRoutingCandidate(signal.role);
@@ -584,7 +673,7 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
     return applyRoutingDecision(decision, candidate.config);
   };
 
-  const maybeRouteForToolResult = async () => {
+  const maybeRouteForToolResult = async (): Promise<boolean> => {
     if (adaptiveState.manualOverride) return false;
     const currentBundle = await currentRoutingBundle();
     const candidate = await resolveRoutingCandidate(highRole());
@@ -596,7 +685,7 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
     return applyRoutingDecision(decision, candidate.config);
   };
 
-  const maybeRouteAfterUserTurn = async (turnSummary) => {
+  const maybeRouteAfterUserTurn = async (turnSummary: Partial<TurnSummary>): Promise<boolean> => {
     if (adaptiveState.manualOverride) return false;
     const currentBundle = await currentRoutingBundle();
     const candidate = await resolveRoutingCandidate("quick");
@@ -610,7 +699,7 @@ export async function launchREPL({ cwd, flags = {} } = {}) {
   };
 
   // --- slash commands (closure over mutable REPL state) ---
-  const handleSlash = async (input) => {
+  const handleSlash = async (input: string): Promise<"exit" | void> => {
     const body = input.slice(1);
     const sp = body.indexOf(" ");
     const cmd = (sp >= 0 ? body.slice(0, sp) : body).toLowerCase();
@@ -664,8 +753,8 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
           const info = activeModelInfo();
           const tierNote = info.tier ? ` | tier: ${info.tier}${info.tierReason ? ` - ${info.tierReason}` : ""}` : "";
           console.log(`${GREEN}   ✓ model: ${currentModel}${tierNote}${RESET}`);
-        } catch (e) {
-          console.log(`${YELLOW}   ✗ ${e.message}${RESET}`);
+        } catch (e: unknown) {
+          console.log(`${YELLOW}   ✗ ${toErrorMessage(e)}${RESET}`);
         }
         return;
       }
@@ -675,7 +764,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
           catalog,
           manualBudget: manualContextBudget,
         });
-        if (res.error) {
+        if (res.error !== undefined) {
           console.log(`${YELLOW}   ${res.error}${RESET}`);
           return;
         }
@@ -803,7 +892,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
           config: ultraConfig,
           budget: ultraBudget,
           completionPromise,
-          verifyCommand,
+          verifyCommand: verifyCommand ?? undefined,
           maxIterations: 3,
           maxTurns: 60,
           onEvent: renderUltraworkEvent,
@@ -827,8 +916,8 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
   // displayText: the raw user input as typed, used ONLY for the non-TTY `> text`
   // echo so piped output logs the user's command rather than the expanded skill
   // body. Defaults to userContent for non-skill turns. (PR #26 Codex P2.)
-  const runAgentTurn = async (userContent, displayText = userContent) => {
-    const turnSummary = {
+  const runAgentTurn = async (userContent: string, displayText = userContent): Promise<TurnSummary> => {
+    const turnSummary: TurnSummary = {
       hadError: false,
       wroteFiles: false,
       explicitComplexity: adaptiveState.explicitComplexityInCurrentUserTurn,
@@ -855,7 +944,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
         },
       });
 
-      let resp;
+      let resp: ChatCompletion;
       const turnStartMs = Date.now();
       try {
         resp = await chat({
@@ -864,15 +953,15 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
           tools: TOOL_SPECS,
           config: providerConfig,
           onDelta: renderDelta,
-          onRetry: (r) => {
+          onRetry: (r: { attempt: number; reason: string; delay: number }) => {
             closeStream();
             process.stdout.write(`${YELLOW}   ⏳ retry ${r.attempt}: ${r.reason} (${r.delay}ms)${RESET}\n`);
           },
         });
-      } catch (err) {
+      } catch (err: unknown) {
         closeStream();
         turnSummary.hadError = true;
-        process.stdout.write(`\n${YELLOW}❌ ${err.message}${RESET}\n`);
+        process.stdout.write(`\n${YELLOW}❌ ${toErrorMessage(err)}${RESET}\n`);
         process.stdout.write(turnEnd(renderOpts()));
         return turnSummary;
       }
@@ -881,11 +970,11 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
 
       ctx.recordUsage(resp.usage);
       const u = resp.usage || {};
-      const reasoning = u.completion_tokens_details?.reasoning_tokens || u.reasoning_tokens || 0;
-      cumulative.prompt += u.prompt_tokens || 0;
-      cumulative.completion += u.completion_tokens || 0;
+      const reasoning = reasoningTokens(u);
+      cumulative.prompt += Number(u.prompt_tokens || 0) || 0;
+      cumulative.completion += Number(u.completion_tokens || 0) || 0;
       cumulative.reasoning += reasoning;
-      lastTurn = { prompt: u.prompt_tokens || 0, completion: u.completion_tokens || 0, reasoning };
+      lastTurn = { prompt: Number(u.prompt_tokens || 0) || 0, completion: Number(u.completion_tokens || 0) || 0, reasoning };
       await appendEvent(session, { type: "usage", usage: u, cumulative: { ...cumulative } });
 
       closeStream();
@@ -911,13 +1000,14 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
       writeTurnDivider();
       let finished = false;
       for (const tc of resp.tool_calls) {
-        const handler = TOOL_HANDLERS[tc.name];
+        const toolName = String(tc.name);
+        const handler = TOOL_HANDLERS[toolName];
         if (!handler) {
-          const m = `Error: unknown tool '${tc.name}'. Available: read_file, write_file, patch_file, list_dir, grep, run_shell, finish.`;
+          const m = `Error: unknown tool '${toolName}'. Available: read_file, write_file, patch_file, list_dir, grep, run_shell, finish.`;
           ctx.push({ role: "tool", tool_call_id: tc.id, content: m });
-          await appendEvent(session, { type: "tool", tool_call_id: tc.id, name: tc.name, content: m });
+          await appendEvent(session, { type: "tool", tool_call_id: tc.id, name: toolName, content: m });
           const signal = observeToolResult(adaptiveState, {
-            toolName: tc.name,
+            toolName,
             toolInput: tc.arguments,
             result: m,
           });
@@ -927,19 +1017,19 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
           continue;
         }
         const pre = await engine.fire("PreToolUse", {
-          tool_name: tc.name,
+          tool_name: toolName,
           tool_input: tc.arguments,
           tool_use_id: tc.id,
         });
-        let resultStr;
+        let resultStr: string;
         if (pre.blocks.length) {
           resultStr = `Blocked by hook:\n${pre.blocks.join("\n")}`;
-          process.stdout.write(`${TOOL_INDENT}${ansi(YELLOW, renderOpts())}⛔ ${tc.name} blocked: ${pre.blocks.join("; ")}${ansi(RESET, renderOpts())}\n`);
+          process.stdout.write(`${TOOL_INDENT}${ansi(YELLOW, renderOpts())}⛔ ${toolName} blocked: ${pre.blocks.join("; ")}${ansi(RESET, renderOpts())}\n`);
           // PreToolUse block is a failed tool outcome from the adaptive-routing
           // perspective: no tool actually ran, so count it toward errorStreak
           // so repeated denials can trigger recovery escalation.
           const signal = observeToolResult(adaptiveState, {
-            toolName: tc.name,
+            toolName,
             toolInput: tc.arguments,
             result: resultStr,
           });
@@ -947,19 +1037,19 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
           turnSummary.wroteFiles = turnSummary.wroteFiles || signal.wroteFile;
           await maybeRouteForToolResult();
         } else {
-          process.stdout.write(`${formatToolCall(tc.name, tc.arguments, renderOpts())}\n`);
-          let result;
+          process.stdout.write(`${formatToolCall(toolName, tc.arguments, renderOpts())}\n`);
+          let result: ToolHandlerResult;
           let handlerThrew = false;
           try {
             result = await handler(tc.arguments, {
               cwd: dir,
-              runtime: { engine, ctx, log: async (o) => appendEvent(session, { type: "log", ...o }) },
+              runtime: { engine, ctx, log: async (o: Record<string, unknown>) => appendEvent(session, { type: "log", ...o }) },
             });
-          } catch (err) {
+          } catch (err: unknown) {
             handlerThrew = true;
-            result = `Error executing ${tc.name}: ${err?.message || err}`;
+            result = `Error executing ${toolName}: ${toErrorMessage(err)}`;
           }
-          if (result && result.__finish) {
+          if (isFinishResult(result)) {
             finished = true;
             resultStr = `finish: ${result.summary}`;
             process.stdout.write(`${TOOL_INDENT}${ansi(GREEN, renderOpts())}✅ ${result.summary}${ansi(RESET, renderOpts())}\n`);
@@ -968,7 +1058,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
             process.stdout.write(`${formatToolResult(resultStr, renderOpts())}\n`);
           }
           const post = await engine.fire("PostToolUse", {
-            tool_name: tc.name,
+            tool_name: toolName,
             tool_input: tc.arguments,
             tool_response: resultStr,
             tool_use_id: tc.id,
@@ -976,7 +1066,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
           if (post.blocks.length) resultStr += `\n\n[hook feedback — address] ${post.blocks.join(" | ")}`;
           if (post.feedbacks.length) resultStr += `\n\n[hook note] ${post.feedbacks.join(" | ")}`;
           const signal = observeToolResult(adaptiveState, {
-            toolName: tc.name,
+            toolName,
             toolInput: tc.arguments,
             result: resultStr,
             handlerThrew,
@@ -986,7 +1076,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
           await maybeRouteForToolResult();
         }
         ctx.push({ role: "tool", tool_call_id: tc.id, content: resultStr });
-        await appendEvent(session, { type: "tool", tool_call_id: tc.id, name: tc.name, content: truncate(resultStr, 2000) });
+        await appendEvent(session, { type: "tool", tool_call_id: tc.id, name: toolName, content: truncate(resultStr, 2000) });
         if (finished) break;
       }
       if (finished) {
@@ -1006,7 +1096,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
     return turnSummary;
   };
 
-  const handleLine = async (raw) => {
+  const handleLine = async (raw: string): Promise<"exit" | void> => {
     const input = raw.trim();
     if (!input) return;
     if (input.startsWith("/")) {
@@ -1034,7 +1124,7 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
 
   // 10. REPL loop: prompt → read line → handle → repeat (sequential via the queue)
   let closed = false;
-  const prompt = () => {
+  const prompt = (): void => {
     // Interactive prompt placement (PR #26 Codex P2):
     // - stdout TTY: write to stdout as before.
     // - stdout piped but stdin still a TTY (`lazyglm | tee transcript`):
@@ -1057,9 +1147,9 @@ Inline $skill invocations are also supported (e.g. $programming ...).`);
     try {
       const r = await handleLine(line);
       if (r === "exit") closed = true;
-    } catch (e) {
+    } catch (e: unknown) {
       closeStream();
-      console.error(`\n❌ ${e?.message || e}`);
+      console.error(`\n❌ ${toErrorMessage(e)}`);
     }
   }
   closeStream();
