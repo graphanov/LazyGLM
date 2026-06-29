@@ -5,13 +5,16 @@
 // like "three@0.160.0/build/three.module.js").
 import { existsSync } from "node:fs";
 import { resolvePath } from "../util.js";
+import type { HookPlugin } from "../types/index.js";
 
 export default {
   name: "executor-verify",
   hooks: {
     async Stop(input, api) {
       if (!input.finished) return undefined;
-      const written = Array.isArray(input.files_written) ? input.files_written : [];
+      const written = Array.isArray(input.files_written)
+        ? input.files_written.filter((file): file is string => typeof file === "string")
+        : [];
       if (!written.length) return undefined;
       const missing = [];
       for (const rel of written) {
@@ -29,4 +32,4 @@ export default {
       return undefined;
     },
   },
-};
+} satisfies HookPlugin;

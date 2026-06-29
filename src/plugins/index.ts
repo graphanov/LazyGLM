@@ -11,8 +11,9 @@ import ulwPlan from "./ulw-plan.js";
 import telemetry from "./telemetry.js";
 import initDeep from "./init-deep.js";
 import scaffoldHandoff from "./scaffold-handoff.js";
+import type { HookPlugin } from "../types/index.js";
 
-export const BUILTIN_PLUGINS = [
+export const BUILTIN_PLUGINS: HookPlugin[] = [
   telemetry,
   rules,
   consequencePredictor,
@@ -25,9 +26,9 @@ export const BUILTIN_PLUGINS = [
   scaffoldHandoff,
 ];
 
-export const PLUGIN_BY_NAME = Object.fromEntries(BUILTIN_PLUGINS.map((p) => [p.name, p]));
+export const PLUGIN_BY_NAME: Record<string, HookPlugin> = Object.fromEntries(BUILTIN_PLUGINS.map((p) => [p.name, p]));
 
-export function loadPlugins(names) {
+export function loadPlugins(names?: string[]): HookPlugin[] {
   if (!names || names.length === 0) return BUILTIN_PLUGINS;
   const want = new Set(names);
   return BUILTIN_PLUGINS.filter((p) => want.has(p.name));

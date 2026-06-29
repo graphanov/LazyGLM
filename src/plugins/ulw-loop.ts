@@ -6,10 +6,16 @@
 import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ensureDir, nowIso } from "../util.js";
+import type { HookPlugin } from "../types/index.js";
 
-export const ultraworkState = new Map(); // sessionId -> { completionPromise, iterations }
+interface UltraworkSessionState {
+  completionPromise: string;
+  iterations: number;
+}
 
-function parseCompletionPromise(prompt) {
+export const ultraworkState = new Map<string, UltraworkSessionState>(); // sessionId -> { completionPromise, iterations }
+
+function parseCompletionPromise(prompt: string): string | null {
   const m = prompt.match(/--completion-promise=(?:"([^"]+)"|'([^']+)'|(\S+))/);
   if (m) return m[1] || m[2] || m[3];
   // also accept "completion promise: ..."
@@ -18,7 +24,7 @@ function parseCompletionPromise(prompt) {
   return null;
 }
 
-export function isUltrawork(prompt) {
+export function isUltrawork(prompt: string): boolean {
   return /\$ulw-loop\b|--ultrawork\b/i.test(prompt || "");
 }
 
@@ -26,7 +32,7 @@ export default {
   name: "ulw-loop",
   hooks: {
     async UserPromptSubmit(input, api) {
-      const prompt = input.prompt || "";
+      const prompt = typeof input.prompt === "string" ? input.prompt : "";
       if (!isUltrawork(prompt)) return undefined;
       const promise = parseCompletionPromise(prompt) || "the task is fully implemented, builds cleanly, and passes verification.";
       ultraworkState.set(input.session_id, { completionPromise: promise, iterations: 0 });
@@ -49,4 +55,4 @@ export default {
       return undefined;
     },
   },
-};
+} satisfies HookPlugin;

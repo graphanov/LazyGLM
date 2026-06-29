@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseMcpServers, mcpServersSummary } from "../src/mcp/config.js";
+import { parseMcpServers, mcpServersSummary } from "../dist/mcp/config.js";
 
 // ---------------------------------------------------------------------------
 // parseMcpServers — success cases

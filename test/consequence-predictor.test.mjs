@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import consequencePredictor from "../src/plugins/consequence-predictor.js";
+import consequencePredictor from "../dist/plugins/consequence-predictor.js";
 
 function pre(toolName, toolInput, extra = {}) {
   return consequencePredictor.hooks.PreToolUse({

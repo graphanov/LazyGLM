@@ -25,10 +25,43 @@
 //   - `transport` is preserved but NOT enum-validated (left for a future phase).
 // Unknown fields are preserved for forward compatibility.
 
+type McpServerKind = "stdio" | "remote";
+
+interface McpServerEntry extends Record<string, unknown> {
+  command?: string;
+  url?: string;
+  args?: unknown[];
+  env?: Record<string, unknown>;
+  headers?: Record<string, unknown>;
+}
+
+interface NormalizedServer {
+  name: string;
+  kind: McpServerKind;
+  entry: McpServerEntry;
+}
+
+interface ParseError {
+  name: string;
+  error: string;
+}
+
+export interface McpParseResult {
+  servers: NormalizedServer[];
+  errors: ParseError[];
+  count: number;
+}
+
+type NormalizeEntryResult =
+  | { ok: true; name: string; kind: McpServerKind; entry: McpServerEntry }
+  | { ok: false; name?: string; error: string };
+
+type NormalizeRemoteUrlResult = { ok: true; url: string } | { ok: false; error: string };
+
 /**
  * True for a "plain" object (not an array, not null, not a class instance).
  */
-function isPlainObject(v) {
+function isPlainObject(v: unknown): v is Record<string, unknown> {
   if (v === null || typeof v !== "object" || Array.isArray(v)) return false;
   const proto = Object.getPrototypeOf(v);
   return proto === Object.prototype || proto === null;
@@ -38,11 +71,11 @@ function isPlainObject(v) {
  * Classify a single validated server entry as "stdio" or "remote".
  * Assumes the entry has already passed validation.
  */
-function classifyEntry(entry) {
+function classifyEntry(entry: McpServerEntry): McpServerKind {
   return entry.url ? "remote" : "stdio";
 }
 
-function normalizeRemoteUrl(rawUrl) {
+function normalizeRemoteUrl(rawUrl: string): NormalizeRemoteUrlResult {
   const url = rawUrl.trim();
   let parsed;
   try {
@@ -60,7 +93,7 @@ function normalizeRemoteUrl(rawUrl) {
  * Normalize a single server entry. Returns { ok, entry, kind, error }.
  * `entry` is the normalized declaration; `error` is a redacted reason string.
  */
-function normalizeEntry(name, raw) {
+function normalizeEntry(name: string, raw: unknown): NormalizeEntryResult {
   if (typeof name !== "string" || name.trim() === "") {
     return { ok: false, error: "server name must be a non-empty string" };
   }
@@ -79,7 +112,7 @@ function normalizeEntry(name, raw) {
   }
 
   // Build the normalized entry, preserving unknown fields.
-  const entry = { ...raw };
+  const entry: McpServerEntry = { ...raw };
 
   if (hasCommand) {
     if (typeof raw.command !== "string" || raw.command.trim() === "") {
@@ -134,8 +167,8 @@ function normalizeEntry(name, raw) {
  * produces a single redacted error. env/header VALUES are never copied into
  * error messages — only structural reasons are reported.
  */
-export function parseMcpServers(config) {
-  const result = { servers: [], errors: [], count: 0 };
+export function parseMcpServers(config: Record<string, unknown> | null | undefined): McpParseResult {
+  const result: McpParseResult = { servers: [], errors: [], count: 0 };
 
   if (!config || !Object.prototype.hasOwnProperty.call(config, "mcpServers")) {
     return result;
@@ -164,16 +197,16 @@ export function parseMcpServers(config) {
  * Reports counts and (for errors) redacted, name-scoped reasons.
  * NEVER includes env, header, command-arg, or url values.
  */
-export function mcpServersSummary(parsed) {
+export function mcpServersSummary(parsed: McpParseResult): string {
   const { servers, errors } = parsed;
   if (!servers.length && !errors.length) {
     return "0 MCP servers declared";
   }
-  const parts = [];
+  const parts: string[] = [];
   if (servers.length) {
-    const byKind = { stdio: 0, remote: 0 };
+    const byKind: Record<McpServerKind, number> = { stdio: 0, remote: 0 };
     for (const s of servers) byKind[s.kind] = (byKind[s.kind] || 0) + 1;
-    const bits = [];
+    const bits: string[] = [];
     if (byKind.stdio) bits.push(`${byKind.stdio} stdio`);
     if (byKind.remote) bits.push(`${byKind.remote} remote`);
     parts.push(`${servers.length} MCP server(s) declared (${bits.join(", ")}): ${servers.map((s) => s.name).join(", ")}`);

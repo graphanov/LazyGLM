@@ -5,6 +5,11 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
+import type { HookPlugin } from "../types/index.js";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
+}
 
 export default {
   name: "start-work-continuation",
@@ -14,7 +19,8 @@ export default {
       const activePath = join(api.cwd, ".lazyglm", "active-plan.json");
       if (!existsSync(activePath)) return undefined;
       try {
-        const active = JSON.parse(await readFile(activePath, "utf8"));
+        const active = JSON.parse(await readFile(activePath, "utf8")) as unknown;
+        if (!isRecord(active) || typeof active.planPath !== "string") return undefined;
         const planAbs = join(api.cwd, active.planPath);
         if (!existsSync(planAbs)) return undefined;
         const plan = await readFile(planAbs, "utf8");
@@ -31,4 +37,4 @@ export default {
       return undefined;
     },
   },
-};
+} satisfies HookPlugin;

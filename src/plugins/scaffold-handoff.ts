@@ -1,4 +1,9 @@
 import { discoverScaffold, formatHandoffInject, readHandoffText } from "../scaffold/handoff.js";
+import type { HookPlugin } from "../types/index.js";
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export default {
   name: "scaffold-handoff",
@@ -15,9 +20,9 @@ export default {
         }
         return { inject: formatHandoffInject(handoff) };
       } catch (err) {
-        api.log(`[scaffold-handoff] could not read Open Scaffold handoff: ${err?.message || err}`);
+        api.log(`[scaffold-handoff] could not read Open Scaffold handoff: ${errorMessage(err)}`);
         return undefined;
       }
     },
   },
-};
+} satisfies HookPlugin;

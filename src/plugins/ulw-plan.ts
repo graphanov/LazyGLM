@@ -3,8 +3,9 @@
 // plans/<slug>.md without writing product code. The actual plan file is
 // written by the GLM agent via tools; this plugin only sets the contract.
 import { slugify } from "../util.js";
+import type { HookPlugin } from "../types/index.js";
 
-export function isPlanRequest(prompt) {
+export function isPlanRequest(prompt: string): boolean {
   return /\$ulw-plan\b/i.test(prompt || "");
 }
 
@@ -12,7 +13,7 @@ export default {
   name: "ulw-plan",
   hooks: {
     async UserPromptSubmit(input, api) {
-      const prompt = input.prompt || "";
+      const prompt = typeof input.prompt === "string" ? input.prompt : "";
       if (!isPlanRequest(prompt)) return undefined;
       const taskBody = prompt.replace(/\$ulw-plan\b/i, "").trim();
       const slug = slugify(taskBody.split("\n")[0]) || "plan";
@@ -21,4 +22,4 @@ export default {
       };
     },
   },
-};
+} satisfies HookPlugin;
