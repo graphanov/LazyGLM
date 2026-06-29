@@ -104,6 +104,27 @@ one-shot: later compactions do not persist or re-digest it because the digest
 does not scan system messages. Durable rationale should go through the
 deterministic decisions path, not hook injects.
 
+### Open Scaffold handoff context
+
+LazyGLM can optionally surface repo-native Open Scaffold handoff context at
+`SessionStart`. Discovery is read-only and dependency-free: a project is
+considered present when `.osc/` or `MISSION.md` exists, and the handoff reader
+checks `.osc/handoff.md` before falling back to `MISSION.md`. No `osc`
+subprocess is invoked, no MCP client is connected, and projects without those
+records are unchanged.
+
+The scaffold handoff is injected as a separate `OPEN SCAFFOLD HANDOFF CONTEXT`
+block in the startup system prompt. The block names its source and states that
+the content is optional context, not verified truth. The handoff body is capped
+to 600 characters plus the shared truncation marker before injection, so it is
+small enough for startup context but it is not a substitute for the
+`PostCompact` headroom checks.
+
+The deterministic compaction digest remains the hot-path recovery mechanism and
+the fallback when scaffold records are absent, empty, unreadable, or too large.
+Open Scaffold context is useful for fresh session recovery and cross-agent
+handoff; correctness still comes from repo inspection, tests, and verification.
+
 ## Architecture
 
 ```text

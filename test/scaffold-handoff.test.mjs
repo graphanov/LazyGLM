@@ -1,0 +1,206 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { HookEngine } from "../src/hooks/engine.js";
+import { discoverScaffold, formatHandoffInject, readHandoffText } from "../src/scaffold/handoff.js";
+import scaffoldHandoff from "../src/plugins/scaffold-handoff.js";
+
+async function withTempCwd(fn) {
+  const cwd = await mkdtemp(join(tmpdir(), "lazyglm-scaffold-"));
+  try {
+    return await fn(cwd);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+}
+
+async function write(cwd, rel, content) {
+  await mkdir(dirname(join(cwd, rel)), { recursive: true });
+  await writeFile(join(cwd, rel), content, "utf8");
+}
+
+test("absent Open Scaffold records are a no-op by default", async () => {
+  await withTempCwd(async (cwd) => {
+    assert.deepEqual(discoverScaffold(cwd), { present: false, sources: [] });
+
+    const res = await scaffoldHandoff.hooks.SessionStart({}, { cwd, log: () => {} });
+
+    assert.equal(res, undefined);
+  });
+});
+
+test("SessionStart injects bounded Open Scaffold handoff text when .osc handoff exists", async () => {
+  await withTempCwd(async (cwd) => {
+    await write(cwd, ".osc/handoff.md", "Decision: keep the compaction digest as fallback.\n");
+
+    const engine = new HookEngine({ cwd });
+    engine.register(scaffoldHandoff);
+    const res = await engine.fire("SessionStart", {});
+
+    assert.equal(res.injects.length, 1);
+    assert.match(res.injects[0], /OPEN SCAFFOLD HANDOFF CONTEXT/);
+    assert.match(res.injects[0], /Source: \.osc\/handoff\.md/);
+    assert.match(res.injects[0], /optional repo-native handoff context, not verified truth/);
+    assert.match(res.injects[0], /Decision: keep the compaction digest as fallback\./);
+  });
+});
+
+test("MISSION.md is used as fallback when no precomputed handoff exists", async () => {
+  await withTempCwd(async (cwd) => {
+    await write(cwd, "MISSION.md", "# Mission\nRecover context from repo-native records.\n");
+
+    const handoff = await readHandoffText(cwd);
+
+    assert.equal(handoff.source, "MISSION.md");
+    assert.match(handoff.text, /Recover context/);
+  });
+});
+
+test(".osc handoff has precedence over MISSION.md", async () => {
+  await withTempCwd(async (cwd) => {
+    await write(cwd, ".osc/handoff.md", "Preferred scaffold packet\n");
+    await write(cwd, "MISSION.md", "Fallback mission text\n");
+
+    const handoff = await readHandoffText(cwd);
+
+    assert.equal(handoff.source, ".osc/handoff.md");
+    assert.match(handoff.text, /Preferred scaffold packet/);
+    assert.doesNotMatch(handoff.text, /Fallback mission text/);
+  });
+});
+
+test("present but empty scaffold records emit a diagnostic and do not inject", async () => {
+  await withTempCwd(async (cwd) => {
+    const logs = [];
+    await mkdir(join(cwd, ".osc"), { recursive: true });
+
+    const res = await scaffoldHandoff.hooks.SessionStart({}, {
+      cwd,
+      log: (msg) => logs.push(msg),
+    });
+
+    assert.equal(res, undefined);
+    assert.equal(logs.length, 1);
+    assert.match(logs[0], /records present/);
+    assert.match(logs[0], /no readable handoff text/);
+  });
+});
+
+test("empty .osc handoff falls through to non-empty MISSION.md", async () => {
+  await withTempCwd(async (cwd) => {
+    await write(cwd, ".osc/handoff.md", "   \n");
+    await write(cwd, "MISSION.md", "Mission fallback survives an empty packet.\n");
+
+    const handoff = await readHandoffText(cwd);
+
+    assert.equal(handoff.source, "MISSION.md");
+    assert.match(handoff.text, /Mission fallback/);
+  });
+});
+
+test("unreadable .osc handoff falls through to readable MISSION.md", async () => {
+  await withTempCwd(async (cwd) => {
+    // .osc/handoff.md as a directory is unreadable via readFile → should skip.
+    await mkdir(join(cwd, ".osc", "handoff.md"), { recursive: true });
+    await write(cwd, "MISSION.md", "Fallback survives an unreadable packet.\n");
+
+    const handoff = await readHandoffText(cwd);
+
+    assert.equal(handoff.source, "MISSION.md");
+    assert.match(handoff.text, /Fallback survives an unreadable packet/);
+  });
+});
+
+test("osc binary availability is not required for file-based handoff injection", async () => {
+  await withTempCwd(async (cwd) => {
+    const savedPath = process.env.PATH;
+    try {
+      process.env.PATH = "";
+      await write(cwd, ".osc/handoff.md", "Precomputed packet only.\n");
+
+      const res = await scaffoldHandoff.hooks.SessionStart({}, { cwd, log: () => {} });
+
+      assert.match(res.inject, /Precomputed packet only/);
+    } finally {
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
+    }
+  });
+});
+
+test("handoff text is budgeted with a truncation marker", async () => {
+  await withTempCwd(async (cwd) => {
+    await write(cwd, ".osc/handoff.md", "x".repeat(80));
+
+    const handoff = await readHandoffText(cwd, { maxChars: 20 });
+    const inject = formatHandoffInject(handoff);
+
+    assert.equal(handoff.truncated, true);
+    assert.ok(handoff.text.startsWith("x".repeat(20)));
+    assert.match(handoff.text, /truncated 60 chars/);
+    assert.match(inject, /Open Scaffold handoff truncated before injection/);
+  });
+});
+
+test("non-regular handoff candidate falls through to a regular fallback", async () => {
+  await withTempCwd(async (cwd) => {
+    // A directory at .osc/handoff.md is a non-regular file; statSync succeeds
+    // but isFile() is false, so it must skip without blocking and try MISSION.md.
+    await mkdir(join(cwd, ".osc", "handoff.md"), { recursive: true });
+    await write(cwd, "MISSION.md", "Fallback after skipping a directory.\n");
+
+    const handoff = await readHandoffText(cwd);
+
+    assert.equal(handoff.source, "MISSION.md");
+    assert.match(handoff.text, /Fallback after skipping a directory/);
+  });
+});
+
+test("oversized handoff record is bounded without reading the whole file", async () => {
+  await withTempCwd(async (cwd) => {
+    // 32 KiB is larger than the internal read cap; the read must stay bounded
+    // and still mark the result as truncated without exhausting memory.
+    await write(cwd, ".osc/handoff.md", "y".repeat(32 * 1024));
+
+    const handoff = await readHandoffText(cwd, { maxChars: 20 });
+
+    assert.equal(handoff.source, ".osc/handoff.md");
+    assert.equal(handoff.truncated, true);
+    assert.ok(handoff.text.length <= 60, "bounded read keeps injected text small");
+    assert.ok(handoff.text.startsWith("y".repeat(20)));
+  });
+});
+
+test("symlinked handoff escaping the repo is rejected", async () => {
+  await withTempCwd(async (cwd) => {
+    // Create a secret file outside the repo working tree.
+    const secret = join(cwd, "..", "lazyglm-secret-target.md");
+    await writeFile(secret, "TOP SECRET ssh config contents\n", "utf8");
+    try {
+      // Point MISSION.md at the out-of-repo secret via a symlink.
+      await symlink(secret, join(cwd, "MISSION.md"));
+
+      const handoff = await readHandoffText(cwd);
+
+      // The symlink must be rejected; no secret content is injected.
+      assert.equal(handoff, null);
+    } finally {
+      await rm(secret, { force: true });
+    }
+  });
+});
+
+test("symlinked handoff resolving inside the repo is rejected for safety", async () => {
+  await withTempCwd(async (cwd) => {
+    // Even an in-repo symlink target is rejected: handoff context only comes
+    // from real, repo-native files, not links.
+    await write(cwd, "real-mission.md", "Real in-repo mission text.\n");
+    await symlink("real-mission.md", join(cwd, "MISSION.md"));
+
+    const handoff = await readHandoffText(cwd);
+
+    assert.equal(handoff, null);
+  });
+});
