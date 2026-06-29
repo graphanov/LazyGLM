@@ -14,9 +14,9 @@ import {
   highRole,
   observePromptIntake,
   observeToolResult,
-} from "../src/agent/adaptive-router.js";
-import { isToolErrorResult } from "../src/agent/tool-errors.js";
-import { resolveProviderConfig } from "../src/agent/provider.js";
+} from "../dist/agent/adaptive-router.js";
+import { isToolErrorResult } from "../dist/agent/tool-errors.js";
+import { resolveProviderConfig } from "../dist/agent/provider.js";
 
 const catalog = {
   current: { model_reasoning_effort: "high" },

@@ -1,5 +1,3 @@
-// @ts-check
-
 // Tool layer for the GLM agent. Each tool is an OpenAI function spec plus a
 // handler. Handlers run sandboxed to the project cwd unless explicitly escaped.
 import { readFile, writeFile, readdir } from "node:fs/promises";
@@ -9,26 +7,69 @@ import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import { readLines, listDirEntries, resolvePath, ensureDir, truncate } from "../util.js";
 import { abortReason, boundedTimeoutMs, isDeadlineError, throwIfAborted } from "./deadline.js";
+import type { ExecOptions } from "node:child_process";
+import type {
+  FinishToolResult,
+  ToolDeadline,
+  ToolHandler,
+  ToolHandlerContext,
+  ToolHandlerResult,
+  ToolSpec,
+} from "../types/index.js";
 
 const execP = promisify(exec);
 
-/**
- * @typedef {import("../types/index.js").ToolHandler} ToolHandler
- * @typedef {import("../types/index.js").ToolHandlerContext} ToolHandlerContext
- * @typedef {import("../types/index.js").ToolSpec} ToolSpec
- *
- * @typedef {{ path: string, offset?: number, limit?: number }} ReadFileArgs
- * @typedef {{ path: string, content?: string }} WriteFileArgs
- * @typedef {{ path: string, old_string: string, new_string: string, replace_all?: boolean }} PatchFileArgs
- * @typedef {{ path?: string }} ListDirArgs
- * @typedef {{ pattern: string, path?: string, glob?: string }} GrepArgs
- * @typedef {{ command: string, timeout?: number }} RunShellArgs
- * @typedef {{ summary?: string }} FinishArgs
- * @typedef {Error & { stdout?: string | Buffer, stderr?: string | Buffer, code?: number | string | null }} ExecError
- */
+interface ReadFileArgs {
+  path: string;
+  offset?: number;
+  limit?: number;
+}
+
+interface WriteFileArgs {
+  path: string;
+  content?: string;
+}
+
+interface PatchFileArgs {
+  path: string;
+  old_string: string;
+  new_string: string;
+  replace_all?: boolean;
+}
+
+interface ListDirArgs {
+  path?: string;
+}
+
+interface GrepArgs {
+  pattern: string;
+  path?: string;
+  glob?: string;
+}
+
+interface RunShellArgs {
+  command: string;
+  timeout?: number;
+}
+
+interface FinishArgs {
+  summary?: string;
+}
+
+type ExecError = Error & {
+  stdout?: string | Buffer;
+  stderr?: string | Buffer;
+  code?: number | string | null;
+};
+
+function typedHandler<Args extends object>(
+  handler: (args: Args, ctx: ToolHandlerContext) => ToolHandlerResult | Promise<ToolHandlerResult>,
+): ToolHandler {
+  return (args, ctx) => handler(args as Args, ctx);
+}
 
 // --- Tool specs (OpenAI function-calling schema) ---
-export const TOOL_SPECS = /** @type {ToolSpec[]} */ ([
+export const TOOL_SPECS: ToolSpec[] = [
   {
     type: "function",
     function: {
@@ -147,40 +188,31 @@ export const TOOL_SPECS = /** @type {ToolSpec[]} */ ([
       },
     },
   },
-]);
+];
 
 export const TOOL_NAMES = TOOL_SPECS.map((t) => t.function.name);
 
 // --- Handlers ---
 // ctx = { cwd, runtime }
-export const TOOL_HANDLERS = /** @type {Record<string, ToolHandler>} */ (/** @type {unknown} */ ({
-  /**
-   * @param {ReadFileArgs} args
-   * @param {ToolHandlerContext} ctx
-   */
-  async read_file({ path, offset, limit }, ctx) {
+export const TOOL_HANDLERS: Record<string, ToolHandler> = {
+  read_file: typedHandler<ReadFileArgs>(async function readFileTool({ path, offset, limit }, ctx): Promise<string> {
     const abs = resolvePath(path, ctx.cwd);
     if (!existsSync(abs)) return `Error: file not found: ${path}`;
     const out = await readLines(abs, offset || 1, limit || 500);
     return out || "(empty file)";
-  },
+  }),
 
-  /**
-   * @param {WriteFileArgs} args
-   * @param {ToolHandlerContext} ctx
-   */
-  async write_file({ path, content }, ctx) {
+  write_file: typedHandler<WriteFileArgs>(async function writeFileTool({ path, content }, ctx): Promise<string> {
     const abs = resolvePath(path, ctx.cwd);
     await ensureDir(join(abs, ".."));
     await writeFile(abs, content ?? "", "utf8");
     return `wrote ${path} (${(content ?? "").length} bytes)`;
-  },
+  }),
 
-  /**
-   * @param {PatchFileArgs} args
-   * @param {ToolHandlerContext} ctx
-   */
-  async patch_file({ path, old_string, new_string, replace_all }, ctx) {
+  patch_file: typedHandler<PatchFileArgs>(async function patchFileTool(
+    { path, old_string, new_string, replace_all },
+    ctx,
+  ): Promise<string> {
     const abs = resolvePath(path, ctx.cwd);
     if (!existsSync(abs)) return `Error: file not found: ${path}`;
     const original = await readFile(abs, "utf8");
@@ -206,25 +238,17 @@ export const TOOL_HANDLERS = /** @type {Record<string, ToolHandler>} */ (/** @ty
     }
     await writeFile(abs, result, "utf8");
     return `patched ${path} (${occurrences} replacement${occurrences === 1 ? "" : "s"})`;
-  },
+  }),
 
-  /**
-   * @param {ListDirArgs} args
-   * @param {ToolHandlerContext} ctx
-   */
-  async list_dir({ path }, ctx) {
+  list_dir: typedHandler<ListDirArgs>(async function listDirTool({ path }, ctx): Promise<string> {
     const abs = resolvePath(path || ".", ctx.cwd);
     if (!existsSync(abs)) return `Error: dir not found: ${path}`;
     const entries = await listDirEntries(abs);
     if (!entries.length) return "(empty)";
     return entries.map((e) => (e.isDir ? `${e.name}/` : e.name)).join("\n");
-  },
+  }),
 
-  /**
-   * @param {GrepArgs} args
-   * @param {ToolHandlerContext} ctx
-   */
-  async grep({ pattern, path, glob }, ctx) {
+  grep: typedHandler<GrepArgs>(async function grepTool({ pattern, path, glob }, ctx): Promise<string> {
     const root = resolvePath(path || ".", ctx.cwd);
     const deadline = ctx.runtime?.deadline;
     deadline?.throwIfExpired?.();
@@ -235,10 +259,10 @@ export const TOOL_HANDLERS = /** @type {Record<string, ToolHandler>} */ (/** @ty
       const args = ["-n", "-H"];
       if (glob) args.push("-g", glob);
       args.push("--", pattern, root);
-      const execOptions = /** @type {import("node:child_process").ExecOptions} */ ({ maxBuffer: 4 * 1024 * 1024 });
+      const execOptions: ExecOptions = { maxBuffer: 4 * 1024 * 1024 };
       if (signal) execOptions.signal = signal;
       const remaining = deadline?.remainingMs?.();
-      if (Number.isFinite(remaining)) execOptions.timeout = Math.max(1, /** @type {number} */ (remaining));
+      if (Number.isFinite(remaining)) execOptions.timeout = Math.max(1, remaining as number);
       const { stdout } = await execP(`rg ${args.map(shellQuote).join(" ")}`, execOptions);
       return truncate(stdout || "(no matches)", 8000);
     } catch (err) {
@@ -250,13 +274,9 @@ export const TOOL_HANDLERS = /** @type {Record<string, ToolHandler>} */ (/** @ty
       }
     }
     return jsGrep(pattern, root, glob, signal, deadline);
-  },
+  }),
 
-  /**
-   * @param {RunShellArgs} args
-   * @param {ToolHandlerContext} ctx
-   */
-  async run_shell({ command, timeout }, ctx) {
+  run_shell: typedHandler<RunShellArgs>(async function runShellTool({ command, timeout }, ctx): Promise<string> {
     const secs = Math.min(Math.max(timeout || 120, 1), 600);
     const deadline = ctx.runtime?.deadline;
     deadline?.throwIfExpired?.();
@@ -277,45 +297,32 @@ export const TOOL_HANDLERS = /** @type {Record<string, ToolHandler>} */ (/** @ty
       const out = [execErr.stdout, execErr.stderr, execErr.message].filter(Boolean).join("\n");
       return `Command exited ${execErr.code ?? "?"}:\n${truncate(out, 12000)}`;
     }
-  },
+  }),
 
-  /**
-   * @param {FinishArgs} args
-   * @param {ToolHandlerContext} ctx
-   */
-  async finish({ summary }, ctx) {
+  finish: typedHandler<FinishArgs>(async function finishTool({ summary }): Promise<FinishToolResult> {
     return { __finish: true, summary: summary || "(no summary)" };
-  },
-}));
+  }),
+};
 
-/**
- * @param {unknown} s
- * @returns {string}
- */
-function shellQuote(s) {
+function shellQuote(s: unknown): string {
   return `'${String(s).replace(/'/g, "'\\''")}'`;
 }
 
-/**
- * @param {string} pattern
- * @param {string} root
- * @param {string | undefined} glob
- * @param {AbortSignal | undefined} signal
- * @param {import("../types/index.js").ToolDeadline | undefined} deadline
- * @returns {Promise<string>}
- */
-async function jsGrep(pattern, root, glob, signal, deadline) {
+async function jsGrep(
+  pattern: string,
+  root: string,
+  glob?: string,
+  signal?: AbortSignal,
+  deadline?: ToolDeadline,
+): Promise<string> {
   const re = new RegExp(pattern);
-  /** @type {string[]} */
-  const results = [];
-  /** @type {Set<string>} */
-  const seen = new Set();
+  const results: string[] = [];
+  const seen = new Set<string>();
   const checkAbort = () => {
     deadline?.throwIfExpired?.();
     throwIfAborted(signal);
   };
-  /** @param {string} dir */
-  async function walk(dir) {
+  async function walk(dir: string): Promise<void> {
     checkAbort();
     let entries;
     try {
@@ -351,29 +358,16 @@ async function jsGrep(pattern, root, glob, signal, deadline) {
   return truncate(results.join("\n") || "(no matches)", 8000);
 }
 
-/**
- * @param {string} name
- * @param {string} glob
- * @returns {boolean}
- */
-function minimatch(name, glob) {
+function minimatch(name: string, glob: string): boolean {
   // minimal glob: handle * and exact suffix
   const g = glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
   return new RegExp(`^${g}$`).test(name);
 }
 
-/**
- * @param {unknown} err
- * @returns {ExecError}
- */
-function asExecError(err) {
-  return /** @type {ExecError} */ (err);
+function asExecError(err: unknown): ExecError {
+  return err as ExecError;
 }
 
-/**
- * @param {unknown} err
- * @returns {Error | undefined}
- */
-function abortFallback(err) {
-  return /** @type {Error | undefined} */ (err);
+function abortFallback(err: unknown): Error | undefined {
+  return err instanceof Error ? err : undefined;
 }

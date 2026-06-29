@@ -3,7 +3,7 @@
 // others, honor LAZYGLM_PRESERVE_THINKING). No network — fetch is stubbed.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chat, supportsPreservedThinking } from "../src/agent/provider.js";
+import { chat, supportsPreservedThinking } from "../dist/agent/provider.js";
 
 // A provider response the runtime/REPL would receive. We only assert on the
 // outgoing *request body* (the wire payload), so the response content is minimal.

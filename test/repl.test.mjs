@@ -6,9 +6,9 @@ import { mkdtemp, rm, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadUserConfig, saveUserConfig, isOnboarded, resetConfigCache } from "../src/config.js";
-import { needsOnboarding, runOnboarding } from "../src/onboard.js";
-import { createSession, appendEvent, listSessions, loadSessionEvents } from "../src/sessions.js";
+import { loadUserConfig, saveUserConfig, isOnboarded, resetConfigCache } from "../dist/config.js";
+import { needsOnboarding, runOnboarding } from "../dist/onboard.js";
+import { createSession, appendEvent, listSessions, loadSessionEvents } from "../dist/sessions.js";
 import {
   replayIntoContext,
   replayTelemetry,
@@ -26,9 +26,9 @@ import {
   formatCost,
   formatRoutingNotice,
   hasManualRoutingOverride,
-} from "../src/repl.js";
-import { Context, assistantMessageFrom } from "../src/agent/context.js";
-import { chat } from "../src/agent/provider.js";
+} from "../dist/repl.js";
+import { Context, assistantMessageFrom } from "../dist/agent/context.js";
+import { chat } from "../dist/agent/provider.js";
 
 const homes = [];
 async function freshHome() {

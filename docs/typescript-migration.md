@@ -21,58 +21,6 @@ This intentionally avoids `// @ts-check`, `.js -> .ts` conversion, `dist/`, bund
 
 Why: the contract PR should be mechanically safe and green before typechecking existing JavaScript. It creates a stable target for follow-up JSDoc or module-conversion PRs without mixing type declarations with annotation noise.
 
-### PR-B — boundary rollout
-
-A later PR should typecheck one runtime boundary at a time using the least noisy option for the file:
-
-- selective JSDoc on the specific function or object being hardened;
-- file-level `// @ts-check` only after local noise is measured;
-- `// @ts-nocheck` or narrower typed regions when a file is not ready;
-- `.js -> .ts` conversion only when packaging and import paths are explicitly planned.
-
-Before wiring CI for any boundary rollout, run the local smoke first and record the noise budget:
-
-```bash
-npm run typecheck
-```
-
-If a boundary file is being opted into checking, run the same command locally after adding its JSDoc/pragma and before opening the PR. CI should confirm known-clean typechecking, not discover a large untriaged backlog.
-
-#### PR-B1 — model router boundary
-
-The first boundary rollout is intentionally limited to `src/agent/router.js`:
-
-- `tsconfig.json` enables `allowJs` so selected JavaScript files can join the program.
-- `checkJs` remains disabled globally.
-- `include` adds only `src/agent/router.js` beside `src/**/*.ts`.
-- `src/agent/router.js` uses file-level `// @ts-check` plus JSDoc contracts for the model catalog, route options, resolved route, provider config entry, and persisted config fields it reads.
-
-The provider/runtime/tools boundary remains deferred. A local all-boundary smoke currently pulls transitive JavaScript errors from context/deadline/runtime/hooks code, so broad `@ts-check` would be noisy and out of scope for this slice. Future PRs should continue the same pattern: measure one boundary, annotate it narrowly, then add it to the configured typecheck surface only when clean.
-
-#### PR-B2 — provider boundary
-
-The second boundary rollout adds `src/agent/provider.js` to the configured typecheck surface:
-
-- `checkJs` remains disabled globally.
-- `include` adds only `src/agent/provider.js` beside the existing router boundary and TypeScript contract files.
-- `src/agent/provider.js` uses file-level `// @ts-check`, shared contract imports for provider config, chat completions, stream deltas, tool calls, tool specs, and usage, plus local typedefs for OpenAI-compatible wire JSON.
-- The provider boundary now checks `resolveProviderConfig`, `chat`, non-streaming completion normalization, SSE delta parsing, retry callback payloads, and model listing without changing provider behavior or adding a build step.
-- The shared `ToolCall` contract admits the existing OpenAI-compatible `type: "function"` field returned by provider normalization.
-
-The runtime/tools/hooks boundary remains deferred. This PR intentionally keeps package behavior unchanged: no `.js -> .ts` conversion, no `dist/`, no CLI shim changes, and no package version or publish-flow changes.
-
-#### PR-B3 — runtime/tools boundary
-
-The third boundary rollout adds the two remaining named core runtime boundary files, `src/agent/runtime.js` and `src/agent/tools.js`, to the configured typecheck surface:
-
-- `checkJs` remains disabled globally.
-- `include` adds only `src/agent/runtime.js` and `src/agent/tools.js` beside the existing router/provider boundary and TypeScript contract files.
-- Both files use file-level `// @ts-check` plus JSDoc imports from `src/types/index.ts`.
-- `src/agent/runtime.js` now checks `runAgent` inputs/results, hook-engine usage, tool execution records, token accounting, finish-tool narrowing, and error-message extraction.
-- `src/agent/tools.js` now checks the OpenAI tool spec array, handler context, handler argument shapes, shell/grep error narrowing, and grep fallback helpers.
-
-The measured pragma-on budget for this slice was 103 local type errors across runtime/tools. The fixes are JSDoc annotations, typed accumulators, zero-cost casts, and local narrowing helpers; no `@ts-ignore`, `.js -> .ts` conversion, build step, CLI shim change, package version change, or runtime behavior change is part of this rollout.
-
 ### Phase 1 — build pipeline infrastructure
 
 The first migration phase adds the compiled package pipeline without converting runtime modules:
@@ -87,13 +35,28 @@ This phase intentionally does not convert `.js` files to `.ts`, add a bundler, c
 
 `dist/types/index.js` is expected output. The source file is type-only, so the emitted runtime file contains only `export {};`. It is harmless package dead weight for now and should not be treated as a failed exclude rule.
 
+### Phase 2 — agent boundary TypeScript modules
+
+The second migration phase converts the contract-heavy agent boundary modules to TypeScript while preserving NodeNext `.js` import specifiers in source:
+
+- `src/agent/provider.ts`
+- `src/agent/router.ts`
+- `src/agent/runtime.ts`
+- `src/agent/tools.ts`
+- `src/agent/tool-errors.ts`
+- `src/agent/adaptive-router.ts`
+
+These modules now consume shared contracts from `src/types/index.ts` directly. Provider wire JSON remains module-private typed data, and out-of-scope support modules (`context.js`, `deadline.js`, `thinking.js`) remain JavaScript compiled by the Phase 1 `allowJs` pipeline.
+
+Tests that exercise converted boundaries import from `dist/` after `npm run build`, matching the package runtime boundary used by `bin/lazyglm.js`.
+
 ## Deferred decisions
 
-These remain outside the Phase 1 build-pipeline work and the current boundary slices:
+These remain outside the Phase 1/2 work:
 
 - enabling `checkJs` globally;
-- converting provider/router/runtime/tools/hooks files to `.ts`;
-- typechecking additional JavaScript boundaries beyond the current router/provider/runtime/tools surface;
+- converting agent support, hooks, config, MCP, plugin, installer, CLI, REPL, or test files to `.ts`;
+- typechecking additional JavaScript boundaries beyond the current converted agent boundary surface;
 - source maps for compiled stack traces;
 - changing `package.json` `engines` or version;
 - changing runtime behavior, model routing, hook semantics, tool calls, REPL UX, sessions, or publishing flow.

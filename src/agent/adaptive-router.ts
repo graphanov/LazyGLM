@@ -1,50 +1,93 @@
-// @ts-check
-
 import { detectRole } from "./router.js";
 import { isToolErrorResult } from "./tool-errors.js";
+import type {
+  EffectiveBundle,
+  ModelCatalog,
+  ProviderConfig,
+  ReasoningEffort,
+  RoleModelConfig,
+  RoleName,
+  RoutingDecision,
+} from "../types/index.js";
 
-/**
- * @typedef {import("../types/index.js").EffectiveBundle} EffectiveBundle
- * @typedef {import("../types/index.js").ModelCatalog} ModelCatalog
- * @typedef {import("../types/index.js").ProviderConfig} ProviderConfig
- * @typedef {import("../types/index.js").ReasoningEffort} ReasoningEffort
- * @typedef {import("../types/index.js").RoleName} RoleName
- * @typedef {import("../types/index.js").RoutingDecision} RoutingDecision
- *
- * @typedef {object} AdaptiveRoutingState
- * @property {boolean} manualOverride
- * @property {number} cooldownTurnsLeft
- * @property {number} routineUserTurns
- * @property {number} errorStreak
- * @property {Set<string>} writePathsInCurrentUserTurn
- * @property {boolean} explicitComplexityInCurrentUserTurn
- *
- * @typedef {object} PromptRoutingSignal
- * @property {"prompt_intake"} source
- * @property {RoleName} role
- * @property {boolean} explicitComplexity
- * @property {string} reason
- *
- * @typedef {object} ToolRoutingSignal
- * @property {boolean} hadError
- * @property {boolean} wroteFile
- * @property {number} errorStreak
- * @property {number} distinctWritePaths
- *
- * @typedef {object} UserTurnSummary
- * @property {boolean} [hadError]
- * @property {boolean} [wroteFiles]
- * @property {boolean} [explicitComplexity]
- */
+interface AdaptiveRoutingState {
+  manualOverride: boolean;
+  cooldownTurnsLeft: number;
+  routineUserTurns: number;
+  errorStreak: number;
+  writePathsInCurrentUserTurn: Set<string>;
+  explicitComplexityInCurrentUserTurn: boolean;
+}
+
+interface PromptRoutingSignal {
+  source: "prompt_intake";
+  role: RoleName;
+  explicitComplexity: boolean;
+  reason: string;
+}
+
+interface ToolRoutingSignal {
+  hadError: boolean;
+  wroteFile: boolean;
+  errorStreak: number;
+  distinctWritePaths: number;
+}
+
+interface UserTurnSummary {
+  hadError?: boolean;
+  wroteFiles?: boolean;
+  explicitComplexity?: boolean;
+}
+
+interface PromptRoleOptions {
+  role?: RoleName;
+}
+
+interface PromptRoutingOptions {
+  state: AdaptiveRoutingState;
+  currentBundle: EffectiveBundle;
+  candidateBundle: EffectiveBundle;
+  signal: PromptRoutingSignal;
+}
+
+interface ToolResultObservation {
+  toolName?: string | null;
+  toolInput?: Record<string, unknown> | null;
+  result?: string | null;
+  handlerThrew?: boolean;
+}
+
+interface ToolRoutingOptions {
+  state: AdaptiveRoutingState;
+  currentBundle: EffectiveBundle;
+  candidateBundle: EffectiveBundle;
+}
+
+interface UserTurnRoutingOptions {
+  state: AdaptiveRoutingState;
+  currentBundle: EffectiveBundle;
+  quickBundle: EffectiveBundle;
+  turnSummary?: UserTurnSummary;
+}
+
+interface BuildDecisionOptions {
+  state: AdaptiveRoutingState;
+  source: RoutingDecision["source"];
+  currentBundle: EffectiveBundle;
+  candidateBundle: EffectiveBundle;
+  reason: string;
+  direction: "escalate" | "deescalate";
+  hard: boolean;
+}
 
 export const ERROR_STREAK_THRESHOLD = 2;
 export const MULTI_FILE_THRESHOLD = 2;
 export const ROUTINE_USER_TURNS_THRESHOLD = 3;
 export const COOLDOWN_USER_TURNS = 2;
 
-const HIGH_ROLE = "planner";
+const HIGH_ROLE: RoleName = "planner";
 
-const ROLE_RANK = {
+const ROLE_RANK: Record<string, number> = {
   quick: 1,
   verifier: 2,
   default: 3,
@@ -55,28 +98,23 @@ const ROLE_RANK = {
 
 const COMPLEXITY_SIGNALS = [
   {
-    role: /** @type {RoleName} */ ("planner"),
+    role: "planner" as RoleName,
     reason: "prompt complexity: cleanup/refactor scope",
     re: /\b(clean\s*up|cleanup|refactor|overhaul|migrat(?:e|ion))\b/i,
   },
   {
-    role: /** @type {RoleName} */ ("planner"),
+    role: "planner" as RoleName,
     reason: "prompt complexity: architecture or multi-file scope",
     re: /\b(architect(?:ure|ural)?|design|multi[-\s]?file|cross[-\s]?file|database layer|auth(?:entication)? module)\b/i,
   },
   {
-    role: /** @type {RoleName} */ ("default"),
+    role: "default" as RoleName,
     reason: "prompt complexity: debugging/error recovery",
     re: /\b(debug(?:ging)?|failing|failure|error recovery|root cause|regression)\b/i,
   },
 ];
 
-/**
- * @param {object} [options]
- * @param {boolean} [options.manualOverride]
- * @returns {AdaptiveRoutingState}
- */
-export function createAdaptiveRoutingState({ manualOverride = false } = {}) {
+export function createAdaptiveRoutingState({ manualOverride = false }: { manualOverride?: boolean } = {}): AdaptiveRoutingState {
   return {
     manualOverride,
     cooldownTurnsLeft: 0,
@@ -87,13 +125,10 @@ export function createAdaptiveRoutingState({ manualOverride = false } = {}) {
   };
 }
 
-/**
- * @param {AdaptiveRoutingState} state
- * @param {object} [options]
- * @param {boolean} [options.manualOverride]
- * @returns {AdaptiveRoutingState}
- */
-export function resetAdaptiveRoutingState(state, { manualOverride = state.manualOverride } = {}) {
+export function resetAdaptiveRoutingState(
+  state: AdaptiveRoutingState,
+  { manualOverride = state.manualOverride }: { manualOverride?: boolean } = {},
+): AdaptiveRoutingState {
   state.manualOverride = manualOverride;
   state.cooldownTurnsLeft = 0;
   state.routineUserTurns = 0;
@@ -103,28 +138,22 @@ export function resetAdaptiveRoutingState(state, { manualOverride = state.manual
   return state;
 }
 
-/** @param {AdaptiveRoutingState} state */
-export function beginAdaptiveUserTurn(state) {
+export function beginAdaptiveUserTurn(state: AdaptiveRoutingState): void {
   state.writePathsInCurrentUserTurn.clear();
   state.explicitComplexityInCurrentUserTurn = false;
 }
 
 /**
- * @param {ProviderConfig} config
- * @param {ModelCatalog} [catalog]
- * @returns {EffectiveBundle}
  */
-export function effectiveBundleFromProviderConfig(config, catalog = {}) {
-  const role = /** @type {RoleName} */ (config.role || "default");
-  const roleEntry = catalog.roles?.[role] || catalog.roles?.default || {};
+export function effectiveBundleFromProviderConfig(config: ProviderConfig, catalog: ModelCatalog = {}): EffectiveBundle {
+  const role = (config.role || "default") as RoleName;
+  const roleEntry: RoleModelConfig = catalog.roles?.[role] || catalog.roles?.default || {};
   return {
     provider: config.provider,
     model: config.model,
     modelId: config.modelId,
     role,
-    reasoningEffort: /** @type {ReasoningEffort} */ (
-      roleEntry.reasoning_effort || catalog.current?.model_reasoning_effort || "high"
-    ),
+    reasoningEffort: (roleEntry.reasoning_effort || catalog.current?.model_reasoning_effort || "high") as ReasoningEffort,
   };
 }
 
@@ -134,11 +163,8 @@ export function effectiveBundleFromProviderConfig(config, catalog = {}) {
  * toggle today: routing is provider-agnostic, and effort changes must remain
  * visible when a pinned model moves between quick/high-style roles.
  *
- * @param {EffectiveBundle | null | undefined} a
- * @param {EffectiveBundle | null | undefined} b
- * @returns {boolean}
  */
-export function bundlesEqual(a, b) {
+export function bundlesEqual(a: EffectiveBundle | null | undefined, b: EffectiveBundle | null | undefined): boolean {
   return !!a && !!b &&
     a.provider === b.provider &&
     a.model === b.model &&
@@ -147,11 +173,8 @@ export function bundlesEqual(a, b) {
 }
 
 /**
- * @param {string | null | undefined} prompt
- * @param {{ role?: RoleName }} [options]
- * @returns {PromptRoutingSignal}
  */
-export function classifyPromptForRouting(prompt, options = {}) {
+export function classifyPromptForRouting(prompt: string | null | undefined, options: PromptRoleOptions = {}): PromptRoutingSignal {
   const text = (prompt || "").trim();
   for (const signal of COMPLEXITY_SIGNALS) {
     if (signal.re.test(text)) {
@@ -175,12 +198,12 @@ export function classifyPromptForRouting(prompt, options = {}) {
 /**
  * Classify the prompt and remember whether this user turn is explicitly complex.
  *
- * @param {AdaptiveRoutingState} state
- * @param {string | null | undefined} prompt
- * @param {{ role?: RoleName }} [options]
- * @returns {PromptRoutingSignal}
  */
-export function observePromptIntake(state, prompt, options = {}) {
+export function observePromptIntake(
+  state: AdaptiveRoutingState,
+  prompt: string | null | undefined,
+  options: PromptRoleOptions = {},
+): PromptRoutingSignal {
   const signal = classifyPromptForRouting(prompt, options);
   state.explicitComplexityInCurrentUserTurn = signal.explicitComplexity;
   if (signal.explicitComplexity) state.routineUserTurns = 0;
@@ -188,14 +211,8 @@ export function observePromptIntake(state, prompt, options = {}) {
 }
 
 /**
- * @param {object} options
- * @param {AdaptiveRoutingState} options.state
- * @param {EffectiveBundle} options.currentBundle
- * @param {EffectiveBundle} options.candidateBundle
- * @param {PromptRoutingSignal} options.signal
- * @returns {RoutingDecision | null}
  */
-export function evaluatePromptRouting({ state, currentBundle, candidateBundle, signal }) {
+export function evaluatePromptRouting({ state, currentBundle, candidateBundle, signal }: PromptRoutingOptions): RoutingDecision | null {
   if (state.manualOverride) return null;
   const currentRank = roleRank(currentBundle.role);
   const candidateRank = roleRank(signal.role);
@@ -213,15 +230,11 @@ export function evaluatePromptRouting({ state, currentBundle, candidateBundle, s
 }
 
 /**
- * @param {AdaptiveRoutingState} state
- * @param {object} options
- * @param {string | null | undefined} options.toolName
- * @param {Record<string, unknown> | null | undefined} [options.toolInput]
- * @param {string | null | undefined} [options.result]
- * @param {boolean} [options.handlerThrew]
- * @returns {ToolRoutingSignal}
  */
-export function observeToolResult(state, { toolName, toolInput, result, handlerThrew = false }) {
+export function observeToolResult(
+  state: AdaptiveRoutingState,
+  { toolName, toolInput, result, handlerThrew = false }: ToolResultObservation,
+): ToolRoutingSignal {
   const hadError = handlerThrew || isToolErrorResult(result);
   if (hadError) {
     state.errorStreak += 1;
@@ -246,13 +259,8 @@ export function observeToolResult(state, { toolName, toolInput, result, handlerT
 }
 
 /**
- * @param {object} options
- * @param {AdaptiveRoutingState} options.state
- * @param {EffectiveBundle} options.currentBundle
- * @param {EffectiveBundle} options.candidateBundle
- * @returns {RoutingDecision | null}
  */
-export function evaluateToolResultRouting({ state, currentBundle, candidateBundle }) {
+export function evaluateToolResultRouting({ state, currentBundle, candidateBundle }: ToolRoutingOptions): RoutingDecision | null {
   if (state.manualOverride) return null;
   if (state.errorStreak >= ERROR_STREAK_THRESHOLD) {
     return buildDecision({
@@ -280,14 +288,13 @@ export function evaluateToolResultRouting({ state, currentBundle, candidateBundl
 }
 
 /**
- * @param {object} options
- * @param {AdaptiveRoutingState} options.state
- * @param {EffectiveBundle} options.currentBundle
- * @param {EffectiveBundle} options.quickBundle
- * @param {UserTurnSummary} [options.turnSummary]
- * @returns {RoutingDecision | null}
  */
-export function evaluateUserTurnCompleteRouting({ state, currentBundle, quickBundle, turnSummary = {} }) {
+export function evaluateUserTurnCompleteRouting({
+  state,
+  currentBundle,
+  quickBundle,
+  turnSummary = {},
+}: UserTurnRoutingOptions): RoutingDecision | null {
   if (state.manualOverride) return null;
 
   const resetsRoutine = !!(
@@ -325,10 +332,8 @@ export function evaluateUserTurnCompleteRouting({ state, currentBundle, quickBun
 }
 
 /**
- * @param {AdaptiveRoutingState} state
- * @param {RoutingDecision} decision
  */
-export function recordRoutingApplied(state, decision) {
+export function recordRoutingApplied(state: AdaptiveRoutingState, decision: RoutingDecision): void {
   state.cooldownTurnsLeft = COOLDOWN_USER_TURNS;
   state.routineUserTurns = 0;
   state.errorStreak = 0;
@@ -337,36 +342,29 @@ export function recordRoutingApplied(state, decision) {
   }
 }
 
-/** @returns {RoleName} */
-export function highRole() {
+export function highRole(): RoleName {
   return HIGH_ROLE;
 }
 
-/**
- * @param {RoleName | string | null | undefined} role
- * @returns {number}
- */
-function roleRank(role) {
-  return ROLE_RANK[/** @type {keyof typeof ROLE_RANK} */ (role)] || ROLE_RANK.default;
+function roleRank(role: RoleName | string | null | undefined): number {
+  return ROLE_RANK[String(role || "")] || ROLE_RANK.default;
 }
 
-/** @param {AdaptiveRoutingState} state */
-function tickCooldown(state) {
+function tickCooldown(state: AdaptiveRoutingState): void {
   if (state.cooldownTurnsLeft > 0) state.cooldownTurnsLeft -= 1;
 }
 
 /**
- * @param {object} options
- * @param {AdaptiveRoutingState} options.state
- * @param {RoutingDecision["source"]} options.source
- * @param {EffectiveBundle} options.currentBundle
- * @param {EffectiveBundle} options.candidateBundle
- * @param {string} options.reason
- * @param {"escalate" | "deescalate"} options.direction
- * @param {boolean} options.hard
- * @returns {RoutingDecision | null}
  */
-function buildDecision({ state, source, currentBundle, candidateBundle, reason, direction, hard }) {
+function buildDecision({
+  state,
+  source,
+  currentBundle,
+  candidateBundle,
+  reason,
+  direction,
+  hard,
+}: BuildDecisionOptions): RoutingDecision | null {
   if (state.manualOverride || bundlesEqual(currentBundle, candidateBundle)) return null;
   if (direction === "deescalate" && state.cooldownTurnsLeft > 0 && !hard) return null;
   return {

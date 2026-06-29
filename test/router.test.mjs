@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pickModel, detectRole, resolveModelId, resolveContextBudget } from "../src/agent/router.js";
-import { resolveProviderConfig } from "../src/agent/provider.js";
-import { resetConfigCache } from "../src/config.js";
+import { pickModel, detectRole, resolveModelId, resolveContextBudget } from "../dist/agent/router.js";
+import { resolveProviderConfig } from "../dist/agent/provider.js";
+import { resetConfigCache } from "../dist/config.js";
 
 function restoreEnv(name, value) {
   if (value === undefined) delete process.env[name];

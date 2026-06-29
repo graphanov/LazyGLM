@@ -1,5 +1,3 @@
-// @ts-check
-
 // The GLM agent runtime: a tool-use loop that drives a GLM model through
 // read/write/patch/shell tools with the full hook lifecycle firing around
 // every action. This is the clean-room replacement for the Codex CLI runner.
@@ -14,26 +12,58 @@ import { gitInfo, truncate, ensureDir, nowIso } from "../util.js";
 import { abortReason, composeAbortSignals, isDeadlineError, throwIfAborted, withAbort } from "./deadline.js";
 import { isToolErrorResult } from "./tool-errors.js";
 import { buildRuntimePrompt } from "../prompt.js";
+import type {
+  ChatCompletion,
+  ChatUsage,
+  FinishToolResult,
+  HookEngineContract,
+  HookEventName,
+  HookFireResult,
+  RunAgentOptions,
+  RunAgentResult,
+  ToolExecutionRecord,
+  ToolHandlerResult,
+} from "../types/index.js";
 
-/**
- * @typedef {import("../types/index.js").ChatUsage} ChatUsage
- * @typedef {import("../types/index.js").FinishToolResult} FinishToolResult
- * @typedef {import("../types/index.js").HookEngineContract} HookEngineContract
- * @typedef {import("../types/index.js").HookEventName} HookEventName
- * @typedef {import("../types/index.js").RunAgentOptions} RunAgentOptions
- * @typedef {import("../types/index.js").RunAgentResult} RunAgentResult
- * @typedef {import("../types/index.js").ToolExecutionRecord} ToolExecutionRecord
- * @typedef {import("../types/index.js").ToolHandler} ToolHandler
- *
- * @typedef {{ isRepo: boolean, branch?: string, root?: string }} RuntimeGitInfo
- */
+interface CompactInfo {
+  compactionCount: number;
+  droppedTokens?: number;
+}
 
-/**
- * Run the GLM agent on a task.
- * @param {RunAgentOptions} opts
- * @returns {Promise<RunAgentResult>}
- */
-export async function runAgent(opts) {
+interface RuntimeContext {
+  messages: Array<Record<string, unknown>>;
+  totalTokensIn: number;
+  totalTokensOut: number;
+  compactionCount: number;
+  setSystem(text: string): void;
+  push(message: Record<string, unknown>): void;
+  maybeCompact(options?: {
+    force?: boolean;
+    onCompact?: (info: CompactInfo) => string[] | Promise<string[]>;
+  }): Promise<boolean>;
+  recordUsage(usage?: ChatUsage | null): void;
+}
+
+type ContextConstructor = new (options?: {
+  model?: string;
+  budget?: number;
+  preserveThinking?: boolean;
+}) => RuntimeContext;
+
+type HookEngineConstructor = new (options?: {
+  cwd?: string;
+  log?: (message: string) => void;
+}) => HookEngineContract;
+
+const RuntimeContextClass = Context as unknown as ContextConstructor;
+const RuntimeHookEngine = HookEngine as unknown as HookEngineConstructor;
+const toAssistantMessage = assistantMessageFrom as unknown as (response: ChatCompletion) => Record<string, unknown>;
+
+function emptyHookResult(): HookFireResult {
+  return { blocks: [], injects: [], feedbacks: [], results: [] };
+}
+
+export async function runAgent(opts: RunAgentOptions): Promise<RunAgentResult> {
   const {
     task,
     cwd,
@@ -73,9 +103,8 @@ export async function runAgent(opts) {
   const catalogEntry = findCatalogModelEntry(catalogModel, catalog);
   const contextBudget = budget ?? resolveContextBudget(catalogModel, catalog);
 
-  /** @param {string} message */
-  const hookLog = (message) => onEvent({ type: "log", message });
-  const engine = /** @type {HookEngineContract} */ (hooks || new HookEngine(/** @type {any} */ ({ cwd, log: hookLog })));
+  const hookLog = (message: string): void => onEvent({ type: "log", message });
+  const engine: HookEngineContract = hooks || new RuntimeHookEngine({ cwd, log: hookLog });
   for (const p of plugins) engine.register(p);
 
   const sessionId = engine.sessionId;
@@ -83,49 +112,34 @@ export async function runAgent(opts) {
   await ensureDir(dirname(transcriptPath));
   engine.setMeta({ model: resolvedModel, transcriptPath, permissionMode });
 
-  const ctx = new Context({ model: resolvedModel, budget: contextBudget, preserveThinking: shouldPreserveThinking(providerConfig.provider) });
-  /** @type {Set<string>} */
-  const filesWritten = new Set();
-  /** @type {ToolExecutionRecord[]} */
-  const toolCalls = [];
+  const ctx = new RuntimeContextClass({ model: resolvedModel, budget: contextBudget, preserveThinking: shouldPreserveThinking(providerConfig.provider) });
+  const filesWritten = new Set<string>();
+  const toolCalls: ToolExecutionRecord[] = [];
   let totalReasoningTokens = 0;
   let totalPromptTokens = 0;
   let totalCompletionTokens = 0;
   let agentTurns = 0;
   let finished = false;
-  /** @type {string | null} */
-  let finishSummary = null;
-  /** @type {string | null} */
-  let finishReason = null;
-  /** @type {string | null} */
-  let errorMessage = null;
+  let finishSummary: string | null = null;
+  let finishReason: string | null = null;
+  let errorMessage: string | null = null;
   let lastNoToolNudge = false;
 
-  /**
-   * @param {Record<string, unknown>} obj
-   * @returns {Promise<void>}
-   */
-  const log = async (obj) => {
+  const log = async (obj: Record<string, unknown>): Promise<void> => {
     onEvent(obj);
     try {
       await appendFile(transcriptPath, JSON.stringify({ t: nowIso(), ...obj }) + "\n", "utf8");
     } catch {}
   };
-  /**
-   * @param {HookEventName} event
-   * @param {Record<string, unknown>} [fields]
-   */
-  const fireRunHook = (event, fields = {}) => engine.fire(event, fields, { signal: runSignal });
-  /**
-   * @param {Record<string, unknown>} fields
-   */
-  const fireStopHook = (fields) => {
-    if (runSignal?.aborted) return { blocks: [], injects: [], feedbacks: [], results: [] };
+  const fireRunHook = (event: HookEventName, fields: Record<string, unknown> = {}): Promise<HookFireResult> => (
+    Promise.resolve(engine.fire(event, fields, { signal: runSignal }))
+  );
+  const fireStopHook = (fields: Record<string, unknown>): Promise<HookFireResult> => {
+    if (runSignal?.aborted) return Promise.resolve(emptyHookResult());
     return fireRunHook("Stop", fields);
   };
 
-  /** @returns {RunAgentResult} */
-  const buildResult = () => ({
+  const buildResult = (): RunAgentResult => ({
     sessionId,
     turns: agentTurns,
     tokensIn: ctx.totalTokensIn,
@@ -176,18 +190,15 @@ export async function runAgent(opts) {
     for (let turn = 1; turn <= maxTurns; turn++) {
       checkAbort();
       agentTurns = turn;
-      /** @param {{ compactionCount: number }} compactInfo */
-      const onCompact = async ({ compactionCount }) => {
+      const onCompact = async ({ compactionCount }: CompactInfo): Promise<string[]> => {
         const res = await fireRunHook("PostCompact", { compactionCount });
         await log({ type: "compact", compactionCount });
         return res?.injects || [];
       };
-      const compacted = await ctx.maybeCompact(/** @type {any} */ ({
-        onCompact,
-      }));
+      const compacted = await ctx.maybeCompact({ onCompact });
       void compacted;
 
-      let resp;
+      let resp: ChatCompletion;
       try {
         resp = await chat({
           model: resolvedModel,
@@ -221,7 +232,7 @@ export async function runAgent(opts) {
         break;
       }
       ctx.recordUsage(resp.usage);
-      const u = /** @type {ChatUsage} */ (resp.usage || {});
+      const u: ChatUsage = resp.usage || {};
       const reasoningTokens = u.completion_tokens_details?.reasoning_tokens || u.reasoning_tokens || 0;
       totalReasoningTokens += reasoningTokens;
       totalPromptTokens += u.prompt_tokens || 0;
@@ -235,7 +246,7 @@ export async function runAgent(opts) {
         break;
       }
 
-      ctx.push(assistantMessageFrom(resp));
+      ctx.push(toAssistantMessage(resp));
       if (resp.content) await log({ type: "assistant_text", content: truncate(resp.content, 1500), turn });
       for (const tc of resp.tool_calls || []) {
         await log({ type: "tool_call", name: tc.name, input: truncate(JSON.stringify(tc.arguments), 800), turn });
@@ -264,16 +275,16 @@ export async function runAgent(opts) {
       for (const tc of resp.tool_calls) {
         checkAbort();
         const toolName = tc.name || "unknown";
-        const record = /** @type {ToolExecutionRecord} */ ({ name: toolName, turn, status: "ok" });
+        const record: ToolExecutionRecord = { name: toolName, turn, status: "ok" };
         toolCalls.push(record);
-        const handler = /** @type {ToolHandler | undefined} */ (TOOL_HANDLERS[toolName]);
+        const handler = TOOL_HANDLERS[toolName];
         if (!handler) {
           record.status = "error";
           ctx.push({ role: "tool", tool_call_id: tc.id, content: `Error: unknown tool '${tc.name}'. Available: read_file, write_file, patch_file, list_dir, grep, run_shell, finish.` });
           continue;
         }
 
-        let pre;
+        let pre: HookFireResult;
         try {
           pre = await fireRunHook("PreToolUse", {
             tool_name: tc.name,
@@ -299,7 +310,7 @@ export async function runAgent(opts) {
           continue;
         }
 
-        let result;
+        let result: ToolHandlerResult;
         let handlerThrew = false;
         try {
           result = await withAbort(handler(tc.arguments, { cwd, runtime: { engine, ctx, log, deadline, signal: runSignal } }), runSignal);
@@ -315,15 +326,17 @@ export async function runAgent(opts) {
           filesWritten.add(tc.arguments.path);
         }
 
-        const finishCandidate = isFinishToolResult(result);
-        const candidateSummary = finishCandidate ? result.summary : null;
-        if (finishCandidate) {
+        let finishCandidate = false;
+        let candidateSummary: string | null = null;
+        if (isFinishToolResult(result)) {
+          finishCandidate = true;
+          candidateSummary = result.summary;
           resultStr = `finish acknowledged: ${candidateSummary}`;
         } else {
           resultStr = typeof result === "string" ? result : JSON.stringify(result);
         }
 
-        let post;
+        let post: HookFireResult;
         try {
           post = await fireRunHook("PostToolUse", {
             tool_name: tc.name,
@@ -392,26 +405,16 @@ export async function runAgent(opts) {
 }
 
 /**
- * @param {unknown} result
- * @returns {result is FinishToolResult}
  */
-function isFinishToolResult(result) {
-  return !!(result && typeof result === "object" && "__finish" in result && result.__finish);
+function isFinishToolResult(result: unknown): result is FinishToolResult {
+  return !!(result && typeof result === "object" && "__finish" in result && result.__finish === true);
 }
 
-/**
- * @param {unknown} err
- * @returns {string}
- */
-function errorMessageOf(err) {
+function errorMessageOf(err: unknown): string {
   if (err && typeof err === "object" && "message" in err && err.message) return String(err.message);
   return String(err);
 }
 
-/**
- * @param {unknown} err
- * @returns {Error | undefined}
- */
-function abortFallback(err) {
-  return /** @type {Error | undefined} */ (err);
+function abortFallback(err: unknown): Error | undefined {
+  return err instanceof Error ? err : undefined;
 }

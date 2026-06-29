@@ -174,7 +174,7 @@ engineering tasks.
 
 ## Provider abstraction
 
-`src/agent/provider.js` speaks the OpenAI Chat Completions schema with tool
+`src/agent/provider.ts` speaks the OpenAI Chat Completions schema with tool
 calling. It handles streaming, retry/backoff, tool-call deltas, reasoning output,
 and reasoning-token accounting.
 
