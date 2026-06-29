@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { doctor, reasoningConfigDetail } from "../src/doctor.js";
-import { resetConfigCache } from "../src/config.js";
+import { doctor, reasoningConfigDetail } from "../dist/doctor.js";
+import { resetConfigCache } from "../dist/config.js";
 
 // Doctor touches the network/provider. Isolate LAZYGLM_HOME and use the
 // keyless ollama provider so no API secrets are needed. The ollama daemon

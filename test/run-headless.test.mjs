@@ -5,10 +5,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { main } from "../src/cli.js";
-import { createDeadline } from "../src/agent/deadline.js";
-import { runAgent } from "../src/agent/runtime.js";
-import { TOOL_HANDLERS } from "../src/agent/tools.js";
+import { main } from "../dist/cli.js";
+import { createDeadline } from "../dist/agent/deadline.js";
+import { runAgent } from "../dist/agent/runtime.js";
+import { TOOL_HANDLERS } from "../dist/agent/tools.js";
 
 const ANSI_RE = /\x1b\[/;
 const execFileAsync = promisify(execFile);
@@ -347,7 +347,7 @@ test("whole-run timeout wins when stream read is canceled", async () => {
 });
 
 test("retry backoff sleep remains referenced while awaited", async () => {
-  const deadlineModuleUrl = new URL("../src/agent/deadline.js", import.meta.url).href;
+  const deadlineModuleUrl = new URL("../dist/agent/deadline.js", import.meta.url).href;
   const script = `import { abortableSleep } from ${JSON.stringify(deadlineModuleUrl)};\nawait abortableSleep(30);\nconsole.log("slept");`;
   const { stdout } = await execFileAsync(process.execPath, ["--input-type=module", "-e", script], { timeout: 1000 });
 
@@ -611,7 +611,7 @@ test("ultrawork failOnToolBlock fails closed with tool_denied", async () => {
   await withTempCwd(async (cwd) => {
     const fetchStub = installFetchSequence([toolResponse("run_shell", { command: "echo should-not-run" })]);
     try {
-      const { runUltrawork } = await import("../src/ulw.js");
+      const { runUltrawork } = await import("../dist/ulw.js");
       const res = await runUltrawork({
         task: "run a denied command",
         cwd,
@@ -635,7 +635,7 @@ test("ultrawork preserves runtime provider errors", async () => {
   await withTempCwd(async (cwd) => {
     const fetchStub = installFetchSequence([() => new Response("boom", { status: 500 })]);
     try {
-      const { runUltrawork } = await import("../src/ulw.js");
+      const { runUltrawork } = await import("../dist/ulw.js");
       const res = await runUltrawork({
         task: "provider fails",
         cwd,
@@ -658,7 +658,7 @@ test("ultrawork stops when the reasoning budget is exhausted", async () => {
   await withTempCwd(async (cwd) => {
     const fetchStub = installFetchSequence([textOnlyResponse("still thinking", usage(1, 1, 5))]);
     try {
-      const { runUltrawork } = await import("../src/ulw.js");
+      const { runUltrawork } = await import("../dist/ulw.js");
       const res = await runUltrawork({
         task: "budgeted work",
         cwd,
@@ -679,7 +679,7 @@ test("ultrawork stops when the reasoning budget is exhausted", async () => {
 });
 
 test("whole-run deadline timer keeps Node alive when the operation does not", async () => {
-  const deadlineModuleUrl = new URL("../src/agent/deadline.js", import.meta.url).href;
+  const deadlineModuleUrl = new URL("../dist/agent/deadline.js", import.meta.url).href;
   const script = `import { createDeadline } from ${JSON.stringify(deadlineModuleUrl)};\nconst d = createDeadline(50, { message: "fired" });\nd.signal.addEventListener("abort", () => { console.log(d.signal.reason?.message || "aborted"); });\n// No other handles — the only ref'ed timer must keep the process alive.`;
   const { stdout } = await execFileAsync(process.execPath, ["--input-type=module", "-e", script], { timeout: 2000 });
   assert.equal(stdout.trim(), "fired");

@@ -1,5 +1,3 @@
-// @ts-check
-
 // Model router: maps a task role to a concrete (model, provider) pair using
 // config/model-catalog.json. This is what makes "leverage GLM-5.2 for hard
 // tasks, glm-4.7 for quick/routine ones" actually work — previously roles.json
@@ -8,22 +6,22 @@ import { readJson } from "../util.js";
 import { loadUserConfig, normalizeProvider } from "../config.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import type {
+  ModelCatalog,
+  ModelCatalogEntry,
+  ModelRouteOptions,
+  Provider,
+  ProviderCatalogConfig,
+  ResolvedModelRoute,
+  RoleModelConfig,
+  RoleName,
+} from "../types/index.js";
 
-/**
- * @typedef {import("../types/index.js").ModelCatalog} ModelCatalog
- * @typedef {import("../types/index.js").ModelCatalogEntry} ModelCatalogEntry
- * @typedef {import("../types/index.js").ModelRouteOptions} ModelRouteOptions
- * @typedef {import("../types/index.js").Provider} Provider
- * @typedef {import("../types/index.js").ProviderCatalogConfig} ProviderCatalogConfig
- * @typedef {import("../types/index.js").ResolvedModelRoute} ResolvedModelRoute
- * @typedef {import("../types/index.js").RoleModelConfig} RoleModelConfig
- * @typedef {import("../types/index.js").RoleName} RoleName
- *
- * @typedef {object} PersistedUserConfig
- * @property {Provider} [provider]
- * @property {string} [model]
- * @property {string} [api_key]
- */
+interface PersistedUserConfig {
+  provider?: Provider;
+  model?: string;
+  api_key?: string;
+}
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CATALOG_PATH = join(ROOT, "config", "model-catalog.json");
@@ -34,25 +32,17 @@ const CATALOG_PATH = join(ROOT, "config", "model-catalog.json");
 // know their custom model's capacity can set LAZYGLM_CONTEXT_BUDGET explicitly.
 export const DEFAULT_CONTEXT_BUDGET = 24_000;
 export const CONTEXT_BUDGET_FACTOR = 0.8;
-const readModelCatalog = /** @type {(path: string, fallback: ModelCatalog) => Promise<ModelCatalog>} */ (
-  /** @type {unknown} */ (readJson)
-);
+const readModelCatalog = readJson as unknown as (path: string, fallback: ModelCatalog) => Promise<ModelCatalog>;
 
-/** @type {ModelCatalog | null} */
-let _catalog = null;
+let _catalog: ModelCatalog | null = null;
 
-/** @returns {Promise<ModelCatalog>} */
 export async function loadCatalog() {
   if (_catalog) return _catalog;
   _catalog = await readModelCatalog(CATALOG_PATH, {});
   return _catalog;
 }
 
-/**
- * @param {unknown} value
- * @returns {number | null}
- */
-function parsePositiveInteger(value) {
+function parsePositiveInteger(value: unknown): number | null {
   if (value === undefined || value === null || value === "") return null;
   const normalized = typeof value === "string" ? value.replace(/_/g, "") : value;
   const n = Number(normalized);
@@ -68,12 +58,12 @@ function parsePositiveInteger(value) {
  * still uses Context's rough char estimate; this resolver only sets the soft
  * budget from documented catalog capacity.
  *
- * @param {string | null | undefined} model
- * @param {ModelCatalog} [catalog]
- * @param {Record<string, string | undefined>} [env]
- * @returns {number}
  */
-export function resolveContextBudget(model, catalog = {}, env = process.env) {
+export function resolveContextBudget(
+  model: string | null | undefined,
+  catalog: ModelCatalog = {},
+  env: Record<string, string | undefined> = process.env,
+): number {
   const override = parsePositiveInteger(env?.LAZYGLM_CONTEXT_BUDGET);
   if (override) return override;
 
@@ -83,12 +73,7 @@ export function resolveContextBudget(model, catalog = {}, env = process.env) {
   return Math.floor(contextWindow * CONTEXT_BUDGET_FACTOR);
 }
 
-/**
- * @param {string | null | undefined} model
- * @param {ModelCatalog} [catalog]
- * @returns {ModelCatalogEntry | null}
- */
-export function findCatalogModelEntry(model, catalog = {}) {
+export function findCatalogModelEntry(model: string | null | undefined, catalog: ModelCatalog = {}): ModelCatalogEntry | null {
   if (!model) return null;
   const direct = catalog.models?.[model];
   if (direct) return direct;
@@ -107,16 +92,16 @@ export function findCatalogModelEntry(model, catalog = {}) {
  *   4. persisted user config (~/.lazyglm/config.json)
  *   5. catalog.default_provider (zai)
  *
- * @param {ModelRouteOptions} [options]
- * @param {ModelCatalog} [catalog]
- * @param {PersistedUserConfig} [userConfig]
- * @returns {Provider}
  */
-export function resolveProvider(options = {}, catalog, userConfig = {}) {
-  if (options.provider) return /** @type {Provider} */ (normalizeProvider(options.provider));
-  if (process.env.LAZYGLM_PROVIDER) return /** @type {Provider} */ (normalizeProvider(process.env.LAZYGLM_PROVIDER));
+export function resolveProvider(
+  options: ModelRouteOptions = {},
+  catalog?: ModelCatalog,
+  userConfig: PersistedUserConfig = {},
+): Provider {
+  if (options.provider) return normalizeProvider(options.provider) as Provider;
+  if (process.env.LAZYGLM_PROVIDER) return normalizeProvider(process.env.LAZYGLM_PROVIDER) as Provider;
   if (process.env.LAZYGLM_BASE_URL) return "custom";
-  if (userConfig?.provider) return /** @type {Provider} */ (normalizeProvider(userConfig.provider));
+  if (userConfig?.provider) return normalizeProvider(userConfig.provider) as Provider;
   return catalog?.default_provider || "zai";
 }
 
@@ -124,12 +109,8 @@ export function resolveProvider(options = {}, catalog, userConfig = {}) {
  * Resolve a canonical model name (e.g. "glm-5.2") to the provider-specific ID
  * (e.g. "z-ai/glm-5.2" for nous, "glm-5.2" for ollama/zai).
  *
- * @param {string} model
- * @param {Provider} provider
- * @param {ModelCatalog} [catalog]
- * @returns {string}
  */
-export function resolveModelId(model, provider, catalog) {
+export function resolveModelId(model: string, provider: Provider, catalog?: ModelCatalog): string {
   const entry = catalog?.models?.[model];
   if (entry?.aliases?.[provider]) return entry.aliases[provider];
   // fallback: bare name
@@ -143,22 +124,20 @@ export function resolveModelId(model, provider, catalog) {
  * resolveProviderConfig can use it without a separate file read and WITHOUT
  * placing the key in process.env. Env vars still win at the provider layer.
  *
- * @param {RoleName} [role] - one of: default, worker, ultrabrain, planner, verifier, quick
- * @param {ModelRouteOptions} [options] - { provider?, model? } overrides
- * @param {PersistedUserConfig | null} [userConfig] - preloaded user config (loaded from disk if omitted)
- * @returns {Promise<ResolvedModelRoute>}
  */
-export async function pickModel(role = "default", options = {}, userConfig = null) {
+export async function pickModel(
+  role: RoleName = "default",
+  options: ModelRouteOptions = {},
+  userConfig: PersistedUserConfig | null = null,
+): Promise<ResolvedModelRoute> {
   const catalog = await loadCatalog();
-  /** @type {PersistedUserConfig} */
-  const uc = userConfig ?? (await loadUserConfig());
+  const uc: PersistedUserConfig = userConfig ?? ((await loadUserConfig()) as PersistedUserConfig);
   const provider = resolveProvider(options, catalog, uc);
 
   // Explicit --model wins, followed by LAZYGLM_MODEL. The persisted config-file
   // model is an override of the catalog default only (role-specific models
   // still win, so routing tiers are preserved).
-  /** @type {RoleModelConfig} */
-  const roleEntry = catalog.roles?.[role] || catalog.roles?.default || {};
+  const roleEntry: RoleModelConfig = catalog.roles?.[role] || catalog.roles?.default || {};
   const canonical = options.model || process.env.LAZYGLM_MODEL || roleEntry.model || uc?.model || catalog.current?.model || "glm-5.2";
   const modelId = resolveModelId(canonical, provider, catalog);
 
@@ -176,11 +155,8 @@ export async function pickModel(role = "default", options = {}, userConfig = nul
  * Auto-detect the best role for a task. Ultrawork/hard tasks -> ultrabrain;
  * planning -> planner; verification -> verifier; simple/short -> quick; else default.
  *
- * @param {string | null | undefined} [task]
- * @param {ModelRouteOptions} [options]
- * @returns {RoleName}
  */
-export function detectRole(task, options = {}) {
+export function detectRole(task?: string | null, options: ModelRouteOptions = {}): RoleName {
   if (options.role) return options.role;
   const t = (task || "").toLowerCase().trim();
   if (/\$ulw-loop|--ultrawork|ultrawork/.test(t)) return "ultrabrain";
@@ -195,10 +171,8 @@ export function detectRole(task, options = {}) {
 /**
  * Get the provider config (base_url, requires_key) for a given provider.
  *
- * @param {Provider} provider
- * @returns {Promise<ProviderCatalogConfig>}
  */
-export async function getProviderConfig(provider) {
+export async function getProviderConfig(provider: Provider): Promise<ProviderCatalogConfig> {
   const catalog = await loadCatalog();
   const p = catalog.providers?.[provider];
   if (!p) {

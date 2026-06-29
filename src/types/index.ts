@@ -160,10 +160,9 @@ export type FinishToolResult = { __finish: true; summary: string };
 
 export type ToolHandlerResult = string | FinishToolResult;
 
-export type ToolHandler = (
-  args: any,
-  ctx: ToolHandlerContext,
-) => ToolHandlerResult | Promise<ToolHandlerResult>;
+export type ToolHandler<Args extends object = Record<string, unknown>> = {
+  handle(args: Args, ctx: ToolHandlerContext): ToolHandlerResult | Promise<ToolHandlerResult>;
+}["handle"];
 
 export interface ChatCompletion {
   content: string | null;

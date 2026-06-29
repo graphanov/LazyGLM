@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { TOOL_HANDLERS } from "../src/agent/tools.js";
-import { createDeadline, composeAbortSignals } from "../src/agent/deadline.js";
+import { TOOL_HANDLERS } from "../dist/agent/tools.js";
+import { createDeadline, composeAbortSignals } from "../dist/agent/deadline.js";
 
 let cwd;
 test.before(async () => { cwd = await mkdtemp(join(tmpdir(), "lazyglm-tools-")); });
