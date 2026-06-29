@@ -15,14 +15,25 @@ const HANDOFF_CANDIDATES = [
 // larger than the configured budget.
 const MAX_HANDOFF_READ_BYTES = 16 * 1024;
 
-export function discoverScaffold(cwd) {
-  const sources = [];
+export interface ScaffoldDiscovery {
+  present: boolean;
+  sources: string[];
+}
+
+export interface HandoffText {
+  text: string;
+  source: string;
+  truncated: boolean;
+}
+
+export function discoverScaffold(cwd: string): ScaffoldDiscovery {
+  const sources: string[] = [];
   if (existsSync(join(cwd, ".osc"))) sources.push(".osc/");
   if (existsSync(join(cwd, "MISSION.md"))) sources.push("MISSION.md");
   return { present: sources.length > 0, sources };
 }
 
-export async function readHandoffText(cwd, { maxChars = 600 } = {}) {
+export async function readHandoffText(cwd: string, { maxChars = 600 }: { maxChars?: number } = {}): Promise<HandoffText | null> {
   for (const candidate of HANDOFF_CANDIDATES) {
     const path = join(cwd, candidate.rel);
     if (!existsSync(path)) continue;
@@ -48,7 +59,7 @@ export async function readHandoffText(cwd, { maxChars = 600 } = {}) {
     // huge handoff/mission record cannot exhaust memory or stall startup.
     const oversized = lstat.size > MAX_HANDOFF_READ_BYTES;
     const readBytes = oversized ? MAX_HANDOFF_READ_BYTES : lstat.size;
-    let raw;
+    let raw: string;
     try {
       const fh = await open(path, "r");
       try {
@@ -76,7 +87,7 @@ export async function readHandoffText(cwd, { maxChars = 600 } = {}) {
   return null;
 }
 
-export function formatHandoffInject({ text, source, truncated }) {
+export function formatHandoffInject({ text, source, truncated }: HandoffText): string {
   const suffix = truncated ? "\n\n[Open Scaffold handoff truncated before injection.]" : "";
   return [
     "OPEN SCAFFOLD HANDOFF CONTEXT",

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { thinkingControlForRequest, supportsReasoningEffort } from "../src/agent/thinking.js";
+import { thinkingControlForRequest, supportsReasoningEffort } from "../dist/agent/thinking.js";
 
 test("thinkingControlForRequest maps only z.ai low effort to disabled", () => {
   assert.deepEqual(
@@ -54,4 +54,3 @@ test("supportsReasoningEffort: false for unparseable / empty names", () => {
   assert.equal(supportsReasoningEffort(undefined), false);
   assert.equal(supportsReasoningEffort(null), false);
 });
-

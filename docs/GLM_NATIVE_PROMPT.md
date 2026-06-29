@@ -27,7 +27,7 @@ tool-loop expectations.
 
 ## Prompt Shape
 
-The shared prompt builder in `src/prompt.js` creates:
+The shared prompt builder in `src/prompt.ts` creates:
 
 1. `GLM-NATIVE OPERATING CONTRACT`
 2. Existing one-shot working rules or REPL persona

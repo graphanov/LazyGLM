@@ -9,8 +9,49 @@
 //     generic placeholder. This is the operational memory that stops the agent
 //     from re-doing work or thrashing after a compaction.
 import { nowIso, truncate } from "../util.js";
+import type { ChatCompletion, ChatUsage, ToolCall } from "../types/index.js";
 
 const CHARS_PER_TOKEN = 4; // rough cross-model estimate; budget windows come from the catalog.
+
+export interface AssistantWireToolCall {
+  id?: string | null;
+  type?: "function" | string;
+  function?: {
+    name?: string | null;
+    arguments?: string | Record<string, unknown>;
+  };
+}
+
+export interface ContextMessage {
+  role: string;
+  content?: string | null;
+  reasoning_content?: string | null;
+  tool_calls?: AssistantWireToolCall[] | null;
+  [key: string]: unknown;
+}
+
+interface ContextOptions {
+  model?: string;
+  budget?: number;
+  preserveThinking?: boolean;
+}
+
+interface CompactInfo {
+  compactionCount: number;
+  droppedTokens: number;
+}
+
+interface CompactOptions {
+  onCompact?: (info: CompactInfo) => string[] | void | Promise<string[] | void>;
+  force?: boolean;
+}
+
+interface DecisionOverride {
+  all: boolean;
+  targets: string[];
+}
+
+type DecisionOverrideResult = DecisionOverride | null | false;
 
 /**
  * Build a wire-format assistant message from a provider chat() response,
@@ -27,13 +68,13 @@ const CHARS_PER_TOKEN = 4; // rough cross-model estimate; budget windows come fr
  * @param {object} resp  - { content, reasoning, tool_calls, ... }
  * @returns {{role:"assistant", content:string, reasoning_content?:string, tool_calls?:Array}}
  */
-export function assistantMessageFrom(resp) {
-  const msg = { role: "assistant", content: resp?.content || "" };
+export function assistantMessageFrom(resp: ChatCompletion): ContextMessage {
+  const msg: ContextMessage = { role: "assistant", content: resp?.content || "" };
   if (resp?.reasoning) {
     msg.reasoning_content = resp.reasoning;
   }
   if (resp?.tool_calls?.length) {
-    msg.tool_calls = resp.tool_calls.map((tc) => ({
+    msg.tool_calls = resp.tool_calls.map((tc: ToolCall) => ({
       id: tc.id,
       type: "function",
       function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
@@ -43,7 +84,16 @@ export function assistantMessageFrom(resp) {
 }
 
 export class Context {
-  constructor({ model = "", budget = 24_000, preserveThinking = true } = {}) {
+  model: string;
+  budget: number;
+  preserveThinking: boolean;
+  messages: ContextMessage[];
+  compactionCount: number;
+  totalTokensIn: number;
+  totalTokensOut: number;
+  private decisions: string[];
+
+  constructor({ model = "", budget = 24_000, preserveThinking = true }: ContextOptions = {}) {
     this.model = model;
     this.budget = budget; // soft token budget for the rolling window
     // Whether reasoning_content counts toward the budget. It only occupies the
@@ -58,25 +108,25 @@ export class Context {
     this.decisions = [];
   }
 
-  setSystem(text) {
+  setSystem(text: string): void {
     const existing = this.messages.findIndex((m) => m.role === "system");
     const msg = { role: "system", content: text };
     if (existing >= 0) this.messages[existing] = msg;
     else this.messages.unshift(msg);
   }
 
-  push(msg) {
+  push(msg: ContextMessage): void {
     this.messages.push(msg);
   }
 
-  addDecision(text) {
+  addDecision(text: string): void {
     const decision = normalizeDecision(text);
     if (!decision) return;
     this.decisions.push(decision);
     if (this.decisions.length > 12) this.decisions.shift();
   }
 
-  getDecisions() {
+  getDecisions(): string[] {
     return [...this.decisions];
   }
 
@@ -86,7 +136,7 @@ export class Context {
    * /clear and /resume so a stale `decisions` array does not leak rationale
    * from a prior session into the next compaction digest.
    */
-  reset() {
+  reset(): void {
     this.messages = [];
     this.decisions = [];
     this.compactionCount = 0;
@@ -98,17 +148,17 @@ export class Context {
    * but they are scoped to the current compacted conversation and must not
    * survive REPL /clear or /resume into a fresh transcript.
    */
-  resetToSystemPrompt() {
+  resetToSystemPrompt(): void {
     const system = this.messages.find((m) => m.role === "system");
     this.messages = system ? [system] : [];
     this.decisions = [];
     this.compactionCount = 0;
   }
 
-  estimateTokens() {
+  estimateTokens(): number {
     let chars = 0;
     for (const m of this.messages) {
-      chars += (m.content?.length || 0);
+      chars += (typeof m.content === "string" ? m.content.length : 0);
       // Preserved thinking counts toward the budget only when it's actually on
       // the wire (this.preserveThinking). Stripping providers never send
       // reasoning_content, so counting it would force premature compaction.
@@ -126,7 +176,7 @@ export class Context {
    *   - the most recent `keepRecent` messages
    * Fires `onCompact` so the hook engine can react. Returns true if compaction occurred.
    */
-  async maybeCompact({ onCompact, force = false } = {}) {
+  async maybeCompact({ onCompact, force = false }: CompactOptions = {}): Promise<boolean> {
     const tokens = this.estimateTokens();
     if (!force && tokens <= this.budget) return false;
     const keepRecent = 12;
@@ -163,7 +213,7 @@ export class Context {
       suppressedDecisionTargets: tailOverride?.targets || [],
     });
 
-    const summary = {
+    const summary: ContextMessage = {
       role: "system",
       content:
         `[Compacted transcript — ${dropped.length} earlier messages digested at ${nowIso()} to fit the GLM context window.]\n\n` +
@@ -172,9 +222,9 @@ export class Context {
         `Continue from the most recent messages. Do not re-ask what was already discussed or re-do work listed in the digest above.`,
     };
 
-    this.messages = [system, taskMsg, summary, ...tail].filter(Boolean);
+    this.messages = [system, taskMsg, summary, ...tail].filter((msg): msg is ContextMessage => Boolean(msg));
     this.compactionCount += 1;
-    let injects = [];
+    let injects: string[] = [];
     if (onCompact) {
       const res = await onCompact({ compactionCount: this.compactionCount, droppedTokens: tokens });
       if (Array.isArray(res)) injects = res;
@@ -202,17 +252,22 @@ export class Context {
     return true;
   }
 
-  recordUsage(usage) {
+  recordUsage(usage?: ChatUsage | null): void {
     if (!usage) return;
     this.totalTokensIn += usage.prompt_tokens || 0;
     this.totalTokensOut += usage.completion_tokens || 0;
   }
 }
 
-function safeParse(s) {
+function safeParse(s: unknown): Record<string, unknown> {
   if (!s) return {};
-  if (typeof s !== "string") return s;
-  try { return JSON.parse(s); } catch { return {}; }
+  if (typeof s !== "string") return s && typeof s === "object" && !Array.isArray(s) ? s as Record<string, unknown> : {};
+  try {
+    const parsed = JSON.parse(s);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
 }
 
 const DECISION_CUES = [
@@ -357,7 +412,7 @@ const OVERRIDE_CUES = [
   RATHER_REPLACEMENT_CUE,
 ];
 
-function hasPositiveReplacementCue(content) {
+function hasPositiveReplacementCue(content: string): boolean {
   return ACTUALLY_REPLACEMENT_CUE.test(content)
     || INSTEAD_REPLACEMENT_CUE.test(content)
     || CHANGE_TO_CUE.test(content)
@@ -368,7 +423,7 @@ function hasPositiveReplacementCue(content) {
     || DISCARD_DECISION_CUE.test(content);
 }
 
-function normalizeChoiceTarget(value) {
+function normalizeChoiceTarget(value: unknown): string {
   return String(value || "")
     .replace(/[`"']/g, "")
     .replace(/^\s*(?:(?:the|a|an|current|existing|prior|previous|same)\s+)+/i, "")
@@ -380,11 +435,11 @@ function normalizeChoiceTarget(value) {
     .toLowerCase();
 }
 
-function escapeRegExp(value) {
+function escapeRegExp(value: string): string {
   return String(value).replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
 }
 
-function decisionNegatesTarget(decision, target) {
+function decisionNegatesTarget(decision: string, target: string): boolean {
   if (!target) return false;
   const normalized = normalizeChoiceTarget(decision);
   const escaped = escapeRegExp(target);
@@ -392,7 +447,7 @@ function decisionNegatesTarget(decision, target) {
   return new RegExp(`(?<![\\w])(?:not|never|without|avoid|avoiding|no)(?:\\s+\\w+){0,4}\\s+${escaped}(?![\\w])`, "i").test(normalized);
 }
 
-function firstChoiceTarget(content, cues) {
+function firstChoiceTarget(content: string, cues: RegExp[]): string {
   for (const cue of cues) {
     const match = cue.exec(content);
     const target = normalizeChoiceTarget(match?.[1]);
@@ -401,7 +456,7 @@ function firstChoiceTarget(content, cues) {
   return "";
 }
 
-function isNeutralReplacementTarget(target) {
+function isNeutralReplacementTarget(target: string): boolean {
   if (!target) return false;
   if (COMMANDISH_REPLACEMENT_TARGET_CUE.test(target)
       || ONE_WORD_TOOL_ACTION_TARGET_CUE.test(target)) return true;
@@ -437,12 +492,12 @@ function isNeutralReplacementTarget(target) {
   return false;
 }
 
-function isNeutralShortInsteadTurn(content) {
+function isNeutralShortInsteadTurn(content: string): boolean {
   const target = SHORT_INSTEAD_REPLACEMENT_TARGET_CUE.exec(content)?.[1]?.trim() || "";
   return isNeutralReplacementTarget(target);
 }
 
-function isNeutralActionUseTurn(content) {
+function isNeutralActionUseTurn(content: string): boolean {
   const target = NEUTRAL_ACTION_USE_CUE.exec(content)?.[1]?.trim() || "";
   return isNeutralReplacementTarget(target);
 }
@@ -454,17 +509,17 @@ function isNeutralActionUseTurn(content) {
 // command-like target, treat the turn as neutral (mirrors isNeutralShortInsteadTurn
 // / isNeutralActionUseTurn for the instead/actually forms).
 const RATHER_USE_REPLACEMENT_TARGET_CUE = /\brather\b[^.;\n]*\b(?:use|switch\s+to|change\s+to|prefer|go\s+with)\s+([^.;\n]+?)(?=\s+(?:because|since|as|in|for|on|during|when|while|where|under|with)\b|[.;\n]|$)/i;
-function isNeutralRatherUseTurn(content) {
+function isNeutralRatherUseTurn(content: string): boolean {
   if (!RATHER_REPLACEMENT_CUE.test(content)) return false;
   const target = RATHER_USE_REPLACEMENT_TARGET_CUE.exec(content)?.[1]?.trim() || "";
   return isNeutralReplacementTarget(target);
 }
 
-function isPronounChoiceTarget(target) {
+function isPronounChoiceTarget(target: string): boolean {
   return PRONOUN_CHOICE_TARGETS.has(target);
 }
 
-function decisionMentionsTarget(decision, target) {
+function decisionMentionsTarget(decision: string, target: string): boolean {
   const normalizedTarget = normalizeChoiceTarget(target);
   if (!normalizedTarget) return false;
   const targetPattern = normalizedTarget.split(/\s+/).map(escapeRegExp).join("\\s+");
@@ -474,39 +529,38 @@ function decisionMentionsTarget(decision, target) {
   return new RegExp(`(?<![\\w])${targetPattern}(?![\\w])`, "i").test(normalizeChoiceTarget(decision));
 }
 
-function decisionAffirmsTarget(decision, target) {
+function decisionAffirmsTarget(decision: string, target: string): boolean {
   return decisionMentionsTarget(decision, target) && !decisionNegatesTarget(decision, target);
 }
 
-function decisionsMentionChoice(decisions, target) {
+function decisionsMentionChoice(decisions: string[], target: string): boolean {
   if (!target || isPronounChoiceTarget(target)) return false;
   return decisions.some((decision) => decisionAffirmsTarget(decision, target));
 }
 
-function decisionMatchesTargets(decision, targets = []) {
+function decisionMatchesTargets(decision: string, targets: string[] = []): boolean {
   return targets.some((target) => decisionAffirmsTarget(decision, target));
 }
 
-function mergeDecisionOverride(existing, next) {
-  if (!next) return existing;
+function mergeDecisionOverride(existing: DecisionOverride | null, next: DecisionOverride): DecisionOverride {
   if (!existing) return next.all ? { all: true, targets: [] } : { all: false, targets: [...new Set(next.targets)] };
   if (existing.all || next.all) return { all: true, targets: [] };
   return { all: false, targets: [...new Set([...existing.targets, ...next.targets])] };
 }
 
-function applyDecisionOverride(decisions, override) {
+function applyDecisionOverride(decisions: string[], override: DecisionOverrideResult): string[] {
   if (!override) return [...decisions];
   if (override.all) return [];
   return decisions.filter((decision) => !decisionMatchesTargets(decision, override.targets));
 }
 
-function decisionRemovedByOverride(decision, override) {
+function decisionRemovedByOverride(decision: string, override: DecisionOverrideResult): boolean {
   if (!override) return false;
   if (override.all) return true;
   return decisionMatchesTargets(decision, override.targets);
 }
 
-function insteadOfOldChoiceTargets(content, activeDecisions = []) {
+function insteadOfOldChoiceTargets(content: string, activeDecisions: string[] = []): string[] {
   const match = INSTEAD_OF_REPLACEMENT_CUE.exec(content);
   const replacedTarget = normalizeChoiceTarget(match?.[2]);
   return decisionsMentionChoice(activeDecisions, replacedTarget) ? [replacedTarget] : [];
@@ -515,13 +569,13 @@ function insteadOfOldChoiceTargets(content, activeDecisions = []) {
 // Leading-order "Instead of Postgres, use SQLite": the old target is in group 1
 // (after "instead of"), not group 2. Same eviction logic as insteadOfOldChoiceTargets
 // but reads the reversed cue's first capture group.
-function leadingInsteadOfOldChoiceTargets(content, activeDecisions = []) {
+function leadingInsteadOfOldChoiceTargets(content: string, activeDecisions: string[] = []): string[] {
   const match = LEADING_INSTEAD_OF_REPLACEMENT_CUE.exec(content);
   const replacedTarget = normalizeChoiceTarget(match?.[1]);
   return decisionsMentionChoice(activeDecisions, replacedTarget) ? [replacedTarget] : [];
 }
 
-function ratherThanOldChoiceTargets(content, activeDecisions = []) {
+function ratherThanOldChoiceTargets(content: string, activeDecisions: string[] = []): string[] {
   const match = RATHER_THAN_REPLACEMENT_CUE.exec(content);
   const replacedTarget = normalizeChoiceTarget(match?.[2]);
   return decisionsMentionChoice(activeDecisions, replacedTarget) ? [replacedTarget] : [];
@@ -530,7 +584,7 @@ function ratherThanOldChoiceTargets(content, activeDecisions = []) {
 // Leading-order "Rather than Postgres, use SQLite": the old target is in group 1
 // (after "rather than"), not group 2. Same eviction logic as ratherThanOldChoiceTargets
 // but reads the leading cue's first capture group.
-function leadingRatherThanOldChoiceTargets(content, activeDecisions = []) {
+function leadingRatherThanOldChoiceTargets(content: string, activeDecisions: string[] = []): string[] {
   const match = LEADING_RATHER_THAN_REPLACEMENT_CUE.exec(content);
   const replacedTarget = normalizeChoiceTarget(match?.[1]);
   return decisionsMentionChoice(activeDecisions, replacedTarget) ? [replacedTarget] : [];
@@ -542,7 +596,7 @@ function leadingRatherThanOldChoiceTargets(content, activeDecisions = []) {
 // group 1 = rejected target, group 2 = kept target. Only evict the rejected target
 // when it is an active decision, so the preserve path still works when the rejected
 // choice was never persisted.
-function ratherThanPreserveRejectedTargets(content, activeDecisions = []) {
+function ratherThanPreserveRejectedTargets(content: string, activeDecisions: string[] = []): string[] {
   const match = RATHER_THAN_PRESERVE_CUE.exec(content);
   const rejectedTarget = normalizeChoiceTarget(match?.[1]);
   return decisionsMentionChoice(activeDecisions, rejectedTarget) ? [rejectedTarget] : [];
@@ -554,7 +608,7 @@ function ratherThanPreserveRejectedTargets(content, activeDecisions = []) {
 // to use instead, and the prior decision's affirmed choice is the rejected one.
 // This mirrors the targeted eviction path so the superseded decision is evicted
 // precisely without clearing unrelated decisions.
-function bareUseReplacementTargets(content, activeDecisions = []) {
+function bareUseReplacementTargets(content: string, activeDecisions: string[] = []): string[] {
   // Skip when an explicit qualifier is present: those are handled by the
   // instead-of / rather-than / actually / second-thought / nevermind / discard
   // paths above, which name the old target explicitly. The bare path only
@@ -577,7 +631,7 @@ function bareUseReplacementTargets(content, activeDecisions = []) {
   // technology choice is active, so the correction is unambiguous. When multiple
   // unrelated choices exist, the user must name the old target explicitly
   // (instead-of / rather-than) or the turn falls through to the neutral path.
-  const candidateTargets = [];
+  const candidateTargets: string[] = [];
   for (const decision of activeDecisions) {
     const choiceMatch = USE_CHOICE_FROM_DECISION_CUE.exec(decision);
     if (!choiceMatch) continue;
@@ -602,11 +656,11 @@ function bareUseReplacementTargets(content, activeDecisions = []) {
   return candidateTargets;
 }
 
-function isNegatedReplacementOverride(content, activeDecisions = []) {
+function isNegatedReplacementOverride(content: string, activeDecisions: string[] = []): boolean {
   return negatedReplacementOverrideTargets(content, activeDecisions).length > 0;
 }
 
-function negatedReplacementOverrideTargets(content, activeDecisions = []) {
+function negatedReplacementOverrideTargets(content: string, activeDecisions: string[] = []): string[] {
   const negatedTarget = firstChoiceTarget(content, NEGATED_REPLACEMENT_TARGET_CUES);
   const preservedTarget = firstChoiceTarget(content, PRESERVE_TARGET_CUES);
   if (!decisionsMentionChoice(activeDecisions, negatedTarget)) return [];
@@ -615,15 +669,15 @@ function negatedReplacementOverrideTargets(content, activeDecisions = []) {
   return [negatedTarget];
 }
 
-function isKeepGoingTarget(target) {
+function isKeepGoingTarget(target: string): boolean {
   return /^(?:going|working|on|at it)$/i.test(target);
 }
 
-function isNegatedReplaceOnlyTurn(content) {
+function isNegatedReplaceOnlyTurn(content: string): boolean {
   return /\b(?:do not|don't|dont)\s+replace\b|\b(?:no|not|without)\s+replacement\b/i.test(content);
 }
 
-function targetedOverrideTargets(content, activeDecisions = []) {
+function targetedOverrideTargets(content: string, activeDecisions: string[] = []): string[] {
   return [...new Set([
     ...negatedReplacementOverrideTargets(content, activeDecisions),
     ...insteadOfOldChoiceTargets(content, activeDecisions),
@@ -635,7 +689,7 @@ function targetedOverrideTargets(content, activeDecisions = []) {
   ])];
 }
 
-function isPreserveChoiceTurn(content, activeDecisions = []) {
+function isPreserveChoiceTurn(content: string, activeDecisions: string[] = []): boolean {
   // "No change to ..." and "do not change to ..." preserve the current choice;
   // negated replacement/use wording does too when paired with explicit keep/retain
   // language ("Don't replace Postgres; keep it"). If the negated target matches
@@ -660,7 +714,7 @@ function isPreserveChoiceTurn(content, activeDecisions = []) {
     || (PRESERVE_CHOICE_CUE.test(content) && !hasPositiveReplacementCue(content));
 }
 
-function decisionOverrideForTurn(m, activeDecisions = []) {
+function decisionOverrideForTurn(m: ContextMessage, activeDecisions: string[] = []): DecisionOverrideResult {
   if (m.role !== "user" || typeof m.content !== "string") return false;
   // Collapse whitespace so multiline/pasted user turns like "Actually,\nuse
   // SQLite." match the same override cues as their single-line equivalents.
@@ -677,8 +731,8 @@ function decisionOverrideForTurn(m, activeDecisions = []) {
   return null;
 }
 
-function collectDecisionOverrides(messages, activeDecisions = []) {
-  let override = null;
+function collectDecisionOverrides(messages: ContextMessage[], activeDecisions: string[] = []): DecisionOverride | null {
+  let override: DecisionOverride | null = null;
   let visibleDecisions = [...activeDecisions];
   for (const m of messages) {
     const turnOverride = decisionOverrideForTurn(m, visibleDecisions);
@@ -696,11 +750,11 @@ function collectDecisionOverrides(messages, activeDecisions = []) {
   return override;
 }
 
-function isDecisionSentence(text) {
+function isDecisionSentence(text: string): boolean {
   return DECISION_CUES.some((cue) => cue.test(text));
 }
 
-function normalizeDecision(text) {
+function normalizeDecision(text: unknown): string {
   const s = String(text || "").replace(/\s+/g, " ").trim();
   if (s.length <= 200) return s;
   // Keep decisions on a single line: the shared truncate() appends a newline
@@ -709,7 +763,7 @@ function normalizeDecision(text) {
   return s.slice(0, 197) + "…";
 }
 
-function extractSentences(text) {
+function extractSentences(text: unknown): string[] {
   const normalized = String(text || "").replace(/\s+/g, " ").trim();
   if (!normalized) return [];
   // Split on [.!?] only at a real sentence boundary: a period directly followed
@@ -719,11 +773,11 @@ function extractSentences(text) {
   return normalized.match(/.+?(?:[.!?](?=\s|$)|$)(?:\s|$)*/gsu) || [normalized];
 }
 
-function extractDecisions(dropped, existingDecisions = []) {
+function extractDecisions(dropped: ContextMessage[], existingDecisions: string[] = []): { decisions: string[]; override: DecisionOverride | null } {
   let activeExistingDecisions = [...existingDecisions];
-  let decisions = [];
-  const seen = new Set();
-  let override = null;
+  let decisions: string[] = [];
+  const seen = new Set<string>();
+  let override: DecisionOverride | null = null;
 
   for (const m of dropped) {
     // A user turn that reverses an earlier assistant decision. Once an override
@@ -763,15 +817,19 @@ function extractDecisions(dropped, existingDecisions = []) {
  * retains operational memory (what it already did) after compaction — without
  * spending an extra LLM call on summarization.
  */
-function buildDigest(dropped, prevDecisions = [], { suppressDecisionNotes = false, suppressedDecisionTargets = [] } = {}) {
-  const filesWritten = new Set();
-  const filesPatched = new Set();
-  const commands = [];
-  const errors = [];
-  let notes = [];
+function buildDigest(
+  dropped: ContextMessage[],
+  prevDecisions: string[] = [],
+  { suppressDecisionNotes = false, suppressedDecisionTargets = [] }: { suppressDecisionNotes?: boolean; suppressedDecisionTargets?: string[] } = {},
+): string {
+  const filesWritten = new Set<string>();
+  const filesPatched = new Set<string>();
+  const commands: string[] = [];
+  const errors: string[] = [];
+  let notes: Array<{ text: string; isDecision: boolean }> = [];
   let notesLength = 0;
 
-  const appendNote = (text) => {
+  const appendNote = (text: string): void => {
     if (notesLength >= 800) return;
     const isDecision = isDecisionSentence(text);
     if (suppressDecisionNotes && isDecision) return;
@@ -796,9 +854,9 @@ function buildDigest(dropped, prevDecisions = [], { suppressDecisionNotes = fals
         for (const tc of m.tool_calls) {
           const fn = tc.function || {};
           const args = safeParse(fn.arguments);
-          if (fn.name === "write_file" && args.path) filesWritten.add(args.path);
-          else if (fn.name === "patch_file" && args.path) filesPatched.add(args.path);
-          else if (fn.name === "run_shell" && args.command) commands.push(truncate(args.command, 80));
+          if (fn.name === "write_file" && args.path) filesWritten.add(String(args.path));
+          else if (fn.name === "patch_file" && args.path) filesPatched.add(String(args.path));
+          else if (fn.name === "run_shell" && args.command) commands.push(truncate(String(args.command), 80));
         }
       }
       if (typeof m.content === "string" && m.content.trim() && notesLength < 800) {
@@ -817,7 +875,7 @@ function buildDigest(dropped, prevDecisions = [], { suppressDecisionNotes = fals
     }
   }
 
-  const parts = [];
+  const parts: string[] = [];
   if (filesWritten.size) parts.push(`Files created: ${[...filesWritten].join(", ")}`);
   if (filesPatched.size) parts.push(`Files modified: ${[...filesPatched].join(", ")}`);
   if (commands.length) parts.push(`Commands run: ${commands.slice(-8).join(" | ")}`);

@@ -24,17 +24,38 @@ const DIM = "\x1b[2m";
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
-function cleanSegment(value) {
+interface TokenCounts {
+  prompt?: number;
+  completion?: number;
+  reasoning?: number;
+}
+
+export interface StatusOptions {
+  sessionId?: string | null;
+  model?: string | null;
+  provider?: string | null;
+  role?: string | null;
+  reasoningEffort?: string | null;
+  tier?: string | null;
+  tierReason?: string | null;
+  cumulative?: TokenCounts | null;
+  lastTurn?: TokenCounts | null;
+  sessionElapsedMs?: number | null;
+  lastTurnMs?: number | null;
+  isTTY?: boolean;
+}
+
+function cleanSegment(value: unknown): string {
   return String(value ?? "").replace(/[|\r\n]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
-function truncateToChars(value, max = 96) {
+function truncateToChars(value: unknown, max = 96): string {
   const text = cleanSegment(value);
   return text.length > max ? text.slice(0, Math.max(0, max - 1)) + "…" : text;
 }
 
 /** Human-readable duration for the TTY line (e.g. "2m13s", "4.2s", "0ms"). */
-function humanizeMs(ms) {
+function humanizeMs(ms: number | null | undefined): string {
   const n = Number(ms) || 0;
   if (n < 1000) return `${Math.max(0, Math.round(n))}ms`;
   const s = n / 1000;
@@ -78,13 +99,13 @@ export function renderStatus({
   sessionElapsedMs,
   lastTurnMs,
   isTTY,
-} = {}) {
+}: StatusOptions = {}): string {
   const sid = sessionId ?? "?";
   const m = model ?? "?";
   const p = provider ?? "?";
   const r = role ?? "default";
   const effort = reasoningEffort ?? "high";
-  const c = cumulative && typeof cumulative === "object" ? cumulative : { prompt: 0, completion: 0, reasoning: 0 };
+  const c: TokenCounts = cumulative && typeof cumulative === "object" ? cumulative : { prompt: 0, completion: 0, reasoning: 0 };
   const lt = lastTurn && typeof lastTurn === "object" ? lastTurn : null;
   const sElapsed = humanizeMs(sessionElapsedMs);
   const tElapsed = lastTurnMs != null ? humanizeMs(lastTurnMs) : "—";

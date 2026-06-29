@@ -14,16 +14,40 @@ import { CONTEXT_BUDGET_FACTOR, resolveContextBudget, findCatalogModelEntry } fr
 import { readJson } from "./util.js";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
+import type { ModelCatalog, ProviderConfig, RoleModelConfig } from "./types/index.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 const execP = promisify(exec);
 
-export function reasoningConfigDetail(config, { preserveThinking } = {}) {
+type CheckStatus = "ok" | "warn" | "fail";
+
+interface DoctorCheck {
+  name: string;
+  status: CheckStatus;
+  detail: string;
+}
+
+interface DoctorOptions {
+  cwd?: string;
+}
+
+type DoctorCatalog = ModelCatalog & { version?: string };
+
+type ReasoningConfig = Partial<ProviderConfig> & {
+  provider?: ProviderConfig["provider"] | string;
+  reasoningEffort?: ProviderConfig["reasoningEffort"] | string;
+};
+
+function errorMessage(err: unknown): string {
+  return err && typeof err === "object" && "message" in err ? String((err as { message?: unknown }).message) : String(err);
+}
+
+export function reasoningConfigDetail(config: ReasoningConfig | null | undefined, { preserveThinking }: { preserveThinking?: boolean } = {}): string {
   const cfg = config || {};
   const provider = cfg.provider || "?";
   const effort = cfg.reasoningEffort || "high";
-  const preserved = preserveThinking ?? shouldPreserveThinking(provider);
+  const preserved = preserveThinking ?? shouldPreserveThinking(provider as ProviderConfig["provider"]);
   const control = thinkingControlForRequest({
     provider,
     reasoningEffort: effort,
@@ -37,26 +61,36 @@ export function reasoningConfigDetail(config, { preserveThinking } = {}) {
   return `provider=${provider} model=${cfg.modelId || cfg.model || "?"} role=${cfg.role || "default"} effort=${effort} thinking=${thinking} preserved_thinking=${preserved ? "on" : "off"}`;
 }
 
-export async function doctor({ cwd } = {}) {
+export async function doctor({ cwd }: DoctorOptions = {}) {
   const dir = cwd || process.cwd();
-  const checks = [];
-  const ok = (name, detail) => { checks.push({ name, status: "ok", detail }); };
-  const warn = (name, detail) => { checks.push({ name, status: "warn", detail }); };
-  const fail = (name, detail) => { checks.push({ name, status: "fail", detail }); };
+  const checks: DoctorCheck[] = [];
+  const ok = (name: string, detail: string): void => { checks.push({ name, status: "ok", detail }); };
+  const warn = (name: string, detail: string): void => { checks.push({ name, status: "warn", detail }); };
+  const fail = (name: string, detail: string): void => { checks.push({ name, status: "fail", detail }); };
 
-  const catalog = await readJson(join(ROOT, "config", "model-catalog.json"), {});
+  const catalog = await readJson<DoctorCatalog>(join(ROOT, "config", "model-catalog.json"), {}) || {};
 
   // resolve provider config (now async + routing-aware)
-  let cfg;
+  let cfg: ProviderConfig;
   let providerError = null;
   try {
     cfg = await resolveProviderConfig({ role: "default" });
   } catch (e) {
-    providerError = e.message;
+    providerError = errorMessage(e);
     // Honor LAZYGLM_MODEL in the fallback so the context check reports the
     // env-selected model, matching runtime routing (router.js pickModel).
     const fallbackModel = process.env.LAZYGLM_MODEL || catalog.current?.model || "glm-5.2";
-    cfg = { baseURL: "?", provider: "?", model: fallbackModel, modelId: fallbackModel, role: "default", reasoningEffort: "high", apiKey: "***" };
+    cfg = {
+      baseURL: "?",
+      provider: "?",
+      model: fallbackModel,
+      modelId: fallbackModel,
+      role: "default",
+      reasoningEffort: "high",
+      apiKey: "***",
+      timeout: 0,
+      maxRetries: 0,
+    };
   }
 
   // provider config resolved?
@@ -71,7 +105,7 @@ export async function doctor({ cwd } = {}) {
 
   // provider reachable + model available?
   if (!providerError) {
-    let models = [];
+    let models: string[] = [];
     try {
       models = await listModels(cfg);
       ok("reachable", `${cfg.baseURL} reachable, ${models.length} model(s) listed`);
@@ -80,7 +114,7 @@ export async function doctor({ cwd } = {}) {
       if (cfg.provider === "ollama") {
         warn("reachable", `${cfg.baseURL} unreachable. Start Ollama: \`ollama serve\``);
       } else {
-        fail("reachable", `${cfg.baseURL} unreachable: ${e.message}`);
+        fail("reachable", `${cfg.baseURL} unreachable: ${errorMessage(e)}`);
       }
     }
     if (models.length) {
@@ -145,9 +179,9 @@ export async function doctor({ cwd } = {}) {
 
   // routing sanity: verify roles resolve to models
   if (catalog.roles) {
-    const unresolved = [];
-    for (const [role, entry] of Object.entries(catalog.roles)) {
-      if (!catalog.models?.[entry.model]) unresolved.push(`${role}->${entry.model}`);
+    const unresolved: string[] = [];
+    for (const [role, entry] of Object.entries(catalog.roles) as Array<[string, RoleModelConfig]>) {
+      if (entry.model && !catalog.models?.[entry.model]) unresolved.push(`${role}->${entry.model}`);
     }
     if (unresolved.length) warn("routing", `roles pointing to unknown models: ${unresolved.join(", ")}`);
     else ok("routing", `all ${Object.keys(catalog.roles).length} roles resolve to catalog models`);

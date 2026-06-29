@@ -1,5 +1,3 @@
-// @ts-check
-
 // z.ai documents thinking mode as a first-class chat-completions control:
 // https://docs.z.ai/guides/capabilities/thinking-mode
 //
@@ -8,11 +6,15 @@
 // the first provider slice binary: low disables thinking; medium/high/max enable
 // it. It does not add an "off" ReasoningEffort value.
 
-/**
- * @typedef {import("../types/index.js").Provider} Provider
- * @typedef {import("../types/index.js").ReasoningEffort} ReasoningEffort
- * @typedef {{ type: "disabled" } | { type: "enabled", clear_thinking?: false }} ThinkingControl
- */
+import type { Provider, ReasoningEffort } from "../types/index.js";
+
+export type ThinkingControl = { type: "disabled" } | { type: "enabled"; clear_thinking?: false };
+
+interface ThinkingControlOptions {
+  provider?: Provider | null;
+  reasoningEffort?: ReasoningEffort | null;
+  preserveThinking?: boolean;
+}
 
 /**
  * Convert LazyGLM's active route effort into z.ai's request-level thinking
@@ -25,10 +27,14 @@
  * @param {boolean} [options.preserveThinking]
  * @returns {ThinkingControl | null}
  */
-export function thinkingControlForRequest({ provider, reasoningEffort, preserveThinking = false } = {}) {
+export function thinkingControlForRequest({
+  provider,
+  reasoningEffort,
+  preserveThinking = false,
+}: ThinkingControlOptions = {}): ThinkingControl | null {
   if (provider !== "zai") return null;
   if (reasoningEffort === "low") return { type: "disabled" };
-  const control = /** @type {{ type: "enabled", clear_thinking?: false }} */ ({ type: "enabled" });
+  const control: ThinkingControl = { type: "enabled" };
   if (preserveThinking) control.clear_thinking = false;
   return control;
 }
@@ -49,7 +55,7 @@ const REASONING_EFFORT_FLOOR = [5, 2];
  * @param {string} modelId - canonical model name (e.g. "glm-5.2", "glm-4.7")
  * @returns {boolean}
  */
-export function supportsReasoningEffort(modelId) {
+export function supportsReasoningEffort(modelId: string | null | undefined): boolean {
   const match = String(modelId || "").match(/(\d+)\.(\d+)/);
   if (!match) return false;
   const [major, minor] = [Number(match[1]), Number(match[2])];

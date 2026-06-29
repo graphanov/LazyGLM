@@ -1,47 +1,71 @@
 // Shared wall-clock deadline and AbortSignal helpers for headless runs.
 
 export class DeadlineExceededError extends Error {
+  readonly code = "LAZYGLM_TIMEOUT";
+
   constructor(message = "LazyGLM run timed out") {
     super(message);
     this.name = "DeadlineExceededError";
-    this.code = "LAZYGLM_TIMEOUT";
   }
 }
 
 export class RequestTimeoutError extends Error {
+  readonly code = "LAZYGLM_REQUEST_TIMEOUT";
+
   constructor(message = "GLM request timed out") {
     super(message);
     this.name = "RequestTimeoutError";
-    this.code = "LAZYGLM_REQUEST_TIMEOUT";
   }
 }
 
-export function isDeadlineError(err) {
-  return err?.code === "LAZYGLM_TIMEOUT" || err?.name === "DeadlineExceededError";
+type AbortLike = AbortSignal | null | undefined;
+type AbortListener = () => void;
+
+export interface ComposedAbortSignal {
+  signal?: AbortSignal;
+  cancel(): void;
 }
 
-export function isRequestTimeoutError(err) {
-  return err?.code === "LAZYGLM_REQUEST_TIMEOUT" || err?.name === "RequestTimeoutError";
+export interface Deadline {
+  signal?: AbortSignal;
+  deadlineAt: number | null;
+  timeoutMs: number;
+  disabled: boolean;
+  remainingMs(): number;
+  throwIfExpired(): void;
+  cancel(): void;
 }
 
-export function abortReason(signal, fallback = new Error("Operation aborted")) {
+function errorField(err: unknown, field: "code" | "name"): unknown {
+  return err && typeof err === "object" ? (err as Record<string, unknown>)[field] : undefined;
+}
+
+export function isDeadlineError(err: unknown): boolean {
+  return errorField(err, "code") === "LAZYGLM_TIMEOUT" || errorField(err, "name") === "DeadlineExceededError";
+}
+
+export function isRequestTimeoutError(err: unknown): boolean {
+  return errorField(err, "code") === "LAZYGLM_REQUEST_TIMEOUT" || errorField(err, "name") === "RequestTimeoutError";
+}
+
+export function abortReason(signal?: AbortLike, fallback: Error = new Error("Operation aborted")): Error {
   const reason = signal?.reason;
   if (reason instanceof Error) return reason;
   if (reason) return new Error(String(reason));
   return fallback;
 }
 
-export function throwIfAborted(signal) {
+export function throwIfAborted(signal?: AbortLike): void {
   if (signal?.aborted) throw abortReason(signal);
 }
 
-export function composeAbortSignals(signals = []) {
-  const active = signals.filter(Boolean);
+export function composeAbortSignals(signals: AbortLike[] = []): ComposedAbortSignal {
+  const active = signals.filter((signal): signal is AbortSignal => Boolean(signal));
   if (!active.length) return { signal: undefined, cancel() {} };
 
   const controller = new AbortController();
-  const listeners = [];
-  const abortFrom = (signal) => {
+  const listeners: Array<[AbortSignal, AbortListener]> = [];
+  const abortFrom = (signal: AbortSignal): void => {
     if (!controller.signal.aborted) controller.abort(abortReason(signal));
   };
 
@@ -50,7 +74,7 @@ export function composeAbortSignals(signals = []) {
       abortFrom(signal);
       break;
     }
-    const listener = () => abortFrom(signal);
+    const listener: AbortListener = () => abortFrom(signal);
     signal.addEventListener("abort", listener, { once: true });
     listeners.push([signal, listener]);
   }
@@ -63,7 +87,10 @@ export function composeAbortSignals(signals = []) {
   };
 }
 
-export function createDeadline(timeoutMs, { signal, message } = {}) {
+export function createDeadline(
+  timeoutMs: number | string,
+  { signal, message }: { signal?: AbortLike; message?: string } = {},
+): Deadline {
   const ms = Number(timeoutMs);
   if (!Number.isFinite(ms) || ms <= 0) {
     const composed = composeAbortSignals([signal]);
@@ -108,7 +135,7 @@ export function createDeadline(timeoutMs, { signal, message } = {}) {
   };
 }
 
-export function boundedTimeoutMs(preferredMs, deadline) {
+export function boundedTimeoutMs(preferredMs: number | string, deadline?: { remainingMs?: () => number } | null): number {
   const preferred = Number(preferredMs);
   const remaining = deadline?.remainingMs?.() ?? Infinity;
   if (!Number.isFinite(remaining)) return preferred;
@@ -116,15 +143,15 @@ export function boundedTimeoutMs(preferredMs, deadline) {
   return Math.max(1, Math.min(preferred, remaining));
 }
 
-export function abortableSleep(ms, signal) {
+export function abortableSleep(ms: number | string, signal?: AbortLike): Promise<void> {
   const delay = Math.max(0, Number(ms) || 0);
   throwIfAborted(signal);
-  return new Promise((resolve, reject) => {
+  return new Promise<void>((resolve, reject) => {
     const timer = setTimeout(done, delay);
     const onAbort = () => done(abortReason(signal));
     if (signal) signal.addEventListener("abort", onAbort, { once: true });
 
-    function done(err) {
+    function done(err?: Error): void {
       clearTimeout(timer);
       if (signal) signal.removeEventListener("abort", onAbort);
       if (err) reject(err);
@@ -133,10 +160,10 @@ export function abortableSleep(ms, signal) {
   });
 }
 
-export function withAbort(promise, signal) {
+export function withAbort<T>(promise: PromiseLike<T> | T, signal?: AbortLike): Promise<T> {
   throwIfAborted(signal);
-  if (!signal) return promise;
-  return new Promise((resolve, reject) => {
+  if (!signal) return Promise.resolve(promise);
+  return new Promise<T>((resolve, reject) => {
     const onAbort = () => {
       cleanup();
       reject(abortReason(signal));
@@ -150,11 +177,11 @@ export function withAbort(promise, signal) {
   });
 }
 
-export function requestTimeoutError(timeoutMs) {
+export function requestTimeoutError(timeoutMs: number | string): RequestTimeoutError {
   return new RequestTimeoutError(`GLM request timed out after ${timeoutMs}ms.`);
 }
 
-function formatDuration(ms) {
+function formatDuration(ms: number): string {
   const seconds = ms / 1000;
   return Number.isInteger(seconds) ? `${seconds}s` : `${seconds.toFixed(3).replace(/0+$/, "").replace(/\.$/, "")}s`;
 }

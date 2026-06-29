@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { renderBanner, WORDMARK } from "../src/banner.js";
+import { renderBanner, WORDMARK } from "../dist/banner.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const SRC = join(ROOT, "src", "banner.js");
+const SRC = join(ROOT, "dist", "banner.js");
 
 const base = { model: "glm-5.2", provider: "zai", cwd: "/tmp/demo" };
 const ANSI_RE = /\x1b\[[0-9;]*m/g;

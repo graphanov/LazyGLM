@@ -6,12 +6,26 @@
 // burst stdin is not lost between sequential prompts (a known readline race).
 import { saveUserConfig, loadUserConfig, isOnboarded, normalizeProvider, isSupportedProvider, SUPPORTED_PROVIDERS } from "./config.js";
 import { nowIso } from "./util.js";
+import type { PersistedUserConfig, Provider } from "./types/index.js";
+
+interface LineQueueLike {
+  next(): Promise<string | null | undefined>;
+}
+
+interface OutputLike {
+  write(text: string): unknown;
+}
+
+interface OnboardingOptions {
+  queue?: LineQueueLike;
+  output?: OutputLike;
+}
 
 /**
  * True when there is no usable key source and onboarding should run.
  * Env var, an onboarded config file, or ollama all satisfy "no onboarding".
  */
-export async function needsOnboarding() {
+export async function needsOnboarding(): Promise<boolean> {
   if (process.env.LAZYGLM_API_KEY) return false;
   const envProvider = normalizeProvider(process.env.LAZYGLM_PROVIDER);
   const cfg = await loadUserConfig({ force: true });
@@ -28,13 +42,13 @@ export async function needsOnboarding() {
  *
  * @param {object} opts - { queue, output }
  */
-export async function runOnboarding({ queue, output } = {}) {
+export async function runOnboarding({ queue, output }: OnboardingOptions = {}): Promise<PersistedUserConfig> {
   const out = output || process.stdout;
   const isTTY = !!process.stdin.isTTY;
 
-  const ask = async (q) => {
+  const ask = async (q: string): Promise<string> => {
     out.write(q);
-    const line = await queue.next();
+    const line = await queue!.next();
     if (!isTTY) out.write((line || "") + "\n"); // echo for piped/recorded runs
     return (line || "").trim();
   };
@@ -49,7 +63,7 @@ export async function runOnboarding({ queue, output } = {}) {
     out.write("  ollama local OpenAI-compatible Ollama endpoint (keyless)\n\n");
   };
 
-  let provider;
+  let provider: Provider;
   // eslint-disable-next-line no-constant-condition
   while (true) {
     const providerAns = await ask("Provider [zai] (zai|nous|ollama, or help): ");
@@ -78,7 +92,7 @@ export async function runOnboarding({ queue, output } = {}) {
   const modelAns = await ask("Default model [glm-5.2]: ");
   const model = modelAns || "glm-5.2";
 
-  const config = { onboarded: true, provider, model, createdAt: nowIso() };
+  const config: PersistedUserConfig = { onboarded: true, provider, model, createdAt: nowIso() };
   if (provider !== "ollama") config.api_key = apiKey;
   const path = await saveUserConfig(config);
   out.write(`\n✅ Saved to ${path}\n`);

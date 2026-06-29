@@ -14,10 +14,83 @@ import { createRunEventPrinter } from "./cli-output.js";
 import { createDeadline, isDeadlineError } from "./agent/deadline.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import type {
+  HookEventName,
+  HookInput,
+  PermissionMode,
+  RoleName,
+  RunAgentResult,
+  ToolExecutionRecord,
+} from "./types/index.js";
+import type { VerifyFinishResult } from "./ulw.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-function usage() {
+type FlagValue = string | boolean | undefined;
+type FlagMap = Record<string, FlagValue>;
+
+interface ParsedFlags {
+  flags: FlagMap;
+  positional: string[];
+}
+
+interface ParseResult<T> {
+  value?: T;
+  error?: string;
+}
+
+interface VerificationSummary {
+  pass: boolean;
+  reason: string;
+}
+
+interface StructuredOutput {
+  ok: boolean;
+  result: string | null;
+  finishReason: string;
+  toolCalls: Array<{ name: string; turn: number; status: string }>;
+  cost: {
+    tokens: number;
+    promptTokens: number;
+    completionTokens: number;
+    reasoningTokens: number;
+  };
+  session: {
+    id: string;
+    transcriptPath: string;
+    turns: number;
+    compactions: number;
+  } | null;
+  verification?: VerificationSummary;
+  error?: { message: string };
+}
+
+interface RunResultOverrides {
+  finishReason?: string;
+  verification?: VerificationSummary;
+  errorMessage?: string | null;
+}
+
+interface UltraworkResultShape {
+  verified?: boolean;
+  iterations?: number;
+  verdict?: Pick<VerifyFinishResult, "pass" | "reason"> | null;
+  history?: RunAgentResult[];
+  finishReason?: string;
+  finishSummary?: string | null;
+  errorMessage?: string | null;
+}
+
+function stringFlag(flags: FlagMap, key: string): string | undefined {
+  const value = flags[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function toErrorMessage(err: unknown): string {
+  return err && typeof err === "object" && "message" in err ? String((err as { message?: unknown }).message) : String(err);
+}
+
+function usage(): string {
   return `LazyGLM — the GLM-native agent harness.
 
 Usage:
@@ -64,9 +137,9 @@ Environment:
 `;
 }
 
-function parseFlags(argv) {
-  const flags = {};
-  const positional = [];
+function parseFlags(argv: string[]): ParsedFlags {
+  const flags: FlagMap = {};
+  const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a.startsWith("--")) {
@@ -81,7 +154,7 @@ function parseFlags(argv) {
   return { flags, positional };
 }
 
-export async function main(argv) {
+export async function main(argv: string[]): Promise<number> {
   const cmd = argv[0];
   const rest = argv.slice(1);
 
@@ -90,8 +163,8 @@ export async function main(argv) {
     return 0;
   }
   if (cmd === "--version" || cmd === "-v") {
-    const pkg = await readJson(join(ROOT, "package.json"), {});
-    console.log(`lazyglm ${pkg.version || "0.0.0"}`);
+    const pkg = await readJson<{ version?: string }>(join(ROOT, "package.json"), {});
+    console.log(`lazyglm ${pkg?.version || "0.0.0"}`);
     return 0;
   }
 
@@ -107,15 +180,22 @@ export async function main(argv) {
     }
     const { launchREPL } = await import("./repl.js");
     return launchREPL({
-      cwd: flags.cwd ? resolve(flags.cwd) : process.cwd(),
-      flags: { continue: !!flags.continue, yolo: !!flags.yolo, model: flags.model, provider: flags.provider, role: flags.role, contextBudget: contextBudget.value },
+      cwd: flags.cwd ? resolve(flags.cwd as string) : process.cwd(),
+      flags: {
+        continue: !!flags.continue,
+        yolo: !!flags.yolo,
+        model: stringFlag(flags, "model"),
+        provider: stringFlag(flags, "provider"),
+        role: stringFlag(flags, "role"),
+        contextBudget: contextBudget.value,
+      },
     });
   }
 
   switch (cmd) {
     case "install": {
       const { flags } = parseFlags(rest);
-      const res = await install({ cwd: flags.cwd ? resolve(flags.cwd) : process.cwd(), force: !!flags.force });
+      const res = await install({ cwd: flags.cwd ? resolve(flags.cwd as string) : process.cwd(), force: !!flags.force });
       console.log(`LazyGLM installed in ${res.cwd}`);
       for (const c of res.created) console.log(`  + ${c}`);
       if (!res.git.isRepo) console.log("  (not a git repo — `git init` recommended)");
@@ -124,7 +204,7 @@ export async function main(argv) {
     }
     case "uninstall": {
       const { flags } = parseFlags(rest);
-      const res = await uninstall({ cwd: flags.cwd ? resolve(flags.cwd) : process.cwd() });
+      const res = await uninstall({ cwd: flags.cwd ? resolve(flags.cwd as string) : process.cwd() });
       console.log(`Removed from ${res.cwd}:`);
       for (const r of res.removed) console.log(`  - ${r}`);
       if (res.preserved?.length) {
@@ -135,7 +215,7 @@ export async function main(argv) {
     }
     case "doctor": {
       const { flags } = parseFlags(rest);
-      const res = await doctor({ cwd: flags.cwd ? resolve(flags.cwd) : process.cwd() });
+      const res = await doctor({ cwd: flags.cwd ? resolve(flags.cwd as string) : process.cwd() });
       console.log(`LazyGLM doctor — ${res.cwd}`);
       console.log(`Provider: ${res.provider.baseURL} | default model: ${res.provider.modelId}\n`);
       for (const c of res.checks) {
@@ -162,7 +242,7 @@ export async function main(argv) {
         console.log(`Models at ${cfg.baseURL} (${cfg.provider}, ${models.length}):`);
         for (const m of models) console.log(`  ${m}`);
       } catch (e) {
-        console.error(`Cannot list models: ${e.message}`);
+        console.error(`Cannot list models: ${toErrorMessage(e)}`);
         return 1;
       }
       return 0;
@@ -187,23 +267,29 @@ export async function main(argv) {
       // bridge: read stdin JSON, fire one event with all plugins
       const event = rest[0];
       const data = await readStdin();
-      let input;
-      try { input = JSON.parse(data); } catch { input = {}; }
-      const cwd = input.cwd ? resolve(input.cwd) : process.cwd();
+      let input: Record<string, unknown>;
+      try {
+        const parsed = JSON.parse(data);
+        input = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+      } catch {
+        input = {};
+      }
+      const cwd = typeof input.cwd === "string" ? resolve(input.cwd) : process.cwd();
       const engine = new HookEngine({ cwd });
       for (const p of loadPlugins()) engine.register(p);
-      engine.setMeta({ model: input.model || "glm-4.7-flash" });
+      engine.setMeta({ model: typeof input.model === "string" ? input.model : "glm-4.7-flash" });
       // synthesize a single-fire: bypass fire's turn bookkeeping by calling handlers directly
       const api = engine.api();
-      const out = [];
+      const out: Array<Record<string, unknown>> = [];
+      const hookEvent = event as HookEventName;
       for (const plugin of engine.plugins) {
-        const handler = plugin.hooks?.[event];
+        const handler = plugin.hooks?.[hookEvent];
         if (typeof handler !== "function") continue;
         try {
-          const result = await handler({ ...input, hook_event_name: event, session_id: engine.sessionId, cwd }, api);
+          const result = await handler({ ...input, hook_event_name: hookEvent, session_id: engine.sessionId, cwd } as HookInput, api);
           if (result) out.push({ plugin: plugin.name, ...result });
         } catch (e) {
-          out.push({ plugin: plugin.name, error: e.message });
+          out.push({ plugin: plugin.name, error: toErrorMessage(e) });
         }
       }
       const block = out.find((o) => o.decision === "block");
@@ -223,7 +309,7 @@ export async function main(argv) {
         return 1;
       }
 
-      const task = positional.join(" ").trim() || flags.task;
+      const task = positional.join(" ").trim() || stringFlag(flags, "task");
       if (!task) return runUsageError("usage: lazyglm run \"<task>\"", jsonMode);
 
       const maxTurns = parsePositiveIntegerFlag(flags["max-turns"], 80, "--max-turns");
@@ -235,20 +321,21 @@ export async function main(argv) {
       const contextBudget = parsePositiveIntegerFlag(flags["context-budget"], undefined, "--context-budget");
       if (contextBudget.error) return runUsageError(contextBudget.error, jsonMode);
 
-      const cwd = flags.cwd ? resolve(flags.cwd) : process.cwd();
-      const model = flags.model;
-      const role = flags.role;
+      const cwd = flags.cwd ? resolve(flags.cwd as string) : process.cwd();
+      const model = stringFlag(flags, "model");
+      const role = stringFlag(flags, "role") as RoleName | undefined;
       const ultrawork = !!flags.ultrawork || /\$ulw-loop\b/i.test(task);
-      const permissionMode = flags.yolo ? "yolo" : "auto";
+      const permissionMode: PermissionMode = flags.yolo ? "yolo" : "auto";
       const printEvent = jsonMode
         ? () => {}
         : createRunEventPrinter({ stdout: process.stdout, stderr: process.stderr, isTTY: process.stdout.isTTY === true && !flags["no-color"] });
-      const deadline = createDeadline(timeoutSeconds.value * 1000, { message: `LazyGLM run timed out after ${formatSeconds(timeoutSeconds.value)}.` });
+      const timeoutValue = timeoutSeconds.value ?? 600;
+      const deadline = createDeadline(timeoutValue * 1000, { message: `LazyGLM run timed out after ${formatSeconds(timeoutValue)}.` });
 
       try {
         if (ultrawork) {
-          const completionPromise = flags["completion-promise"] || "the task is fully implemented, builds cleanly, and passes verification.";
-          const verifyCommand = flags.verify;
+          const completionPromise = stringFlag(flags, "completion-promise") || "the task is fully implemented, builds cleanly, and passes verification.";
+          const verifyCommand = stringFlag(flags, "verify");
           const maxIterations = parsePositiveIntegerFlag(flags["max-iterations"], 3, "--max-iterations");
           if (maxIterations.error) return runUsageError(maxIterations.error, jsonMode);
           const res = await runUltrawork({
@@ -298,13 +385,13 @@ export async function main(argv) {
         let errorMessage = res.errorMessage;
         if (res.finished && flags.verify) {
           try {
-            const verdict = await verifyFinish({ summary: res.finishSummary, cwd, verifyCommand: flags.verify, filesWritten: res.filesWritten, deadline });
+            const verdict = await verifyFinish({ summary: res.finishSummary, cwd, verifyCommand: stringFlag(flags, "verify"), filesWritten: res.filesWritten, deadline });
             verification = { pass: verdict.pass, reason: verdict.reason };
             if (!verdict.pass) finishReason = "verify_failed";
           } catch (err) {
             if (isDeadlineError(err) || deadline.signal?.aborted) {
               finishReason = "timeout";
-              errorMessage = err?.message || "timeout";
+              errorMessage = toErrorMessage(err) || "timeout";
               verification = { pass: false, reason: errorMessage };
             } else {
               throw err;
@@ -323,7 +410,7 @@ export async function main(argv) {
         return structured.ok ? 0 : 2;
       } catch (err) {
         const timeout = isDeadlineError(err) || deadline.signal?.aborted;
-        const message = err?.message || String(err);
+        const message = toErrorMessage(err);
         const structured = structuredError(message, { finishReason: timeout ? "timeout" : "error" });
         if (jsonMode) writeJson(structured);
         else console.error(`lazyglm run failed: ${message}`);
@@ -338,7 +425,7 @@ export async function main(argv) {
   }
 }
 
-function parsePositiveIntegerFlag(value, defaultValue, name) {
+function parsePositiveIntegerFlag(value: FlagValue, defaultValue: number | undefined, name: string): ParseResult<number> {
   if (value === undefined) return { value: defaultValue };
   if (value === true) return { error: `${name} requires a value` };
   const normalized = typeof value === "string" ? value.replace(/_/g, "") : value;
@@ -347,7 +434,7 @@ function parsePositiveIntegerFlag(value, defaultValue, name) {
   return { value: n };
 }
 
-function parseNonnegativeIntegerFlag(value, defaultValue, name) {
+function parseNonnegativeIntegerFlag(value: FlagValue, defaultValue: number, name: string): ParseResult<number> {
   if (value === undefined) return { value: defaultValue };
   if (value === true) return { error: `${name} requires a value` };
   const normalized = typeof value === "string" ? value.replace(/_/g, "") : value;
@@ -356,7 +443,7 @@ function parseNonnegativeIntegerFlag(value, defaultValue, name) {
   return { value: n };
 }
 
-function parseNonnegativeNumberFlag(value, defaultValue, name) {
+function parseNonnegativeNumberFlag(value: FlagValue, defaultValue: number, name: string): ParseResult<number> {
   if (value === undefined) return { value: defaultValue };
   if (value === true) return { error: `${name} requires a value` };
   const n = Number(value);
@@ -364,13 +451,13 @@ function parseNonnegativeNumberFlag(value, defaultValue, name) {
   return { value: n };
 }
 
-function runUsageError(message, jsonMode) {
+function runUsageError(message: string, jsonMode: boolean): number {
   if (jsonMode) writeJson(structuredError(message, { finishReason: "error" }));
   else console.error(message);
   return 1;
 }
 
-function structuredError(message, { finishReason = "error" } = {}) {
+function structuredError(message: unknown, { finishReason = "error" }: { finishReason?: string } = {}): StructuredOutput {
   return {
     ok: false,
     result: null,
@@ -382,12 +469,12 @@ function structuredError(message, { finishReason = "error" } = {}) {
   };
 }
 
-function structuredRunResult(res, { finishReason = res.finishReason, verification, errorMessage } = {}) {
+function structuredRunResult(res: RunAgentResult, { finishReason = res.finishReason, verification, errorMessage }: RunResultOverrides = {}): StructuredOutput {
   const promptTokens = Number(res.promptTokens ?? res.tokensIn ?? 0) || 0;
   const completionTokens = Number(res.completionTokens ?? res.tokensOut ?? 0) || 0;
   const reasoningTokens = Number(res.reasoningTokens ?? 0) || 0;
   const ok = res.finished === true && finishReason === "finished" && (!verification || verification.pass === true);
-  const out = {
+  const out: StructuredOutput = {
     ok,
     result: res.finishSummary || res.result || null,
     finishReason: ok ? "finished" : finishReason || "error",
@@ -410,7 +497,7 @@ function structuredRunResult(res, { finishReason = res.finishReason, verificatio
   return out;
 }
 
-function structuredUltraworkResult(res) {
+function structuredUltraworkResult(res: UltraworkResultShape): StructuredOutput {
   const history = Array.isArray(res.history) ? res.history : [];
   const last = history[history.length - 1];
   const totals = history.reduce((acc, item) => {
@@ -419,9 +506,9 @@ function structuredUltraworkResult(res) {
     acc.reasoningTokens += Number(item.reasoningTokens ?? 0) || 0;
     acc.toolCalls.push(...sanitizeToolCalls(item.toolCalls));
     return acc;
-  }, { promptTokens: 0, completionTokens: 0, reasoningTokens: 0, toolCalls: [] });
+  }, { promptTokens: 0, completionTokens: 0, reasoningTokens: 0, toolCalls: [] as StructuredOutput["toolCalls"] });
   const finishReason = res.finishReason || (res.verified ? "finished" : "max_iterations");
-  const out = {
+  const out: StructuredOutput = {
     ok: res.verified === true,
     result: res.finishSummary || last?.finishSummary || last?.result || null,
     finishReason,
@@ -444,24 +531,24 @@ function structuredUltraworkResult(res) {
   return out;
 }
 
-function sanitizeToolCalls(toolCalls) {
-  return (Array.isArray(toolCalls) ? toolCalls : []).map((tc) => ({
+function sanitizeToolCalls(toolCalls: unknown): StructuredOutput["toolCalls"] {
+  return (Array.isArray(toolCalls) ? toolCalls : []).map((tc: Partial<ToolExecutionRecord>) => ({
     name: String(tc.name || "unknown"),
     turn: Number(tc.turn || 0),
-    status: ["ok", "denied", "error", "finish", "timeout"].includes(tc.status) ? tc.status : "ok",
+    status: ["ok", "denied", "error", "finish", "timeout"].includes(String(tc.status)) ? String(tc.status) : "ok",
   }));
 }
 
-function writeJson(obj) {
+function writeJson(obj: unknown): void {
   process.stdout.write(`${JSON.stringify(obj)}\n`);
 }
 
-function formatSeconds(seconds) {
+function formatSeconds(seconds: number): string {
   const n = Number(seconds);
   return Number.isInteger(n) ? `${n}s` : `${n.toFixed(3).replace(/0+$/, "").replace(/\.$/, "")}s`;
 }
 
-function readStdin() {
+function readStdin(): Promise<string> {
   return new Promise((resolve) => {
     let data = "";
     process.stdin.setEncoding("utf8");
