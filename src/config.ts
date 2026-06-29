@@ -11,28 +11,35 @@
 import { readFile, writeFile, chmod, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import type { PersistedUserConfig, Provider } from "./types/index.js";
 
-function lazyglmHome() {
+interface LoadUserConfigOptions {
+  force?: boolean;
+  throwOnError?: boolean;
+}
+
+function lazyglmHome(): string {
   return process.env.LAZYGLM_HOME || join(process.env.HOME || "/tmp", ".lazyglm");
 }
 
-export function configPath() {
+export function configPath(): string {
   return join(lazyglmHome(), "config.json");
 }
 
-let _cache = undefined;
+let _cache: PersistedUserConfig | undefined;
 
-export const SUPPORTED_PROVIDERS = ["zai", "nous", "ollama"];
+export const SUPPORTED_PROVIDERS = ["zai", "nous", "ollama"] as const;
 
-export function normalizeProvider(provider) {
+export function normalizeProvider(provider: unknown): "" | Provider {
   const p = String(provider || "").trim().toLowerCase();
   if (!p) return "";
   if (p === "z.ai" || p === "zhipu" || p === "zhipuai") return "zai";
-  return p;
+  return p as Provider;
 }
 
-export function isSupportedProvider(provider) {
-  return SUPPORTED_PROVIDERS.includes(normalizeProvider(provider));
+export function isSupportedProvider(provider: unknown): boolean {
+  const normalized = normalizeProvider(provider);
+  return SUPPORTED_PROVIDERS.some((p) => p === normalized);
 }
 
 /**
@@ -43,7 +50,7 @@ export function isSupportedProvider(provider) {
  * config degrades to {}; pass {throwOnError:true} when callers need to surface
  * the config-file problem to the user.
  */
-export async function loadUserConfig({ force = false, throwOnError = false } = {}) {
+export async function loadUserConfig({ force = false, throwOnError = false }: LoadUserConfigOptions = {}): Promise<PersistedUserConfig> {
   if (_cache !== undefined && !force) return _cache;
   const path = configPath();
   if (!existsSync(path)) {
@@ -52,8 +59,8 @@ export async function loadUserConfig({ force = false, throwOnError = false } = {
   }
   try {
     const raw = await readFile(path, "utf8");
-    _cache = raw.trim() ? JSON.parse(raw) : {};
-  } catch (e) {
+    _cache = raw.trim() ? (JSON.parse(raw) as PersistedUserConfig) : {};
+  } catch (e: unknown) {
     _cache = {};
     if (throwOnError) throw e;
   }
@@ -64,7 +71,7 @@ export async function loadUserConfig({ force = false, throwOnError = false } = {
  * Persist the user config to ~/.lazyglm/config.json with chmod 600 and refresh
  * the in-memory cache.
  */
-export async function saveUserConfig(config) {
+export async function saveUserConfig(config: PersistedUserConfig): Promise<string> {
   await mkdir(lazyglmHome(), { recursive: true });
   await writeFile(configPath(), JSON.stringify(config, null, 2) + "\n", "utf8");
   try {
@@ -80,7 +87,7 @@ export async function saveUserConfig(config) {
  * A config is "onboarded" when it has a key for a key-requiring provider, or
  * when the provider is ollama (keyless).
  */
-export function isOnboarded(config) {
+export function isOnboarded(config: PersistedUserConfig | null | undefined): boolean {
   if (!config || !config.onboarded) return false;
   const provider = normalizeProvider(config.provider || "zai");
   if (provider === "custom") return !!process.env.LAZYGLM_BASE_URL;
@@ -90,6 +97,6 @@ export function isOnboarded(config) {
 }
 
 /** Test helper: drop the in-memory cache so a fresh LAZYGLM_HOME takes effect. */
-export function resetConfigCache() {
+export function resetConfigCache(): void {
   _cache = undefined;
 }

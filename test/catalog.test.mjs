@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readJson } from "../src/util.js";
+import { readJson } from "../dist/util.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 

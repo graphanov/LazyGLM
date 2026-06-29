@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import commentChecker from "../src/plugins/comment-checker.js";
+import commentChecker from "../dist/plugins/comment-checker.js";
 
 let cwd;
 test.before(async () => { cwd = await mkdtemp(join(tmpdir(), "lazyglm-cc-")); });

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Context, assistantMessageFrom } from "../src/agent/context.js";
+import { Context, assistantMessageFrom } from "../dist/agent/context.js";
 
 function latestCompactionSummary(ctx) {
   const summaries = ctx.messages.filter((m) => m.role === "system" && /Compacted transcript/.test(m.content || ""));

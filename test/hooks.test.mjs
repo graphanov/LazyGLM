@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HookEngine } from "../src/hooks/engine.js";
-import { createDeadline } from "../src/agent/deadline.js";
+import { HookEngine } from "../dist/hooks/engine.js";
+import { createDeadline } from "../dist/agent/deadline.js";
 
 let cwd;
 test.before(async () => { cwd = await mkdtemp(join(tmpdir(), "lazyglm-hooks-")); });

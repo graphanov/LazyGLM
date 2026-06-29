@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compareSemver, normalizeVersion, checkUpdate, selfUpdate } from "../src/update.js";
+import { compareSemver, normalizeVersion, checkUpdate, selfUpdate } from "../dist/update.js";
 
 // --- normalizeVersion: strip quotes/whitespace (npm --json hardening) ---
 

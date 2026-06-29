@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { install, uninstall } from "../src/installer.js";
+import { install, uninstall } from "../dist/installer.js";
 
 let cwd;
 test.before(async () => { cwd = await mkdtemp(join(tmpdir(), "lazyglm-install-")); });
