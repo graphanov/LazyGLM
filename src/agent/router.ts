@@ -10,18 +10,13 @@ import type {
   ModelCatalog,
   ModelCatalogEntry,
   ModelRouteOptions,
+  PersistedUserConfig,
   Provider,
   ProviderCatalogConfig,
   ResolvedModelRoute,
   RoleModelConfig,
   RoleName,
 } from "../types/index.js";
-
-interface PersistedUserConfig {
-  provider?: Provider;
-  model?: string;
-  api_key?: string;
-}
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CATALOG_PATH = join(ROOT, "config", "model-catalog.json");
@@ -131,7 +126,7 @@ export async function pickModel(
   userConfig: PersistedUserConfig | null = null,
 ): Promise<ResolvedModelRoute> {
   const catalog = await loadCatalog();
-  const uc: PersistedUserConfig = userConfig ?? ((await loadUserConfig()) as PersistedUserConfig);
+  const uc: PersistedUserConfig = userConfig ?? (await loadUserConfig());
   const provider = resolveProvider(options, catalog, uc);
 
   // Explicit --model wins, followed by LAZYGLM_MODEL. The persisted config-file

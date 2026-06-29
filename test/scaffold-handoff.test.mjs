@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { HookEngine } from "../src/hooks/engine.js";
-import { discoverScaffold, formatHandoffInject, readHandoffText } from "../src/scaffold/handoff.js";
-import scaffoldHandoff from "../src/plugins/scaffold-handoff.js";
+import { HookEngine } from "../dist/hooks/engine.js";
+import { discoverScaffold, formatHandoffInject, readHandoffText } from "../dist/scaffold/handoff.js";
+import scaffoldHandoff from "../dist/plugins/scaffold-handoff.js";
 
 async function withTempCwd(fn) {
   const cwd = await mkdtemp(join(tmpdir(), "lazyglm-scaffold-"));

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createRunEventPrinter } from "../src/cli-output.js";
+import { createRunEventPrinter } from "../dist/cli-output.js";
 
 const ANSI_RE = /\x1b\[/;
 

@@ -7,6 +7,16 @@
 
 export type Provider = "zai" | "nous" | "ollama" | "custom" | (string & {});
 
+export interface PersistedUserConfig {
+  onboarded?: boolean;
+  provider?: Provider;
+  model?: string;
+  api_key?: string;
+  createdAt?: string;
+  mcpServers?: unknown;
+  [key: string]: unknown;
+}
+
 export type RoleName =
   | "default"
   | "worker"

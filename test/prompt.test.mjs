@@ -5,7 +5,7 @@ import {
   buildReplPrompt,
   buildRuntimePrompt,
   modelTierGuidance,
-} from "../src/prompt.js";
+} from "../dist/prompt.js";
 
 const git = { isRepo: true, branch: "main", root: "/tmp/demo" };
 const modelInfo = {
