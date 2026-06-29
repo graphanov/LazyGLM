@@ -4,10 +4,11 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { readdir } from "node:fs/promises";
+import type { HookPlugin } from "../types/index.js";
 
-async function projectFileCount(cwd) {
+async function projectFileCount(cwd: string): Promise<number> {
   let count = 0;
-  async function walk(dir, depth) {
+  async function walk(dir: string, depth: number): Promise<void> {
     if (depth > 3) return;
     let entries;
     try {
@@ -40,4 +41,4 @@ export default {
       return undefined;
     },
   },
-};
+} satisfies HookPlugin;

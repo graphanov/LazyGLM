@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import startWorkContinuation from "../src/plugins/start-work-continuation.js";
+import startWorkContinuation from "../dist/plugins/start-work-continuation.js";
 
 async function withTempCwd(fn) {
   const cwd = await mkdtemp(join(tmpdir(), "lazyglm-start-work-"));

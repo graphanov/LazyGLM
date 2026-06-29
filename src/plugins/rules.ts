@@ -5,9 +5,14 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { truncate } from "../util.js";
+import type { HookPlugin } from "../types/index.js";
 
 const MAX_AGENTS_CHARS = 8000;
 const MAX_RULE_CHARS = 4000;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
+}
 
 export default {
   name: "rules",
@@ -23,7 +28,7 @@ export default {
 
       const rulesDir = join(api.cwd, ".lazyglm", "rules");
       if (existsSync(rulesDir)) {
-        let files = [];
+        let files: string[] = [];
         try {
           files = (await readdir(rulesDir)).filter((f) => f.endsWith(".md")).sort();
         } catch {}
@@ -37,11 +42,15 @@ export default {
       const pkgPath = join(api.cwd, "package.json");
       if (existsSync(pkgPath)) {
         try {
-          const pkg = JSON.parse(await readFile(pkgPath, "utf8"));
+          const pkg = JSON.parse(await readFile(pkgPath, "utf8")) as unknown;
+          const pkgRecord = isRecord(pkg) ? pkg : {};
+          const scripts = isRecord(pkgRecord.scripts) ? pkgRecord.scripts : {};
+          const dependencies = isRecord(pkgRecord.dependencies) ? pkgRecord.dependencies : {};
+          const devDependencies = isRecord(pkgRecord.devDependencies) ? pkgRecord.devDependencies : {};
           const summary = [
-            `name: ${pkg.name || "?"}`,
-            `scripts: ${Object.keys(pkg.scripts || {}).join(", ") || "(none)"}`,
-            `deps: ${Object.keys({ ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) }).slice(0, 20).join(", ") || "(none)"}`,
+            `name: ${typeof pkgRecord.name === "string" ? pkgRecord.name : "?"}`,
+            `scripts: ${Object.keys(scripts).join(", ") || "(none)"}`,
+            `deps: ${Object.keys({ ...dependencies, ...devDependencies }).slice(0, 20).join(", ") || "(none)"}`,
           ].join(" | ");
           parts.push(`# package.json\n${summary}`);
         } catch {}
@@ -64,4 +73,4 @@ export default {
       }
     },
   },
-};
+} satisfies HookPlugin;

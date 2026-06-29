@@ -6,11 +6,29 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
 import { resolvePath, truncate } from "../util.js";
+import type { HookPlugin } from "../types/index.js";
 
 const EDIT_TOOLS = new Set(["write_file", "patch_file"]);
 
+interface SlopPattern {
+  re: RegExp;
+  msg: string;
+}
+
+interface RestateHit {
+  line: number;
+  comment: string;
+  code: string;
+}
+
+interface Finding {
+  line: number;
+  text: string;
+  msg: string;
+}
+
 // Heuristic slop detectors. Conservative: only flag clearly AI-generated noise.
-const SLOP_PATTERNS = [
+const SLOP_PATTERNS: SlopPattern[] = [
   { re: /\/\/\s*(todo|fixme)\b[^]*\b(implement|placeholder|your code|add code|insert code|fill in|complete this)\b/i, msg: "placeholder TODO — implement it or remove the comment" },
   { re: /\/\/\s*(add your code here|your code here|insert your code|placeholder code|implementation goes here|rest of the code goes here)/i, msg: "placeholder comment — remove it and ship real code" },
   { re: /\/\/\s*(in this (function|block),? we (will|are going to|first|then)|let's|let us|as an ai|as a language model)/i, msg: "AI-narration comment — describe intent only, drop the 'we will/let's' voice" },
@@ -22,7 +40,7 @@ const SLOP_PATTERNS = [
 
 // Words that carry no real intent — ignored when deciding if a comment merely
 // restates the code below it.
-const STOPWORDS = new Set([
+const STOPWORDS = new Set<string>([
   "the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "to", "of",
   "in", "on", "for", "with", "and", "or", "but", "set", "get", "now", "then", "here",
   "we", "will", "this", "that", "it", "as", "at", "by", "from", "up", "out", "if",
@@ -31,8 +49,8 @@ const STOPWORDS = new Set([
 ]);
 
 // Detect a comment that merely restates the next non-comment code line.
-function restateComment(lines) {
-  const hits = [];
+function restateComment(lines: string[]): RestateHit[] {
+  const hits: RestateHit[] = [];
   for (let i = 0; i < lines.length - 1; i++) {
     const line = lines[i];
     const m = line.match(/^\s*\/\/\s*(.+?)\s*$/);
@@ -63,8 +81,8 @@ function restateComment(lines) {
   return hits;
 }
 
-function scan(text) {
-  const findings = [];
+function scan(text: string): Finding[] {
+  const findings: Finding[] = [];
   const lines = text.split("\n");
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -81,17 +99,23 @@ function scan(text) {
   return findings;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
+}
+
 export default {
   name: "comment-checker",
   hooks: {
     async PostToolUse(input, api) {
-      if (!EDIT_TOOLS.has(input.tool_name)) return undefined;
-      const rel = input.tool_input?.path;
+      const toolName = typeof input.tool_name === "string" ? input.tool_name : "";
+      if (!EDIT_TOOLS.has(toolName)) return undefined;
+      const toolInput = isRecord(input.tool_input) ? input.tool_input : {};
+      const rel = toolInput.path;
       if (!rel || typeof rel !== "string") return undefined;
       // only scan code files
       if (!/\.(js|mjs|ts|tsx|jsx|py|go|rs|java|c|cpp|h|rb|php|cs|swift|kt)$/i.test(rel)) return undefined;
 
-      let abs;
+      let abs: string;
       try {
         abs = resolvePath(rel, api.cwd);
       } catch {
@@ -99,7 +123,7 @@ export default {
       }
       if (!existsSync(abs)) return undefined;
 
-      let text;
+      let text: string;
       try {
         text = await readFile(abs, "utf8");
       } catch {
@@ -119,4 +143,4 @@ export default {
       };
     },
   },
-};
+} satisfies HookPlugin;

@@ -2,6 +2,39 @@
 // the consequence of risky actions before it mutates files or runs shell code.
 // This is intentionally deterministic: the runtime can enforce the discipline
 // without adding another model call before every tool use.
+import type { HookPlugin } from "../types/index.js";
+
+type ShellStage = string[];
+type ShellPipeline = ShellStage[];
+
+interface ShortCluster {
+  flags: string[];
+  valueChar: string | null;
+  attachedValue: string;
+  valueConsumesNext: boolean;
+}
+
+interface HereDocDelimiter {
+  delimiter: string;
+}
+
+interface HereDocRedirection extends HereDocDelimiter {
+  stripTabs: boolean;
+}
+
+interface HereDocBodyResult {
+  body: string;
+  nextIndex: number;
+}
+
+interface GitAlias {
+  name: string;
+  expansion: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
+}
 
 const GUARDED_TOOLS = new Set(["write_file", "patch_file", "run_shell"]);
 const MIN_PREDICTION_CHARS = 40;
@@ -58,7 +91,7 @@ const PIPELINE_SHELLS = new Set([
 const SCRIPT_FILE_CONSUMERS = new Set(["source", "."]);
 const SHELL_COMMAND_STRING_DEPTH_LIMIT = 3;
 const SHELL_COMMAND_STRING_OPTIONS_WITH_VALUE = new Set(["-o", "-O", "--init-file", "--rcfile"]);
-const NO_OPTIONS_WITH_VALUE = new Set();
+const NO_OPTIONS_WITH_VALUE = new Set<string>();
 const EXEC_OPTIONS_WITH_VALUE = new Set(["-a"]);
 const SUDO_OPTIONS_WITH_VALUE = new Set([
   "-C", "--close-from",
@@ -309,25 +342,25 @@ function hasRecursiveMetadataChange(command = "") {
   return false;
 }
 
-function gitGlobalOptionName(token) {
+function gitGlobalOptionName(token: string): string {
   const equalsAt = token.indexOf("=");
   return equalsAt === -1 ? token : token.slice(0, equalsAt);
 }
 
-function npmGlobalOptionName(token) {
+function npmGlobalOptionName(token: string): string {
   const equalsAt = token.indexOf("=");
   return equalsAt === -1 ? token : token.slice(0, equalsAt);
 }
 
-function isNpmExecutableName(name) {
+function isNpmExecutableName(name: string): boolean {
   return name === "npm" || /^npm@[^\s/]+$/.test(name);
 }
 
-function shellWords(value = "") {
+function shellWords(value: unknown = ""): ShellStage {
   const text = String(value);
-  const words = [];
+  const words: string[] = [];
   let current = "";
-  let quote = null;
+  let quote: string | null = null;
   let escaped = false;
 
   for (let index = 0; index < text.length; index += 1) {
@@ -389,29 +422,29 @@ function shellWords(value = "") {
 // backslash and quote handling as shellWords(). High-impact classifiers must
 // inspect normalized tokens (e.g. `n\pm publish` -> `npm publish`) instead of
 // raw regex matches, because the shell executes escaped command names normally.
-function shellPipelines(value = "") {
+function shellPipelines(value: unknown = ""): ShellPipeline[] {
   const text = String(value);
-  const pipelines = [];
-  let pipeline = [];
-  let tokens = [];
+  const pipelines: ShellPipeline[] = [];
+  let pipeline: ShellPipeline = [];
+  let tokens: ShellStage = [];
   let current = "";
-  let quote = null;
+  let quote: string | null = null;
   let escaped = false;
 
-  function pushToken() {
+  function pushToken(): void {
     if (!current) return;
     tokens.push(current);
     current = "";
   }
 
-  function pushStage() {
+  function pushStage(): void {
     pushToken();
     if (!tokens.length) return;
     pipeline.push(tokens);
     tokens = [];
   }
 
-  function pushPipeline() {
+  function pushPipeline(): void {
     pushStage();
     if (!pipeline.length) return;
     pipelines.push(pipeline);
@@ -487,36 +520,36 @@ function shellPipelines(value = "") {
   return pipelines;
 }
 
-function shellCommandStages(value = "") {
+function shellCommandStages(value: unknown = ""): ShellStage[] {
   return shellPipelines(value).flat();
 }
 
-function commandName(token) {
-  return String(token).replace(/\\/g, "/").split("/").pop();
+function commandName(token: string): string {
+  return String(token).replace(/\\/g, "/").split("/").pop() ?? "";
 }
 
-function optionName(token) {
+function optionName(token: string): string {
   const equalsAt = token.indexOf("=");
   return equalsAt === -1 ? token : token.slice(0, equalsAt);
 }
 
-function isAssignment(token) {
+function isAssignment(token: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*=/.test(token);
 }
 
-function shellRedirectionOperand(token) {
+function shellRedirectionOperand(token: string): string | undefined {
   const text = String(token);
   const match = text.match(/^(?:\d+)?(?:<<<|<<-?|<>|>>|>\||>&|<&|>|<)(.*)$/) || text.match(/^&>>?(.*)$/);
   return match ? match[1] : undefined;
 }
 
-function skipShellRedirection(tokens, index) {
+function skipShellRedirection(tokens: ShellStage, index: number): number {
   const operand = shellRedirectionOperand(tokens[index]);
   if (operand === undefined) return index;
   return operand === "" ? index + 2 : index + 1;
 }
 
-function caseArmCommandIndex(tokens, start) {
+function caseArmCommandIndex(tokens: ShellStage, start: number): number {
   for (let i = start; i < tokens.length; i += 1) {
     if (String(tokens[i]).endsWith(")")) return commandInvocationIndex(tokens, i + 1);
   }
@@ -525,8 +558,8 @@ function caseArmCommandIndex(tokens, start) {
 
 // Short options that consume a value (e.g. sudo -u, git -C) as single chars,
 // derived from the long-form set so both spellings agree.
-function shortValueOptionChars(optionsWithValue) {
-  const chars = new Set();
+function shortValueOptionChars(optionsWithValue: Set<string>): Set<string> {
+  const chars = new Set<string>();
   for (const opt of optionsWithValue) {
     if (opt.length === 2 && opt[0] === "-") chars.add(opt[1]);
   }
@@ -538,9 +571,9 @@ function shortValueOptionChars(optionsWithValue) {
 // option consumes the rest of the cluster as its attached value, or — when it is
 // the last flag — the following token (valueConsumesNext). Without this,
 // "sudo -Hu root bash" stops at "root" and never reaches "bash".
-function splitShortCluster(token, valueChars) {
+function splitShortCluster(token: string, valueChars: Set<string>): ShortCluster {
   const body = token.slice(1);
-  const flags = [];
+  const flags: string[] = [];
   for (let i = 0; i < body.length; i += 1) {
     const ch = body[i];
     if (valueChars.has(ch)) {
@@ -557,7 +590,7 @@ function splitShortCluster(token, valueChars) {
   return { flags, valueChar: null, attachedValue: "", valueConsumesNext: false };
 }
 
-function skipWrapperOptions(tokens, start, optionsWithValue) {
+function skipWrapperOptions(tokens: ShellStage, start: number, optionsWithValue: Set<string>): number {
   const valueChars = shortValueOptionChars(optionsWithValue);
   let i = start;
   while (i < tokens.length) {
@@ -589,7 +622,7 @@ function skipWrapperOptions(tokens, start, optionsWithValue) {
   return i;
 }
 
-function shellCommandStringAfterOptions(tokens, start) {
+function shellCommandStringAfterOptions(tokens: ShellStage, start: number): string | undefined {
   const valueChars = shortValueOptionChars(SHELL_COMMAND_STRING_OPTIONS_WITH_VALUE);
   const commandStringValueChars = new Set(valueChars);
   commandStringValueChars.add("c");
@@ -615,19 +648,19 @@ function shellCommandStringAfterOptions(tokens, start) {
   return undefined;
 }
 
-function evalCommandString(tokens, start) {
+function evalCommandString(tokens: ShellStage, start: number): string | undefined {
   const command = tokens.slice(start).join(" ").trim();
   return command || undefined;
 }
 
-function previousSignificantChar(text, index) {
+function previousSignificantChar(text: string, index: number): string {
   for (let i = index - 1; i >= 0; i -= 1) {
     if (!/\s/.test(text[i])) return text[i];
   }
   return "";
 }
 
-function previousShellWord(text, index) {
+function previousShellWord(text: string, index: number): string {
   let end = index - 1;
   while (end >= 0 && /\s/.test(text[end])) end -= 1;
   if (end < 0) return "";
@@ -636,7 +669,7 @@ function previousShellWord(text, index) {
   return text.slice(start + 1, end + 1);
 }
 
-function startsShellSubshellGroup(text, index) {
+function startsShellSubshellGroup(text: string, index: number): boolean {
   const previous = previousSignificantChar(text, index);
   if (previous === "" || previous === ";" || previous === "|" || previous === "&" || previous === "(" || previous === "!" || previous === ")") {
     return true;
@@ -644,13 +677,13 @@ function startsShellSubshellGroup(text, index) {
   return SHELL_SUBSHELL_PREFIX_WORDS.has(previousShellWord(text, index));
 }
 
-function startsShellCommandWord(text, index) {
+function startsShellCommandWord(text: string, index: number): boolean {
   return startsShellSubshellGroup(text, index);
 }
 
-function matchingParenIndex(text, openIndex) {
+function matchingParenIndex(text: string, openIndex: number): number {
   let depth = 1;
-  let quote = null;
+  let quote: string | null = null;
   let escaped = false;
 
   for (let i = openIndex + 1; i < text.length; i += 1) {
@@ -685,7 +718,7 @@ function matchingParenIndex(text, openIndex) {
   return -1;
 }
 
-function matchingBacktickIndex(text, start) {
+function matchingBacktickIndex(text: string, start: number): number {
   let escaped = false;
   for (let i = start + 1; i < text.length; i += 1) {
     const ch = text[i];
@@ -702,21 +735,21 @@ function matchingBacktickIndex(text, start) {
   return -1;
 }
 
-function hasRemoteDownloadInvocation(command = "") {
+function hasRemoteDownloadInvocation(command: unknown = ""): boolean {
   for (const tokens of shellCommandStages(command)) {
     if (stageHasRemoteDownloadInvocation(tokens)) return true;
   }
   return false;
 }
 
-function stageHasRemoteDownloadInvocation(tokens) {
+function stageHasRemoteDownloadInvocation(tokens: ShellStage): boolean {
   const commandIndex = commandInvocationIndex(tokens);
   if (commandIndex === -1) return false;
   const name = commandName(tokens[commandIndex]);
   return name === "curl" || name === "wget";
 }
 
-function commandConsumesScriptFromStdin(command = "") {
+function commandConsumesScriptFromStdin(command: unknown = ""): boolean {
   for (const pipeline of shellPipelines(command)) {
     for (const stage of pipeline) {
       if (pipelineTargetConsumesScript(stage)) return true;
@@ -725,7 +758,7 @@ function commandConsumesScriptFromStdin(command = "") {
   return false;
 }
 
-function processSubstitutionFeedsScriptConsumer(text, index, nestedCommand) {
+function processSubstitutionFeedsScriptConsumer(text: string, index: number, nestedCommand: string): boolean {
   if (!hasRemoteDownloadInvocation(nestedCommand)) return false;
 
   const stagesBeforeSubstitution = shellCommandStages(String(text).slice(0, index));
@@ -733,7 +766,7 @@ function processSubstitutionFeedsScriptConsumer(text, index, nestedCommand) {
   return pipelineTargetConsumesScript(currentStage);
 }
 
-function processSubstitutionConsumesDownloaderOutput(text, index, nestedCommand) {
+function processSubstitutionConsumesDownloaderOutput(text: string, index: number, nestedCommand: string): boolean {
   if (text[index] !== ">") return false;
   if (!commandConsumesScriptFromStdin(nestedCommand)) return false;
 
@@ -742,11 +775,11 @@ function processSubstitutionConsumesDownloaderOutput(text, index, nestedCommand)
   return currentPipeline.some((stage) => stageHasRemoteDownloadInvocation(stage));
 }
 
-function hasShellExpansionHighImpact(command = "", depth = 0) {
+function hasShellExpansionHighImpact(command: unknown = "", depth = 0): boolean {
   if (depth >= SHELL_COMMAND_STRING_DEPTH_LIMIT) return false;
 
   const text = String(command);
-  let quote = null;
+  let quote: string | null = null;
   let escaped = false;
 
   for (let i = 0; i < text.length; i += 1) {
@@ -828,7 +861,7 @@ function hasShellExpansionHighImpact(command = "", depth = 0) {
   return false;
 }
 
-function envSplitStringHasHighImpact(tokens, start, depth) {
+function envSplitStringHasHighImpact(tokens: ShellStage, start: number, depth: number): boolean {
   if (depth >= SHELL_COMMAND_STRING_DEPTH_LIMIT) return false;
 
   const valueChars = shortValueOptionChars(ENV_OPTIONS_WITH_VALUE);
@@ -860,7 +893,7 @@ function envSplitStringHasHighImpact(tokens, start, depth) {
   return false;
 }
 
-function hasShellCommandStringHighImpact(command = "", depth = 0) {
+function hasShellCommandStringHighImpact(command: unknown = "", depth = 0): boolean {
   if (depth >= SHELL_COMMAND_STRING_DEPTH_LIMIT) return false;
 
   for (const tokens of shellCommandStages(command)) {
@@ -888,7 +921,7 @@ function hasShellCommandStringHighImpact(command = "", depth = 0) {
 // the main loop checks it against PIPELINE_SHELLS. Value-consuming options
 // (-u user, -C n, etc.) are skipped so their argument is not mistaken for a
 // shell-mode flag.
-function sudoLaunchesShell(tokens, start) {
+function sudoLaunchesShell(tokens: ShellStage, start: number): boolean {
   const valueChars = shortValueOptionChars(SUDO_OPTIONS_WITH_VALUE);
   for (let i = start; i < tokens.length; i += 1) {
     const afterRedirection = skipShellRedirection(tokens, i);
@@ -919,7 +952,7 @@ function sudoLaunchesShell(tokens, start) {
   return false;
 }
 
-function sudoShellCommandIndex(tokens, start) {
+function sudoShellCommandIndex(tokens: ShellStage, start: number): number {
   const valueChars = shortValueOptionChars(SUDO_OPTIONS_WITH_VALUE);
   let shellMode = false;
   for (let i = start; i < tokens.length; i += 1) {
@@ -948,7 +981,7 @@ function sudoShellCommandIndex(tokens, start) {
   return -1;
 }
 
-function envSplitStringInvokesShell(value) {
+function envSplitStringInvokesShell(value: string): boolean {
   return pipelineTargetInvokesShell(shellWords(value));
 }
 
@@ -957,7 +990,7 @@ function envSplitStringInvokesShell(value) {
 // therefore invokes bash even though the shell binary is inside the option value
 // rather than a later token. Inspect the split value instead of skipping it as a
 // plain wrapper option argument.
-function envTargetInvokesShell(tokens, start) {
+function envTargetInvokesShell(tokens: ShellStage, start: number): boolean {
   const valueChars = shortValueOptionChars(ENV_OPTIONS_WITH_VALUE);
   let i = start;
   while (i < tokens.length) {
@@ -993,12 +1026,12 @@ function envTargetInvokesShell(tokens, start) {
   return false;
 }
 
-function timeoutCommandIndex(tokens, start) {
+function timeoutCommandIndex(tokens: ShellStage, start: number): number {
   const durationIndex = skipWrapperOptions(tokens, start, TIMEOUT_OPTIONS_WITH_VALUE);
   return durationIndex < tokens.length ? durationIndex + 1 : durationIndex;
 }
 
-function envCommandIndex(tokens, start) {
+function envCommandIndex(tokens: ShellStage, start: number): number {
   const valueChars = shortValueOptionChars(ENV_OPTIONS_WITH_VALUE);
   let i = start;
   while (i < tokens.length) {
@@ -1026,7 +1059,7 @@ function envCommandIndex(tokens, start) {
   return -1;
 }
 
-function commandInvocationIndex(tokens, start = 0) {
+function commandInvocationIndex(tokens: ShellStage, start = 0): number {
   let i = start;
   while (i < tokens.length) {
     const afterRedirection = skipShellRedirection(tokens, i);
@@ -1091,7 +1124,7 @@ function commandInvocationIndex(tokens, start = 0) {
   return -1;
 }
 
-function pipelineTargetInvokesShell(tokens) {
+function pipelineTargetInvokesShell(tokens: ShellStage): boolean {
   let i = 0;
   while (i < tokens.length) {
     const name = commandName(tokens[i]);
@@ -1126,7 +1159,7 @@ function pipelineTargetInvokesShell(tokens) {
   return false;
 }
 
-function pipelineTargetConsumesScript(tokens) {
+function pipelineTargetConsumesScript(tokens: ShellStage): boolean {
   if (pipelineTargetInvokesShell(tokens)) return true;
 
   let i = 0;
@@ -1146,10 +1179,10 @@ function pipelineTargetConsumesScript(tokens) {
   return false;
 }
 
-function hasRemoteDownloadExpansion(command = "", depth = 0) {
+function hasRemoteDownloadExpansion(command: unknown = "", depth = 0): boolean {
   if (depth >= SHELL_COMMAND_STRING_DEPTH_LIMIT) return false;
   const text = String(command);
-  let quote = null;
+  let quote: string | null = null;
   let escaped = false;
   for (let i = 0; i < text.length; i += 1) {
     const ch = text[i];
@@ -1190,21 +1223,21 @@ function hasRemoteDownloadExpansion(command = "", depth = 0) {
   return false;
 }
 
-function isHereStringRedirectionToken(token) {
+function isHereStringRedirectionToken(token: string): boolean {
   return /^\d*<<<.*$/.test(String(token));
 }
 
-function isHereDocRedirectionToken(token) {
+function isHereDocRedirectionToken(token: string): boolean {
   const text = String(token).replace(/^\d+/, "");
   return text.startsWith("<<") && !text.startsWith("<<<");
 }
 
-function parseHereDocDelimiter(line, start) {
+function parseHereDocDelimiter(line: string, start: number): HereDocDelimiter | null {
   let i = start;
   while (i < line.length && /\s/.test(line[i])) i += 1;
 
   let delimiter = "";
-  let quote = null;
+  let quote: string | null = null;
   let escaped = false;
 
   for (; i < line.length; i += 1) {
@@ -1237,9 +1270,9 @@ function parseHereDocDelimiter(line, start) {
   return delimiter ? { delimiter } : null;
 }
 
-function hereDocRedirections(line) {
-  const redirections = [];
-  let quote = null;
+function hereDocRedirections(line: string): HereDocRedirection[] {
+  const redirections: HereDocRedirection[] = [];
+  let quote: string | null = null;
   let escaped = false;
 
   for (let i = 0; i < line.length; i += 1) {
@@ -1270,11 +1303,11 @@ function hereDocRedirections(line) {
   return redirections;
 }
 
-function stageHasHereDocRedirection(tokens) {
+function stageHasHereDocRedirection(tokens: ShellStage): boolean {
   return tokens.some((token) => isHereDocRedirectionToken(token));
 }
 
-function commandLineHasScriptConsumingHereDoc(commandLine) {
+function commandLineHasScriptConsumingHereDoc(commandLine: string): boolean {
   for (const pipeline of shellPipelines(commandLine)) {
     for (let i = 0; i < pipeline.length; i += 1) {
       if (!stageHasHereDocRedirection(pipeline[i])) continue;
@@ -1287,7 +1320,7 @@ function commandLineHasScriptConsumingHereDoc(commandLine) {
   return false;
 }
 
-function hereDocBody(text, start, delimiter, stripTabs) {
+function hereDocBody(text: string, start: number, delimiter: string, stripTabs: boolean): HereDocBodyResult {
   let cursor = start;
   while (cursor < text.length) {
     const nextNewline = text.indexOf("\n", cursor);
@@ -1306,7 +1339,7 @@ function hereDocBody(text, start, delimiter, stripTabs) {
   return { body: text.slice(start), nextIndex: text.length };
 }
 
-function hasRemoteInstallerHereDoc(command = "", depth = 0) {
+function hasRemoteInstallerHereDoc(command: unknown = "", depth = 0): boolean {
   if (depth >= SHELL_COMMAND_STRING_DEPTH_LIMIT) return false;
   const text = String(command);
   let index = 0;
@@ -1334,7 +1367,7 @@ function hasRemoteInstallerHereDoc(command = "", depth = 0) {
   return false;
 }
 
-function hasRemoteInstallerHereString(command = "") {
+function hasRemoteInstallerHereString(command: unknown = ""): boolean {
   for (const tokens of shellCommandStages(command)) {
     if (!pipelineTargetConsumesScript(tokens)) continue;
     for (let i = 0; i < tokens.length; i += 1) {
@@ -1348,7 +1381,7 @@ function hasRemoteInstallerHereString(command = "") {
   return false;
 }
 
-function hasRemoteInstallerPipeline(command = "") {
+function hasRemoteInstallerPipeline(command: unknown = ""): boolean {
   for (const pipeline of shellPipelines(command)) {
     for (let sourceIndex = 0; sourceIndex < pipeline.length - 1; sourceIndex += 1) {
       const hasRemoteDownloader = pipeline[sourceIndex].some((token) => {
@@ -1365,7 +1398,7 @@ function hasRemoteInstallerPipeline(command = "") {
   return false;
 }
 
-function npmShellCommandHasRegistryMutation(command = "", depth = 0) {
+function npmShellCommandHasRegistryMutation(command: unknown = "", depth = 0): boolean {
   if (depth >= 3) return false;
   for (const tokens of shellCommandStages(command)) {
     const commandIndex = commandInvocationIndex(tokens);
@@ -1381,7 +1414,7 @@ function npmShellCommandHasRegistryMutation(command = "", depth = 0) {
   return false;
 }
 
-function nestedNpmCommandHasRegistryMutation(tokens, start, depth) {
+function nestedNpmCommandHasRegistryMutation(tokens: ShellStage, start: number, depth: number): boolean {
   for (let i = start; i < tokens.length; i += 1) {
     const token = tokens[i];
     if (isAssignment(token)) continue;
@@ -1391,7 +1424,7 @@ function nestedNpmCommandHasRegistryMutation(tokens, start, depth) {
   return false;
 }
 
-function npmExecHasRegistryMutation(tokens, start, depth) {
+function npmExecHasRegistryMutation(tokens: ShellStage, start: number, depth: number): boolean {
   if (depth >= 3) return false;
 
   for (let i = start; i < tokens.length; i += 1) {
@@ -1437,7 +1470,7 @@ function npmExecHasRegistryMutation(tokens, start, depth) {
   return false;
 }
 
-function npmNextActionToken(tokens, start) {
+function npmNextActionToken(tokens: ShellStage, start: number): string | undefined {
   for (let i = start; i < tokens.length; i += 1) {
     const token = tokens[i];
     if (token === "--") continue;
@@ -1459,17 +1492,20 @@ function npmNextActionToken(tokens, start) {
   return undefined;
 }
 
-function npmTokenStartsRegistryMutation(tokens, index) {
+function npmTokenStartsRegistryMutation(tokens: ShellStage, index: number): boolean {
   const token = tokens[index];
+  if (token === undefined) return false;
   if (NPM_REGISTRY_MUTATION_SUBCOMMANDS.has(token)) return true;
   if (NPM_DIST_TAG_SUBCOMMANDS.has(token)) {
-    return NPM_DIST_TAG_MUTATION_SUBCOMMANDS.has(npmNextActionToken(tokens, index + 1));
+    const action = npmNextActionToken(tokens, index + 1);
+    return action !== undefined && NPM_DIST_TAG_MUTATION_SUBCOMMANDS.has(action);
   }
   const scopedMutations = NPM_SCOPED_MUTATION_SUBCOMMANDS.get(token);
-  return Boolean(scopedMutations && scopedMutations.has(npmNextActionToken(tokens, index + 1)));
+  const action = npmNextActionToken(tokens, index + 1);
+  return Boolean(scopedMutations && action !== undefined && scopedMutations.has(action));
 }
 
-function shellCommandFromTokens(tokens) {
+function shellCommandFromTokens(tokens: ShellStage): string {
   return tokens
     .map((token) => {
       const text = String(token);
@@ -1478,7 +1514,7 @@ function shellCommandFromTokens(tokens) {
     .join(" ");
 }
 
-function npmExploreHasHighImpact(tokens, start, depth) {
+function npmExploreHasHighImpact(tokens: ShellStage, start: number, depth: number): boolean {
   if (depth >= 3) return false;
   let sawPackage = false;
   for (let i = start; i < tokens.length; i += 1) {
@@ -1505,7 +1541,7 @@ function npmExploreHasHighImpact(tokens, start, depth) {
   return false;
 }
 
-function npmTokensHaveRegistryMutation(tokens, start = 0, depth = 0) {
+function npmTokensHaveRegistryMutation(tokens: ShellStage, start = 0, depth = 0): boolean {
   for (let i = start; i < tokens.length; i += 1) {
     const token = tokens[i];
     if (npmTokenStartsRegistryMutation(tokens, i)) return true;
@@ -1557,13 +1593,13 @@ function hasNpmRegistryMutationInvocation(command = "") {
   return npmShellCommandHasRegistryMutation(command, 0);
 }
 
-function gitAliasFromConfig(value) {
+function gitAliasFromConfig(value: unknown): GitAlias | null {
   const match = String(value || "").match(/^alias\.([A-Za-z0-9_-]+)=(.*)$/);
   return match ? { name: match[1], expansion: match[2] } : null;
 }
 
-function shellAssignmentMap(tokens, end) {
-  const assignments = new Map();
+function shellAssignmentMap(tokens: ShellStage, end: number): Map<string, string> {
+  const assignments = new Map<string, string>();
   for (const token of tokens.slice(0, end)) {
     const match = String(token).match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
     if (match) assignments.set(match[1], match[2]);
@@ -1571,14 +1607,14 @@ function shellAssignmentMap(tokens, end) {
   return assignments;
 }
 
-function gitAliasFromConfigEnv(value, assignments) {
+function gitAliasFromConfigEnv(value: unknown, assignments: Map<string, string>): GitAlias | null {
   const match = String(value || "").match(/^alias\.([A-Za-z0-9_-]+)=([A-Za-z_][A-Za-z0-9_]*)$/);
   if (!match) return null;
   const expansion = assignments.get(match[2]) || process.env[match[2]] || "";
   return expansion ? { name: match[1], expansion } : null;
 }
 
-function gitAliasExpansionPushes(expansion, depth, aliasArgs = []) {
+function gitAliasExpansionPushes(expansion: string, depth: number, aliasArgs: ShellStage = []): boolean {
   const text = String(expansion || "").trim();
   if (!text) return false;
   if (text.startsWith("!")) {
@@ -1590,7 +1626,7 @@ function gitAliasExpansionPushes(expansion, depth, aliasArgs = []) {
   return commandName(shellWords(text)[0] || "") === "push";
 }
 
-function hasGitPushInvocation(command = "", depth = 0) {
+function hasGitPushInvocation(command: unknown = "", depth = 0): boolean {
   for (const tokens of shellCommandStages(command)) {
     const commandIndex = commandInvocationIndex(tokens);
     if (commandIndex === -1 || commandName(tokens[commandIndex]) !== "git") continue;
@@ -1634,7 +1670,7 @@ function hasGitPushInvocation(command = "", depth = 0) {
   return false;
 }
 
-function ghReleaseSubcommandAfterOptions(tokens, start) {
+function ghReleaseSubcommandAfterOptions(tokens: ShellStage, start: number): string | undefined {
   for (let i = start; i < tokens.length; i += 1) {
     const token = tokens[i];
     if (token === "--") return tokens[i + 1];
@@ -1652,10 +1688,10 @@ function ghReleaseSubcommandAfterOptions(tokens, start) {
   return undefined;
 }
 
-function ghApiMutatesReleaseEndpoint(tokens, start) {
+function ghApiMutatesReleaseEndpoint(tokens: ShellStage, start: number): boolean {
   let method = "GET";
   let sawRequestFields = false;
-  let endpoint;
+  let endpoint: string | undefined;
 
   for (let i = start; i < tokens.length; i += 1) {
     const token = tokens[i];
@@ -1717,7 +1753,7 @@ function ghApiMutatesReleaseEndpoint(tokens, start) {
   return GH_API_MUTATING_METHODS.has(effectiveMethod) && /^repos\/[^/]+\/[^/]+\/releases(?:$|\/)/.test(normalizedEndpoint);
 }
 
-function hasGhReleaseInvocation(command = "") {
+function hasGhReleaseInvocation(command: unknown = ""): boolean {
   for (const tokens of shellCommandStages(command)) {
     const commandIndex = commandInvocationIndex(tokens);
     if (commandIndex === -1 || commandName(tokens[commandIndex]) !== "gh") continue;
@@ -1731,7 +1767,7 @@ function hasGhReleaseInvocation(command = "") {
         // `release` or between `release` and the subcommand, so skip those
         // parent options before classifying the subcommand.
         const subcommand = ghReleaseSubcommandAfterOptions(tokens, i + 1);
-        if (GH_RELEASE_MUTATING_SUBCOMMANDS.has(subcommand)) return true;
+        if (subcommand !== undefined && GH_RELEASE_MUTATING_SUBCOMMANDS.has(subcommand)) return true;
         // Read-only release subcommand: do not return false here. A chained
         // command may pair a read-only release with a mutating one (e.g.
         // `gh release view v1 && gh release upload v1 app.zip`); break out of
@@ -1757,9 +1793,9 @@ function hasGhReleaseInvocation(command = "") {
   return false;
 }
 
-function matchingBraceIndex(text, openIndex) {
+function matchingBraceIndex(text: string, openIndex: number): number {
   let depth = 1;
-  let quote = null;
+  let quote: string | null = null;
   let escaped = false;
 
   for (let i = openIndex + 1; i < text.length; i += 1) {
@@ -1789,11 +1825,11 @@ function matchingBraceIndex(text, openIndex) {
   return -1;
 }
 
-function hasShellFunctionDefinitionHighImpact(command = "", depth = 0) {
+function hasShellFunctionDefinitionHighImpact(command: unknown = "", depth = 0): boolean {
   if (depth >= SHELL_COMMAND_STRING_DEPTH_LIMIT) return false;
   const text = String(command);
   const functionStart = /(?:^|[;\s])(?:function\s+[A-Za-z_][A-Za-z0-9_]*\s*|[A-Za-z_][A-Za-z0-9_]*\s*\(\)\s*)\{/g;
-  let match;
+  let match: RegExpExecArray | null;
   while ((match = functionStart.exec(text)) !== null) {
     const open = text.indexOf("{", match.index);
     if (open === -1) continue;
@@ -1811,11 +1847,11 @@ const XARGS_OPTIONS_WITH_REQUIRED_VALUE = new Set([
 ]);
 const XARGS_SHORT_OPTIONS_WITH_ATTACHED_VALUE = ["-I", "-L", "-n", "-P", "-s", "-a", "-d", "-E", "-e"];
 
-function xargsReplacementToken(token) {
+function xargsReplacementToken(token: string | undefined): boolean {
   return token !== undefined && String(token).includes("{}");
 }
 
-function xargsNestedCommandIndex(tokens, start) {
+function xargsNestedCommandIndex(tokens: ShellStage, start: number): number {
   for (let i = start; i < tokens.length; i += 1) {
     const token = tokens[i];
     if (token === "--") return i + 1;
@@ -1850,7 +1886,7 @@ function xargsNestedCommandIndex(tokens, start) {
   return -1;
 }
 
-function hasXargsNestedHighImpact(command = "", depth = 0) {
+function hasXargsNestedHighImpact(command: unknown = "", depth = 0): boolean {
   if (depth >= SHELL_COMMAND_STRING_DEPTH_LIMIT) return false;
   for (const tokens of shellCommandStages(command)) {
     const commandIndex = commandInvocationIndex(tokens);
@@ -1861,7 +1897,7 @@ function hasXargsNestedHighImpact(command = "", depth = 0) {
   return false;
 }
 
-function hasFindExecHighImpact(command = "", depth = 0) {
+function hasFindExecHighImpact(command: unknown = "", depth = 0): boolean {
   if (depth >= SHELL_COMMAND_STRING_DEPTH_LIMIT) return false;
   for (const tokens of shellCommandStages(command)) {
     const commandIndex = commandInvocationIndex(tokens);
@@ -1869,7 +1905,7 @@ function hasFindExecHighImpact(command = "", depth = 0) {
     for (let i = commandIndex + 1; i < tokens.length; i += 1) {
       if (tokens[i] === "-delete") return true;
       if (tokens[i] !== "-exec" && tokens[i] !== "-execdir") continue;
-      const nested = [];
+      const nested: string[] = [];
       for (let j = i + 1; j < tokens.length && tokens[j] !== ";" && tokens[j] !== "+"; j += 1) {
         nested.push(tokens[j]);
       }
@@ -1931,7 +1967,7 @@ const NEGATED_TEST_MITIGATION_WORDS = new RegExp(
   "gi",
 );
 
-function normalizePrediction(value) {
+function normalizePrediction(value: unknown): string {
   if (value === undefined || value === null) return "";
   if (typeof value === "string") return value.trim();
   try {
@@ -1941,16 +1977,16 @@ function normalizePrediction(value) {
   }
 }
 
-function distinctContentTokens(prediction) {
+function distinctContentTokens(prediction: string): number {
   const tokens = prediction.toLowerCase().match(/[a-z0-9][a-z0-9._/-]*/g) || [];
-  const seen = new Set();
+  const seen = new Set<string>();
   for (const token of tokens) {
     if (!GENERIC_FILLER_WORDS.has(token)) seen.add(token);
   }
   return seen.size;
 }
 
-function isGenericPrediction(prediction) {
+function isGenericPrediction(prediction: string): boolean {
   const normalized = prediction.toLowerCase().replace(/[.!?]+$/g, "").trim();
   return (
     prediction.length < MIN_PREDICTION_CHARS ||
@@ -1959,14 +1995,14 @@ function isGenericPrediction(prediction) {
   );
 }
 
-function hasPositiveMitigationSignal(prediction) {
+function hasPositiveMitigationSignal(prediction: string): boolean {
   const positiveText = prediction
     .replace(NEGATED_MITIGATION_WORDS, "")
     .replace(NEGATED_TEST_MITIGATION_WORDS, "");
   return MITIGATION_WORDS.test(positiveText) || TEST_MITIGATION_WORDS.test(positiveText);
 }
 
-function isHighImpactShell(command = "", depth = 0) {
+function isHighImpactShell(command: unknown = "", depth = 0): boolean {
   const commandText = String(command);
   return (
     hasRecursiveForceRm(commandText) ||
@@ -1985,7 +2021,7 @@ function isHighImpactShell(command = "", depth = 0) {
   );
 }
 
-function missingPredictionReason(toolName) {
+function missingPredictionReason(toolName: string): string {
   return `${toolName} requires consequence_prediction: forecast the intended effect, files/commands affected, likely failure modes, and verification/mitigation before acting.`;
 }
 
@@ -2001,23 +2037,24 @@ export default {
 
     async PreToolUse(input) {
       if (input.permission_mode === "yolo") return undefined;
-      if (!GUARDED_TOOLS.has(input.tool_name)) return undefined;
+      const toolName = typeof input.tool_name === "string" ? input.tool_name : "";
+      if (!GUARDED_TOOLS.has(toolName)) return undefined;
 
-      const toolInput = input.tool_input || {};
+      const toolInput = isRecord(input.tool_input) ? input.tool_input : {};
       const prediction = normalizePrediction(toolInput.consequence_prediction);
       if (!prediction) {
-        return { decision: "block", reason: missingPredictionReason(input.tool_name) };
+        return { decision: "block", reason: missingPredictionReason(toolName) };
       }
 
       if (isGenericPrediction(prediction)) {
         return {
           decision: "block",
-          reason: `${input.tool_name} consequence_prediction is too generic. Be specific about expected change, affected surface, failure modes, and verification/mitigation.`,
+          reason: `${toolName} consequence_prediction is too generic. Be specific about expected change, affected surface, failure modes, and verification/mitigation.`,
         };
       }
 
       if (
-        input.tool_name === "run_shell" &&
+        toolName === "run_shell" &&
         isHighImpactShell(toolInput.command) &&
         !hasPositiveMitigationSignal(prediction)
       ) {
@@ -2031,4 +2068,4 @@ export default {
       return undefined;
     },
   },
-};
+} satisfies HookPlugin;

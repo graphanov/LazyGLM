@@ -4,6 +4,7 @@
 import { join } from "node:path";
 import { appendFile } from "node:fs/promises";
 import { ensureDir, nowIso } from "../util.js";
+import type { HookPlugin } from "../types/index.js";
 
 export default {
   name: "telemetry",
@@ -23,4 +24,4 @@ export default {
       return undefined;
     },
   },
-};
+} satisfies HookPlugin;
